@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BetterSky4Cesium · 天空渲染 SDK（体积云/大气/体积光/镜头光晕）</title>
+
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+    #cesiumContainer { position: absolute; inset: 0; }
+
+    .effect-panel {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      z-index: 10;
+      width: min(360px, calc(100vw - 28px));
+      max-height: calc(100vh - 68px);
+      display: flex;
+      flex-direction: column;
+      color: #eef4ff;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 12px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(14px);
+      font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      color-scheme: dark;
+      overflow: hidden;
+    }
+
+    .effect-panel.is-collapsed { width: auto; }
+    .effect-panel.is-collapsed .effect-panel__title small { display: none; }
+    .effect-panel [hidden] { display: none; }
+
+    .effect-panel__header,
+    .effect-panel__footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+    }
+
+    .effect-panel__header { border-bottom: 1px solid rgba(148, 163, 184, 0.2); }
+    .effect-panel__footer { border-top: 1px solid rgba(148, 163, 184, 0.2); }
+
+    .effect-panel__title { display: grid; gap: 2px; }
+    .effect-panel__title strong { font-size: 14px; }
+    .effect-panel__title small { color: #94a3b8; font-size: 11px; }
+
+    .effect-panel__body {
+      min-height: 0;
+      padding: 8px 10px;
+      overflow: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+    }
+
+    .effect-panel button,
+    .effect-panel select,
+    .effect-panel input { font: inherit; }
+
+    .effect-panel button {
+      color: #e2e8f0;
+      background: rgba(51, 65, 85, 0.8);
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 7px;
+      padding: 5px 10px;
+      cursor: pointer;
+    }
+
+    .effect-panel button:hover { background: rgba(71, 85, 105, 0.95); }
+    .effect-section { border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
+    .effect-section:last-child { border-bottom: 0; }
+
+    .effect-section summary {
+      padding: 9px 4px;
+      color: #cbd5e1;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .effect-section__content { display: grid; gap: 9px; padding: 2px 4px 12px; }
+    .effect-control { display: grid; gap: 5px; min-width: 0; }
+    .effect-control__body { display: grid; gap: 5px; min-width: 0; }
+
+    .effect-control__heading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .effect-control__label {
+      flex: 1;
+      min-width: 0;
+      color: #dbeafe;
+      overflow-wrap: anywhere;
+    }
+
+    .effect-control__inputs {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 82px;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .effect-control input[type="range"] { width: 100%; min-width: 0; margin: 0; accent-color: #38bdf8; }
+
+    .effect-control input[type="number"],
+    .effect-control input[type="datetime-local"],
+    .effect-control select {
+      min-width: 0;
+      box-sizing: border-box;
+      color: #f8fafc;
+      background: rgba(30, 41, 59, 0.92);
+      border: 1px solid rgba(148, 163, 184, 0.32);
+      border-radius: 6px;
+      padding: 5px 7px;
+      width: 100%;
+    }
+
+    .effect-control input[type="datetime-local"],
+    .effect-control select { width: 100%; }
+
+    .effect-control input:focus,
+    .effect-control select:focus { border-color: #38bdf8; }
+
+    .effect-control--toggle input { width: 17px; height: 17px; margin: 0; accent-color: #38bdf8; }
+
+    .effect-panel .effect-help-button {
+      flex: 0 0 26px;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border-radius: 50%;
+      font-weight: 600;
+    }
+
+    .effect-help-button[aria-expanded="true"] { border-color: #38bdf8; color: #7dd3fc; }
+
+    .effect-help-card {
+      min-width: 0;
+      margin: 2px 0 0;
+      padding: 9px 10px;
+      color: #cbd5e1;
+      background: rgba(8, 47, 73, 0.55);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-radius: 7px;
+      line-height: 1.6;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
+    }
+
+    .effect-control__error { margin: 0; color: #fda4af; font-size: 12px; overflow-wrap: anywhere; }
+    .effect-control input[aria-invalid="true"] { border-color: #fb7185; }
+    .effect-control.is-disabled .effect-control__label { color: #94a3b8; }
+    .effect-control input:disabled,
+    .effect-control select:disabled { opacity: 0.5; cursor: not-allowed; }
+    .effect-control output { color: #94a3b8; font-variant-numeric: tabular-nums; }
+
+    .effect-panel button:focus-visible,
+    .effect-panel input:focus-visible,
+    .effect-panel select:focus-visible,
+    .effect-panel summary:focus-visible {
+      outline: 2px solid #7dd3fc;
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    .effect-sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 640px) {
+      .effect-panel { top: 8px; right: 8px; max-height: calc(100vh - 56px); }
+    }
+  </style>
+
+  <!-- Vite 提供 npm 模块、Widgets 样式和 /cesium/ 静态资源。 -->
+</head>
+
+<body>
+  <div id="cesiumContainer"></div>
+
+  <aside id="effectPanel" class="effect-panel is-collapsed" aria-label="天空效果参数控制面板">
+    <header class="effect-panel__header">
+      <span class="effect-panel__title">
+        <strong>天空效果参数</strong>
+        <small>修改后实时生效</small>
+      </span>
+      <button id="toggleEffectPanel" type="button" aria-expanded="false" aria-controls="effectControls">展开</button>
+    </header>
+    <div id="effectControls" class="effect-panel__body" hidden></div>
+    <footer class="effect-panel__footer" hidden>
+      <span>EffectPipeline</span>
+      <button id="resetEffectControls" type="button">恢复默认</button>
+    </footer>
+  </aside>
+
+  <!-- 业务逻辑：一行 new EffectPipeline(viewer) 开启天空效果 -->
+  <script type="module" src="./demo-official.js"></script>
+</body>
+
+</html>
