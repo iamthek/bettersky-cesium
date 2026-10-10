@@ -54,6 +54,8 @@ The demo adjusts `viewer.resolutionScale` to cap large drawing buffers at approx
 
 The repository currently provides the SDK as source modules. Copy `EffectPipeline.js`, the complete `Library/` directory and `static/EffectPipelineAssets/`, preserving relative paths.
 
+Shader sources live in `Library/shaders/` and are imported as strings using Vite's `?raw` feature, for example `import shaderSource from './Library/shaders/geospatial/cloudsMaterial.frag.glsl?raw'` in a module at the project root. Vite projects require no additional GLSL plugin; include this directory when copying the SDK. Other bundlers need equivalent raw-text import support.
+
 Install the versions used by this repository:
 
 ```bash

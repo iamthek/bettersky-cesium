@@ -54,6 +54,8 @@ pnpm preview  # 预览 dist/，以终端输出地址为准
 
 当前仓库以源码模块形式提供 SDK。复制 `EffectPipeline.js`、完整 `Library/` 目录及 `static/EffectPipelineAssets/`，保留相对路径。
 
+着色器源码位于 `Library/shaders/`，通过 Vite 的 `?raw` 导入为字符串，例如从项目根目录的模块中使用 `import shaderSource from './Library/shaders/geospatial/cloudsMaterial.frag.glsl?raw'`。接入 Vite 项目无需额外 GLSL 插件；复制库时必须包含该目录。其他构建工具需要提供等效的原文字符串导入支持。
+
 安装与仓库一致的依赖版本：
 
 ```bash

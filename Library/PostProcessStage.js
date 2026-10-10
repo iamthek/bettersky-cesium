@@ -30,6 +30,8 @@ import {
   ShaderProgram
  } from "cesium";
 import * as Cesium from "cesium";
+import viewportTriangleVertexShader from "./shaders/postprocess/viewportTriangle.vert.glsl?raw";
+import selectedFeaturesShader from "./shaders/postprocess/selectedFeatures.glsl?raw";
 const defaultValue = (a, b) => a ?? b;
 defaultValue.EMPTY_OBJECT = Object.freeze({});
 /**
@@ -41,13 +43,7 @@ const viewportQuadAttributeLocations = {
   position: 0,
   textureCoordinates: 1
 };
-export const viewportTriangleVertexShaderText = `in vec4 position;
-in vec2 textureCoordinates;
-out vec2 v_textureCoordinates;
-void main() {
-    gl_Position = vec4(position.xy, 1.0, 1.0);
-    v_textureCoordinates = position.xy*0.5+0.5;
-}`;
+export const viewportTriangleVertexShaderText = viewportTriangleVertexShader;
 /**
  * Runs a post-process stage on either the texture rendered by the scene or the output of a previous post-process stage.
  *
@@ -74,15 +70,7 @@ void main() {
  *
  * @example
  * // Simple stage to change the color
- * const fs =`
- *     uniform sampler2D colorTexture;
- *     in vec2 v_textureCoordinates;
- *     uniform float scale;
- *     uniform vec3 offset;
- *     void main() {
- *         vec4 color = texture(colorTexture, v_textureCoordinates);
- *         out_FragColor = vec4(color.rgb * scale + offset, 1.0);
- *     }`;
+ * import fs from './example.glsl?raw';
  * scene.postProcessStages.add(new Cesium.RenderPass({
  *     fragmentShader : fs,
  *     uniforms : {
@@ -96,19 +84,7 @@ void main() {
  * @example
  * // Simple stage to change the color of what is selected.
  * // If czm_selected returns true, the current fragment belongs to geometry in the selected array.
- * const fs =`
- *     uniform sampler2D colorTexture;
- *     in vec2 v_textureCoordinates;
- *     uniform vec4 highlight;
- *     void main() {
- *         vec4 color = texture(colorTexture, v_textureCoordinates);
- *         if (czm_selected()) {
- *             vec3 highlighted = highlight.a * highlight.rgb + (1.0 - highlight.a) * color.rgb;
- *             out_FragColor = vec4(highlighted, 1.0);
- *         } else {
- *             out_FragColor = color;
- *         }
- *     }`;
+ * import fs from './example.glsl?raw';
  * const stage = scene.postProcessStages.add(new Cesium.RenderPass({
  *     fragmentShader : fs,
  *     uniforms : {
@@ -393,14 +369,8 @@ Object.defineProperties(RenderPass.prototype, {
    * The features selected for applying the post-process.
    * <p>
    * In the fragment shader, use <code>czm_selected</code> to determine whether or not to apply the post-process
-   * stage to that fragment. For example:
-   * <code>
-   * if (czm_selected(v_textureCoordinates)) {
-   *     // apply post-process stage
-   * } else {
-   *     out_FragColor = texture(colorTexture, v_textureCoordinates);
-   * }
-   * </code>
+   * stage to that fragment. Put the fragment shader in an external GLSL file and import it with <code>?raw</code>.
+   * Apply the effect to selected fragments and return the input color for other fragments.
    * </p>
    *
    * @memberof RenderPass.prototype
@@ -592,30 +562,7 @@ function createDrawCommand(stage, context) {
 
     fs = fs.replace(/in\s+vec2\s+v_textureCoordinates;/g, "");
     fs =
-      `${"#define CZM_SELECTED_FEATURE \n" +
-      "uniform sampler2D czm_idTexture; \n" +
-      "uniform sampler2D czm_selectedIdTexture; \n" +
-      "uniform float czm_selectedIdTextureStep; \n" +
-      "in vec2 v_textureCoordinates; \n" +
-      "bool czm_selected(vec2 offset) \n" +
-      "{ \n" +
-      "    bool selected = false;\n" +
-      "    vec4 id = texture(czm_idTexture, v_textureCoordinates + offset); \n" +
-      "    for (int i = 0; i < "
-      }${width}; ++i) \n` +
-      `    { \n` +
-      `        vec4 selectedId = texture(czm_selectedIdTexture, vec2((float(i) + 0.5) * czm_selectedIdTextureStep, 0.5)); \n` +
-      `        if (all(equal(id, selectedId))) \n` +
-      `        { \n` +
-      `            return true; \n` +
-      `        } \n` +
-      `    } \n` +
-      `    return false; \n` +
-      `} \n\n` +
-      `bool czm_selected() \n` +
-      `{ \n` +
-      `    return czm_selected(vec2(0.0)); \n` +
-      `} \n\n${fs}`;
+      selectedFeaturesShader.replace("__SELECTED_ID_TEXTURE_WIDTH__", () => width) + fs;
   }
 
   const fragmentShader = new ShaderSource({

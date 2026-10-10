@@ -14,13 +14,7 @@
  */
 import RenderPass from "./PostProcessStage.js";
 import SMAAEffectPass from "./SMAAEffectPass.js";
-
-const PASS_THROUGH_FS =
-  "uniform sampler2D colorTexture;\n" +
-  "in vec2 v_textureCoordinates;\n" +
-  "void main() {\n" +
-  "    out_FragColor = texture(colorTexture, v_textureCoordinates);\n" +
-  "}\n";
+import PASS_THROUGH_FS from "./shaders/smaa/passThrough.frag.glsl?raw";
 
 export default class SMAAStage {
   /**
