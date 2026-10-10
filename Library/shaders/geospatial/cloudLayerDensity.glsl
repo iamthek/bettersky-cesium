@@ -36,8 +36,9 @@ vec4 sampleCloudLayerShape(const vec3 position, const vec4 weatherDensity, const
             lodBias = log2(1.05);
         } else if (type == 2) {
             // ECEF Z is not local altitude; unequal axis scales stretch the cloud horizontally.
-            float scale = length(vec2(1.8, 0.35));
-            coord = vec3(position.x * 1.8 - position.y * 0.35, position.y * 1.8 + position.x * 0.35, position.z * scale) + vec3(0.37, 0.11, 0.53);
+            // Slightly larger altocumulus cells reduce the fine, granular appearance.
+            float scale = length(vec2(1.5, 0.3));
+            coord = vec3(position.x * 1.5 - position.y * 0.3, position.y * 1.5 + position.x * 0.3, position.z * scale) + vec3(0.37, 0.11, 0.53);
             lodBias = log2(scale);
         } else if (type == 3) {
             coord = vec3(position.x * 0.08 + position.y * 0.12, position.y * 2.5 - position.x * 0.4, position.z * 0.35) + vec3(0.19, 0.61, 0.43);
