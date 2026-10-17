@@ -313,11 +313,11 @@ uniform bool cameraMoving;
 uniform int historyFrames;
 uniform sampler2D depthHistoryBuffer;
 uniform sampler2D sceneDepthBuffer;
-uniform vec2 previousJitterOffset;
 uniform vec2 targetUvScale;
 uniform vec2 jitterOffset;
 in vec2 vUv;
 layout(location = 0) out vec4 outputColor;
+layout(location = 2) out float outputCloudDepth;
 #ifdef SHADOW_LENGTH
     layout(location = 1) out float outputShadowLength;
 #endif // SHADOW_LENGTH
@@ -389,9 +389,20 @@ float terrainDistance(vec2 uv) {
 }
 float getHistoryCloudDepth(vec2 uv) {
     ivec2 size = textureSize(depthHistoryBuffer, 0);
-    vec2 historyUv = (uv - previousJitterOffset * texelSize) / targetUvScale;
-    ivec2 coord = clamp(ivec2(historyUv * vec2(size)), ivec2(0), size - 1);
+    ivec2 coord = clamp(ivec2(uv * vec2(size)), ivec2(0), size - 1);
     return texelFetch(depthHistoryBuffer, coord, 0).r;
+}
+bool validCloudDepth(float depth) {
+    return depth > 0.0 && depth < 1e7;
+}
+float blendCloudDepth(float currentDepth, float historyDepth, vec4 current, vec4 history, float alpha) {
+    // Invalid depth is missing metadata, not a cloud at the camera. Weight by retained opacity.
+    float currentWeight = validCloudDepth(currentDepth) ? current.a * alpha : 0.0;
+    float historyWeight = validCloudDepth(historyDepth) ? history.a * (1.0 - alpha) : 0.0;
+    float total = currentWeight + historyWeight;
+    float currentDistance = currentWeight > 0.0 ? currentDepth * currentWeight : 0.0;
+    float historyDistance = historyWeight > 0.0 ? historyDepth * historyWeight : 0.0;
+    return total > 1e-5 ? (currentDistance + historyDistance) / total : 0.0;
 }
 bool resolveTerrainBoundary(vec2 uv, inout vec4 color, inout float cloudDepth, out float targetDepth) {
     ivec2 size = textureSize(colorBuffer, 0);
@@ -434,6 +445,7 @@ const ivec2 coord, const bool currentFrame, out vec4 outputColor, out float outp
     float targetDepth;
     bool terrainBoundary = resolveTerrainBoundary(unjitteredUv, currentColor, centerDepth, targetDepth);
     outputColor = currentColor;
+    outputCloudDepth = validCloudDepth(centerDepth) && currentColor.a > 1e-5 ? centerDepth : 0.0;
     #ifdef SHADOW_LENGTH
         vec4 currentShadowLength = vec4(texture(shadowLengthBuffer, unjitteredUv).rgb, 1.0);
         outputShadowLength = currentShadowLength.r;
@@ -448,14 +460,23 @@ const ivec2 coord, const bool currentFrame, out vec4 outputColor, out float outp
         if (!cameraMoving) {
             float historyDepth = getHistoryCloudDepth(vUv);
             bool visibleHistory = historyDepth > 0.0 && historyDepth < min(1e7, visibleDepthLimit);
+            // Terrain tiles may change while the camera is still, beyond the boundary neighborhood.
+            if (validCloudDepth(historyDepth) && !visibleHistory) return;
             if (!terrainBoundary || visibleHistory) {
                 vec4 history = texture(colorHistoryBuffer, vUv);
                 if (any(isnan(history)) || any(isinf(history))) return;
+                // A terrain-blocked Bayer sample contains no new information about visible sky.
+                if (terrainBoundary && visibleHistory && currentColor.a <= 1e-5) {
+                    outputColor = history;
+                    outputCloudDepth = history.a > 1e-5 ? historyDepth : 0.0;
+                    return;
+                }
                 float distanceWeight = visibleHistory ? smoothstep(20000.0, 60000.0, historyDepth) : 0.0;
                 float distantAlpha = (currentFrame ? currentFrameAlpha : temporalAlpha) * 0.35;
                 float alpha = mix(max(temporalAlpha, 0.08), distantAlpha, distanceWeight);
                 alpha = max(alpha, 1.0 / float(historyFrames + 1));
                 outputColor = mix(history, currentColor, alpha);
+                outputCloudDepth = blendCloudDepth(centerDepth, historyDepth, currentColor, history, alpha);
             }
         }
         return;
@@ -472,16 +493,19 @@ const ivec2 coord, const bool currentFrame, out vec4 outputColor, out float outp
     if (any(isnan(historyColor)) || any(isinf(historyColor))) return;
     float historyDepth = getHistoryCloudDepth(prevUv);
     bool visibleHistory = historyDepth > 0.0 && historyDepth < min(1e7, visibleDepthLimit);
+    if (!cameraMoving && !visibleHistory && (terrainBoundary || validCloudDepth(historyDepth))) return;
     vec4 clippedColor = varianceClipping(colorBuffer, unjitteredUv, currentColor, historyColor, varianceGamma);
     // Stationary distant silhouettes must survive missing Bayer phases, not be clipped to empty sky.
     float stationaryHistoryWeight = cameraMoving || (terrainBoundary && !visibleHistory) ? 0.0 : smoothstep(20000.0, 60000.0, centerDepth);
+    // The variance neighborhood includes terrain-clipped samples; they cannot bound sky history.
+    if (!cameraMoving && terrainBoundary && visibleHistory) stationaryHistoryWeight = 1.0;
     clippedColor = mix(clippedColor, historyColor, stationaryHistoryWeight);
     float alpha = currentFrame ? currentFrameAlpha : temporalAlpha;
     // Distant subpixel clouds need longer accumulation; motion rejection below
     // still replaces history quickly while the camera moves.
     alpha *= mix(1.0, 0.35, smoothstep(5000.0, 25000.0, centerDepth));
     // Preserve accumulation at ridges; replacing it every frame exposes Bayer jitter.
-    if (terrainBoundary) alpha = max(alpha, cameraMoving ? 0.4 : mix(0.12, temporalAlpha * 0.35, stationaryHistoryWeight));
+    if (terrainBoundary) alpha = max(alpha, cameraMoving ? 0.4 : temporalAlpha);
     alpha = max(alpha, 1.0 / float(historyFrames + 1));
     // Opacity noise alone must not discard history while the camera is still.
     float motionRejection = smoothstep(0.5, 8.0, length(depthVelocity.gb));
@@ -493,6 +517,8 @@ const ivec2 coord, const bool currentFrame, out vec4 outputColor, out float outp
     alpha = max(alpha, 0.12 * motionRejection);
     if (currentColor.a < 0.01) alpha = max(alpha, motionRejection);
     outputColor = mix(clippedColor, currentColor, alpha);
+    // Moving history is in the previous camera's distance space; use current metadata until still.
+    if (!cameraMoving) outputCloudDepth = blendCloudDepth(centerDepth, historyDepth, currentColor, clippedColor, alpha);
     #ifdef DEBUG_SHOW_VELOCITY
         outputColor.rgb = outputColor.rgb + vec3(abs(velocity), 0.0);
     #endif // DEBUG_SHOW_VELOCITY
@@ -507,6 +533,8 @@ const ivec2 coord, const bool currentFrame, out vec4 outputColor, out float outp
 }
 void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float outputShadowLength) {
     vec4 currentColor = texelFetch(colorBuffer, coord, 0);
+    float currentDepth = texelFetch(depthVelocityBuffer, coord, 0).r;
+    outputCloudDepth = validCloudDepth(currentDepth) && currentColor.a > 1e-5 ? currentDepth : 0.0;
     #ifdef SHADOW_LENGTH
         vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, coord, 0).rgb, 1.0);
     #endif // SHADOW_LENGTH
@@ -538,6 +566,7 @@ void temporalAntialiasing(const ivec2 coord, out vec4 outputColor, out float out
 }
 void main() {
     ivec2 coord = ivec2(gl_FragCoord.xy);
+    outputCloudDepth = 0.0;
     #if !defined(SHADOW_LENGTH)
         float outputShadowLength;
     #endif // !defined(SHADOW_LENGTH)

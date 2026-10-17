@@ -120,7 +120,6 @@ export default class CloudMaterialPass {
         this.previousViewMatrix = new Matrix4();
         this._varianceGamma = 1.5;
         this._jitterOffset = new Cartesian2();
-        this._previousJitterOffset = new Cartesian2();
         this._temporalAlpha = 0.12;
         this._currentFrameAlpha = 0.35;
         this._motionAlpha = 0.9;
@@ -368,15 +367,6 @@ export default class CloudMaterialPass {
                 pixelDatatype: PixelDatatype.FLOAT,
                 flipY: false,
             });
-            // Ping-pong at cloud resolution; no extra full-resolution depth pass.
-            this._depthVelocityHistoryBuffer = new Texture({
-                context,
-                width: this._lowResWidth,
-                height: this._lowResHeight,
-                pixelFormat: PixelFormat.RGBA,
-                pixelDatatype: PixelDatatype.FLOAT,
-                flipY: false,
-            });
             this._shadowLengthBuffer = new Texture({
                 context: this._scene.context,
                 width: this._lowResWidth,
@@ -401,6 +391,29 @@ export default class CloudMaterialPass {
                 height: this._height,
                 pixelFormat: PixelFormat.RGBA,
                 pixelDatatype: PixelDatatype.HALF_FLOAT,
+                flipY: false,
+            });
+            // Keep cloud depth aligned with the full-resolution color history.
+            const cloudDepthSampler = new Sampler({
+                minificationFilter: TextureMinificationFilter.NEAREST,
+                magnificationFilter: TextureMagnificationFilter.NEAREST,
+            });
+            this._cloudResolveDepthBuffer = new Texture({
+                context,
+                width: this._width,
+                height: this._height,
+                pixelFormat: PixelFormat.RED,
+                pixelDatatype: PixelDatatype.FLOAT,
+                sampler: cloudDepthSampler,
+                flipY: false,
+            });
+            this._cloudResolveDepthHistoryBuffer = new Texture({
+                context,
+                width: this._width,
+                height: this._height,
+                pixelFormat: PixelFormat.RED,
+                pixelDatatype: PixelDatatype.FLOAT,
+                sampler: cloudDepthSampler,
                 flipY: false,
             });
             this._shadowResolveLengthBuffer = new Texture({
@@ -450,9 +463,8 @@ export default class CloudMaterialPass {
                     historyValid: () => this._historyValid,
                     cameraMoving: () => this._cameraMoving ?? false,
                     historyFrames: () => this._historyFrames,
-                    depthHistoryBuffer: () => this._depthVelocityHistoryBuffer,
+                    depthHistoryBuffer: () => this._cloudResolveDepthHistoryBuffer,
                     sceneDepthBuffer: () => this.depthBuffer,
-                    previousJitterOffset: () => this._previousJitterOffset,
                     targetUvScale: () => this.targetUvScale,
                     texelSize: () => { return this._texelSize },
                     colorBuffer: () => {
@@ -484,7 +496,7 @@ export default class CloudMaterialPass {
             this._passState2.viewport = new BoundingRectangle(0, 0, this._width, this._height);
             this._passState2.framebuffer = new Framebuffer({
                 context: this._scene.context,
-                colorTextures: [this._cloudResolveBuffer, this._shadowResolveLengthBuffer],
+                colorTextures: [this._cloudResolveBuffer, this._shadowResolveLengthBuffer, this._cloudResolveDepthBuffer],
                 destroyAttachments: false,
             })
         }
@@ -504,8 +516,9 @@ export default class CloudMaterialPass {
             }
         }
         for (const key of [
-            "_outputColor", "_depthVelocityBuffer", "_depthVelocityHistoryBuffer", "_shadowLengthBuffer",
+            "_outputColor", "_depthVelocityBuffer", "_shadowLengthBuffer",
             "_cloudResolveBuffer", "_colorResolveHistoryBuffer",
+            "_cloudResolveDepthBuffer", "_cloudResolveDepthHistoryBuffer",
             "_shadowResolveLengthBuffer", "_shadowResolveLengthHistoryBuffer",
         ]) {
             if (this[key]) {
@@ -668,12 +681,6 @@ export default class CloudMaterialPass {
         this.shadowFar = shadow.far;
 
         // render
-        if (this._passState.framebuffer && !this._passState.framebuffer.onBindEvent) {
-            this._passState.framebuffer.onBindEvent = (buffers) => {
-                gl.framebufferTexture2D(gl.FRAMEBUFFER, buffers[1],
-                    this._depthVelocityBuffer._target, this._depthVelocityBuffer._texture, 0);
-            };
-        }
         if (this._passState.framebuffer && !this._passState.framebuffer.onDrawEvent) {
             this._passState.framebuffer.onDrawEvent = (buffers) => {
                 gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -693,6 +700,10 @@ export default class CloudMaterialPass {
                     buffers[1],
                     this._shadowResolveLengthBuffer._target,
                     this._shadowResolveLengthBuffer._texture, 0);
+                gl.framebufferTexture2D(gl.FRAMEBUFFER,
+                    buffers[2],
+                    this._cloudResolveDepthBuffer._target,
+                    this._cloudResolveDepthBuffer._texture, 0);
             }
             this._passState2.framebuffer.onDrawEvent = (buffers) => {
                 gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -707,8 +718,7 @@ export default class CloudMaterialPass {
         this.previousViewMatrix.copy(this._scene.context.uniformState.view);
 
         swapTextures(this._cloudResolveBuffer, this._colorResolveHistoryBuffer);
-        swapTextures(this._depthVelocityBuffer, this._depthVelocityHistoryBuffer);
-        Cartesian2.clone(this._jitterOffset, this._previousJitterOffset);
+        swapTextures(this._cloudResolveDepthBuffer, this._cloudResolveDepthHistoryBuffer);
         swapTextures(this._shadowResolveLengthBuffer, this._shadowResolveLengthHistoryBuffer);
         Cartesian3.clone(camera.positionWC, this._previousCameraPosition);
         Cartesian3.clone(camera.directionWC, this._previousCameraDirection);

@@ -2471,9 +2471,13 @@ void main() {
     float frontDepth = rayNearFar.y;
     vec4 depthVelocity = vec4(0.0);
     float shadowLength = 0.0;
+    // Derivatives must run on both sides of terrain silhouettes, before divergent tracing.
+    vec3 lodRayOrigin = max(cameraNear, rayNearFar.x) * rayDirection + cameraPosition;
+    vec2 globeUv = getGlobeUv(lodRayOrigin);
+    float mipLevel = getMipLevel(globeUv * localWeatherRepeat) * mipLevelScale;
+    mipLevel = mix(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / maxHeight));
     if (!intersectsGround && !intersectsScene) {
         vec3 rayOrigin = rayNearFar.x * rayDirection + cameraPosition;
-        vec2 globeUv = getGlobeUv(rayOrigin);
         #ifdef DEBUG_SHOW_UV
             outputColor = vec4(vec3(checker(globeUv, localWeatherRepeat + localWeatherOffset)), 1.0);
             outputDepthVelocity = vec4(0.0);
@@ -2483,8 +2487,6 @@ void main() {
             return;
         #endif // DEBUG_SHOW_UV
         
-        float mipLevel = getMipLevel(globeUv * localWeatherRepeat) * mipLevelScale;
-        mipLevel = mix(0.0, mipLevel, min(1.0, 0.2 * cameraHeight / maxHeight));
         float marchedFrontDepth;
         ivec3 sampleCount = ivec3(0);
         vec4 traceStats;

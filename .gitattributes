@@ -1,0 +1,2 @@
+# Cesium's shader preprocessor requires LF to extract #version directives.
+*.glsl text eol=lf
