@@ -104,6 +104,13 @@ export default class PrecomputedTexturesLoader extends Loader {
 
   load(url, onLoad, onProgress, onError) {
     const result = {}
+    let finished = false
+    const reportError = error => {
+      if (finished) return
+      finished = true
+      if (onError != null) onError(error)
+      else console.error(error)
+    }
     const loadTexture = (name, { loader, extension }) => {
       loader.setRequestHeader(this.requestHeader)
       loader.setPath(this.path)
@@ -111,27 +118,34 @@ export default class PrecomputedTexturesLoader extends Loader {
       loader.load(
         join(url, `${name}${extension}`),
         texture => {
-          texture.minFilter = LinearFilter
-          texture.magFilter = LinearFilter
-          // 使用指定类型（FloatType 或 HalfFloatType）
-          texture.type = this.type
-          if (this.type === FloatType) {
-            texture.image.data = new Float32Array(
-              new Float16Array(texture.image.data.buffer)
-            )
-          }
-          result[`${name}Texture`] = texture
-          if (
-            result.irradianceTexture != null &&
-            result.scatteringTexture != null &&
-            result.transmittanceTexture != null
-            // result.higher_order_scattering != null
-          ) {
-            onLoad(result)
+          if (finished) return
+          // Older FileLoader versions rethrow onLoad errors as unhandled rejections.
+          try {
+            texture.minFilter = LinearFilter
+            texture.magFilter = LinearFilter
+            // 使用指定类型（FloatType 或 HalfFloatType）
+            texture.type = this.type
+            if (this.type === FloatType) {
+              texture.image.data = new Float32Array(
+                new Float16Array(texture.image.data.buffer)
+              )
+            }
+            result[`${name}Texture`] = texture
+            if (
+              result.irradianceTexture != null &&
+              result.scatteringTexture != null &&
+              result.transmittanceTexture != null
+              // result.higher_order_scattering != null
+            ) {
+              onLoad(result)
+              finished = true
+            }
+          } catch (error) {
+            reportError(error)
           }
         },
         onProgress,
-        onError
+        reportError
       )
     }
 

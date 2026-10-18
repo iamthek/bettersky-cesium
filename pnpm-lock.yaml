@@ -167,10 +167,10 @@ importers:
   .:
     dependencies:
       cesium:
-        specifier: ^1.142.0
+        specifier: '>=1.142.0'
         version: 1.142.0
       three:
-        specifier: ^0.160.0
+        specifier: '>=0.160.1'
         version: 0.160.1
     devDependencies:
       vite:

@@ -300,6 +300,9 @@ export default class GeospatialPipelinePass {
             ...options
         }
         this._scene = scene;
+        this._destroyed = false;
+        // Track only textures allocated by this pass; uniforms may also reference host textures.
+        this._ownedTextures = new Set();
         this.id = createGuid();
         this._showTAA = false;
         this._show = options.show ?? true;
@@ -320,8 +323,11 @@ export default class GeospatialPipelinePass {
         this._time = 0;
         this._dynamicPlanet = true;
         this._planetRadius = 6360000.0;
-        this._scene.context.defaultTexture3D = new Texture3D({
+        this._defaultTexture3D = new Texture3D({
             context: this._scene.context,
+            width: 1,
+            height: 1,
+            depth: 1,
             source: {
                 width: 1,
                 height: 1,
@@ -330,9 +336,10 @@ export default class GeospatialPipelinePass {
             },
             flipY: false
         });
+        this._ownedTextures.add(this._defaultTexture3D);
         this._u_irradiance_texture = this._scene.context.defaultTexture;
-        this._u_scattering_texture = this._scene.context.defaultTexture3D;
-        this._u_single_mie_scattering_texture = this._scene.context.defaultTexture3D;
+        this._u_scattering_texture = this._defaultTexture3D;
+        this._u_single_mie_scattering_texture = this._defaultTexture3D;
         this._u_transmittance_texture = this._scene.context.defaultTexture;
         this.localWeatherTexture = this._scene.context.defaultTexture;
         this.cameraHeight = 0.;
@@ -347,9 +354,9 @@ export default class GeospatialPipelinePass {
         this.cloudVisibility = 1;
         this.effectiveCloudCoverage = this.coverage;
         this.turbulenceTexture = this._scene.context.defaultTexture;
-        this.shapeTexture = this._scene.context.defaultTexture3D;
-        this.shapeDetailTexture = this._scene.context.defaultTexture3D;
-        this.stbnTexture = this._scene.context.defaultTexture3D;
+        this.shapeTexture = this._defaultTexture3D;
+        this.shapeDetailTexture = this._defaultTexture3D;
+        this.stbnTexture = this._defaultTexture3D;
         this.localWeatherRepeat = new Cartesian2(100, 100);
         this.localWeatherOffset = new Cartesian2(0.0, 0.0);
         this.shapeRepeat = new Cartesian3(0.0003, 0.0003, 0.0003);
@@ -588,6 +595,7 @@ export default class GeospatialPipelinePass {
     }
 
     init(isUpdate = false) {
+        if (this._destroyed) return;
 
         let stageIndex;
         if (isUpdate && defined(this._stage)) {
@@ -605,6 +613,8 @@ export default class GeospatialPipelinePass {
         if (defined(this._stage)) {
             return false;
         }
+        // These resources are outside the composite and must be released on every rebuild.
+        this._releaseThresholdResources();
         const context = this._scene.context;
         let defines = geospatialPipelineDefaultDefines.replace("__GS_MASK_DEFINE__", this._showGSMask ? "#define HAS_GS_MASK" : "");
         this._showSSR && (defines += `#define ENABLE_SSR\n`);
@@ -643,9 +653,7 @@ export default class GeospatialPipelinePass {
             this._width = this._scene.drawingBufferWidth;
             this._height = this._scene.drawingBufferHeight;
 
-            if (this._passState && this._passState.framebuffer) {
-                this._passState.framebuffer.destroy();
-            }
+            this._releaseAerialRenderTarget();
             if (!this._passState) {
                 this._passState = new PassState(this._scene.context);
             }
@@ -661,11 +669,13 @@ export default class GeospatialPipelinePass {
             this._passState.framebuffer = new Framebuffer({
                 context: this._scene.context,
                 colorTextures: [this._aerialPerspectiveOutputColor],
+                destroyAttachments: false,
             })
         }
         if (!this._snowCoverMaskMap && this._showSnow) {
             this._snowCoverMaskMap = this._scene.context.defaultTexture;
             Resource.createIfNeeded(buildModuleUrl("BetterSkyAssets/snowCoverMask.png")).fetchImage().then(image => {
+                if (this._destroyed) return;
                 this._snowCoverMaskMap = new Texture({
                     context: this._scene.context,
                     source: image,
@@ -678,11 +688,14 @@ export default class GeospatialPipelinePass {
                         magnificationFilter: WebGLConstants.LINEAR,
                     })
                 })
+                this._ownedTextures.add(this._snowCoverMaskMap);
+            }).catch(error => {
+                if (!this._destroyed) console.error(error);
             });
         }
         const gl = this._scene.context._gl;
         if (this._aerialPerspectiveComoman) {
-            this._aerialPerspectiveComoman.shaderProgram.destroy();
+            this._aerialPerspectiveComoman.shaderProgram = this._aerialPerspectiveComoman.shaderProgram?.destroy();
         }
         const AerialPerspectiveEffectShader = new ShaderSource({
             defines: ["LOG_DEPTH"],
@@ -722,6 +735,7 @@ export default class GeospatialPipelinePass {
                 this._downsampleThresholdPassState.framebuffer = new Framebuffer({
                     context: this._scene.context,
                     colorTextures: [this._downsampleThresholdBuffer],
+                    destroyAttachments: false,
                 })
                 this.downsampleThresholdDrawComomand = this._scene.context.createViewportQuadCommand(downsampleThresholdMaterialShader, {
                     uniformMap: {
@@ -1065,7 +1079,11 @@ export default class GeospatialPipelinePass {
     }
 
     precomputed() {
+        if (this._destroyed || this._isPrecomputed) return;
+        this._isPrecomputed = true;
+        // Fetches can finish after disposal; guard before allocating any GPU texture.
         Resource.createIfNeeded(buildModuleUrl("BetterSkyAssets/GeospatialAssets/local_weather.png")).fetchImage().then(image => {
+            if (this._destroyed) return;
             this.localWeatherTexture = new Texture({
                 context: this._scene.context,
                 source: image,
@@ -1078,9 +1096,13 @@ export default class GeospatialPipelinePass {
                     magnificationFilter: WebGLConstants.LINEAR,
                 })
             });
+            this._ownedTextures.add(this.localWeatherTexture);
             this.localWeatherTexture.generateMipmap();
+        }).catch(error => {
+            if (!this._destroyed) console.error(error);
         });
         Resource.createIfNeeded(buildModuleUrl("BetterSkyAssets/GeospatialAssets/turbulence.png")).fetchImage().then(image => {
+            if (this._destroyed) return;
             this.turbulenceTexture = new Texture({
                 context: this._scene.context,
                 source: image,
@@ -1093,7 +1115,10 @@ export default class GeospatialPipelinePass {
                     magnificationFilter: WebGLConstants.LINEAR,
                 })
             })
+            this._ownedTextures.add(this.turbulenceTexture);
             this.turbulenceTexture.generateMipmap();
+        }).catch(error => {
+            if (!this._destroyed) console.error(error);
         });
         const Loader = createData3DTextureLoaderClass(parseUint8Array, {
             width: CLOUD_SHAPE_TEXTURE_SIZE,
@@ -1110,6 +1135,7 @@ export default class GeospatialPipelinePass {
         const loader = new Loader();
         (async () => {
             const texture = await loader.loadAsync(buildModuleUrl("BetterSkyAssets/GeospatialAssets/shape.bin"))
+            if (this._destroyed) return;
             this.shapeTexture = new Texture3D({
                 context: this._scene.context,
                 width: CLOUD_SHAPE_TEXTURE_SIZE,
@@ -1131,9 +1157,10 @@ export default class GeospatialPipelinePass {
                     arrayBufferView: texture.image.data
                 }
             });
+            this._ownedTextures.add(this.shapeTexture);
             this.shapeTexture.generateMipmap();
         })().catch(error => {
-            console.error(error)
+            if (!this._destroyed) console.error(error);
         })
         const Loader2 = createData3DTextureLoaderClass(parseUint8Array, {
             width: CLOUD_SHAPE_DETAIL_TEXTURE_SIZE,
@@ -1150,6 +1177,7 @@ export default class GeospatialPipelinePass {
         const loader2 = new Loader2();
         (async () => {
             const texture = await loader2.loadAsync(buildModuleUrl("BetterSkyAssets/GeospatialAssets/shape_detail.bin"))
+            if (this._destroyed) return;
             this.shapeDetailTexture = new Texture3D({
                 context: this._scene.context,
                 width: CLOUD_SHAPE_DETAIL_TEXTURE_SIZE,
@@ -1171,9 +1199,10 @@ export default class GeospatialPipelinePass {
                     arrayBufferView: texture.image.data
                 }
             });
+            this._ownedTextures.add(this.shapeDetailTexture);
             this.shapeDetailTexture.generateMipmap();
         })().catch(error => {
-            console.error(error)
+            if (!this._destroyed) console.error(error);
         })
         const STBNLoader = createData3DTextureLoaderClass(parseUint8Array, {
             format: RedFormat,
@@ -1189,6 +1218,7 @@ export default class GeospatialPipelinePass {
         const loader3 = new STBNLoader();
         (async () => {
             const texture = await loader3.loadAsync(buildModuleUrl("BetterSkyAssets/GeospatialAssets/stbn.bin"))
+            if (this._destroyed) return;
             this.stbnTexture = new Texture3D({
                 context: this._scene.context,
                 width: STBN_TEXTURE_WIDTH,
@@ -1209,12 +1239,14 @@ export default class GeospatialPipelinePass {
                     arrayBufferView: texture.image.data
                 }
             });
+            this._ownedTextures.add(this.stbnTexture);
         })().catch(error => {
-            console.error(error)
+            if (!this._destroyed) console.error(error);
         })
         new PrecomputedTexturesLoader().load(
             buildModuleUrl("BetterSkyAssets/GeospatialAssets/"),
             (result) => {
+                if (this._destroyed) return;
                 this._u_scattering_texture = new Texture3D({
                     context: this._scene.context,
                     width: result.scatteringTexture.image.width,
@@ -1228,6 +1260,7 @@ export default class GeospatialPipelinePass {
                         arrayBufferView: result.scatteringTexture.image.data
                     }
                 });
+                this._ownedTextures.add(this._u_scattering_texture);
                 this._u_single_mie_scattering_texture = this._u_scattering_texture;
                 this._u_irradiance_texture = new Texture({
                     context: this._scene.context,
@@ -1241,6 +1274,7 @@ export default class GeospatialPipelinePass {
                         arrayBufferView: result.irradianceTexture.image.data
                     }
                 });
+                this._ownedTextures.add(this._u_irradiance_texture);
                 this._u_transmittance_texture = new Texture({
                     context: this._scene.context,
                     width: result.transmittanceTexture.image.width,
@@ -1253,6 +1287,11 @@ export default class GeospatialPipelinePass {
                         arrayBufferView: result.transmittanceTexture.image.data
                     }
                 });
+                this._ownedTextures.add(this._u_transmittance_texture);
+            },
+            undefined,
+            error => {
+                if (!this._destroyed) console.error(error);
             }
         );
     }
@@ -1297,7 +1336,45 @@ export default class GeospatialPipelinePass {
         return this._stage._isSupported(context);
     }
 
+    _releaseAerialRenderTarget() {
+        if (this._passState?.framebuffer) {
+            this._passState.framebuffer.destroy();
+            this._passState.framebuffer = undefined;
+        }
+        if (this._aerialPerspectiveOutputColor) {
+            this._aerialPerspectiveOutputColor.destroy();
+            this._aerialPerspectiveOutputColor = undefined;
+        }
+    }
+
+    _releaseThresholdResources() {
+        if (this._downsampleThresholdPassState?.framebuffer) {
+            this._downsampleThresholdPassState.framebuffer.destroy();
+            this._downsampleThresholdPassState.framebuffer = undefined;
+        }
+        if (this._downsampleThresholdBuffer) {
+            this._downsampleThresholdBuffer.destroy();
+            this._downsampleThresholdBuffer = undefined;
+        }
+        if (this.downsampleThresholdDrawComomand) {
+            this.downsampleThresholdDrawComomand.shaderProgram = this.downsampleThresholdDrawComomand.shaderProgram?.destroy();
+            this.downsampleThresholdDrawComomand = undefined;
+        }
+    }
+
     destroy() {
+        if (this._destroyed) return;
+        this._destroyed = true;
+        this.restoreScene();
+        if (this._stage) {
+            const stages = this._scene.postProcessStages;
+            if (typeof stages.contains === "function" && stages.contains(this._stage)) {
+                stages.remove(this._stage);
+            } else if (!this._stage.isDestroyed()) {
+                this._stage.destroy();
+            }
+            this._stage = undefined;
+        }
         if (this.volumetricLightPass && !this.volumetricLightPass.isDestroyed()) {
             this.volumetricLightPass.destroy();
         }
@@ -1307,12 +1384,28 @@ export default class GeospatialPipelinePass {
         if (this.cloudMaterialPass && !this.cloudMaterialPass.isDestroyed()) {
             this.cloudMaterialPass.destroy();
         }
+        if (this.shadowMaterialPass && !this.shadowMaterialPass.isDestroyed()) {
+            this.shadowMaterialPass.destroy();
+        }
+        this._releaseAerialRenderTarget();
+        this._releaseThresholdResources();
+        if (this._aerialPerspectiveComoman) {
+            // Each command owns one shader-cache reference; the viewport vertex array is shared.
+            this._aerialPerspectiveComoman.shaderProgram = this._aerialPerspectiveComoman.shaderProgram?.destroy();
+            this._aerialPerspectiveComoman = undefined;
+        }
+        for (const texture of this._ownedTextures) {
+            if (!texture.isDestroyed()) texture.destroy();
+        }
+        this._ownedTextures.clear();
+        this._downSamplesMap = undefined;
+        this._upSamplesMap = undefined;
         return destroyObject(this)
     }
 
     isDestroyed() {
 
-        return false;
+        return this._destroyed;
     }
 
     addGUI(datGui, viewer) {

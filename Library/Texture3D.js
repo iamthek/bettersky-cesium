@@ -32,7 +32,7 @@ export default class Texture3D {
         const levels = defaultValue(options.levels, 1);
         const unpackAlignment = defaultValue(options.unpackAlignment, 4);
         const pixelFormat = defaultValue(options.pixelFormat, PixelFormat.RGBA);
-        let pixelDatatype = defaultValue(options.pixelDatatype, PixelDatatype.UNSIGNED_BYTE);
+        const pixelDatatype = defaultValue(options.pixelDatatype, PixelDatatype.UNSIGNED_BYTE);
         let glInternalFormat = pixelFormat;
         if (pixelDatatype === PixelDatatype.FLOAT) {
             switch (pixelFormat) {
@@ -53,7 +53,6 @@ export default class Texture3D {
                     break;
             }
         } else if (pixelDatatype === PixelDatatype.HALF_FLOAT) {
-            pixelDatatype = PixelDatatype.FLOAT
             switch (pixelFormat) {
                 case PixelFormat.RGBA:
                     glInternalFormat = WebGLConstants.RGBA16F;
@@ -97,10 +96,14 @@ export default class Texture3D {
         }
         let _initialized = true;
         const _gl = context._gl;
+        const glPixelDatatype = toWebGL2PixelDatatype(pixelDatatype);
         const textureType = defaultValue(options.textureType, _gl.TEXTURE_3D); // TEXTURE_2D_ARRAY
         const texture = _gl.createTexture();
         _gl.activeTexture(_gl.TEXTURE0);
         _gl.bindTexture(textureType, texture)
+        if (useTexStorage) {
+            _gl.texStorage3D(textureType, levels, glInternalFormat, width, height, depth);
+        }
         if (defined(source)) {
 
             if (defined(source.arrayBufferView)) {
@@ -123,12 +126,10 @@ export default class Texture3D {
 
                 if (useTexStorage) {
 
-                    _gl.texStorage3D(textureType, levels, glInternalFormat, width, height, depth);
-
-                    _gl.texSubImage3D(textureType, 0, 0, 0, 0, width, height, depth, pixelFormat, pixelDatatype, arrayBufferView);
+                    _gl.texSubImage3D(textureType, 0, 0, 0, 0, width, height, depth, pixelFormat, glPixelDatatype, arrayBufferView);
                 } else {
 
-                    _gl.texImage3D(textureType, 0, glInternalFormat, width, height, depth, 0, pixelFormat, pixelDatatype, arrayBufferView)
+                    _gl.texImage3D(textureType, 0, glInternalFormat, width, height, depth, 0, pixelFormat, glPixelDatatype, arrayBufferView)
                 }
 
             } else if (defined(source.framebuffer)) {
@@ -149,10 +150,16 @@ export default class Texture3D {
 
                 _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL, flipY)
 
-                _gl.texImage3D(textureType, 0, glInternalFormat, width, height, depth, 0, pixelFormat, pixelDatatype, source.width ? source.data : source);
+                if (useTexStorage) {
+                    _gl.texSubImage3D(textureType, 0, 0, 0, 0, width, height, depth, pixelFormat, glPixelDatatype, source.width ? source.data : source);
+                } else {
+                    _gl.texImage3D(textureType, 0, glInternalFormat, width, height, depth, 0, pixelFormat, glPixelDatatype, source.width ? source.data : source);
+                }
             }
         } else {
-            _gl.texImage3D(textureType, 0, glInternalFormat, width, height, depth, 0, pixelFormat, pixelDatatype, null)
+            if (!useTexStorage) {
+                _gl.texImage3D(textureType, 0, glInternalFormat, width, height, depth, 0, pixelFormat, glPixelDatatype, null)
+            }
             _initialized = false;
         }
         _gl.bindTexture(textureType, null)
@@ -177,6 +184,12 @@ export default class Texture3D {
         this._sampler = undefined
         this.sampler = defined(options.sampler) ? options.sampler : new Sampler;
     }
+}
+
+function toWebGL2PixelDatatype(pixelDatatype) {
+    // 3D/array textures require WebGL 2. Cesium keeps HALF_FLOAT as HALF_FLOAT_OES,
+    // while its private toWebGLConstant helper has changed its context argument.
+    return pixelDatatype === PixelDatatype.HALF_FLOAT ? WebGLConstants.HALF_FLOAT : pixelDatatype;
 }
 
 function texture3DSizeInBytes(pixelFormat, pixelDatatype, width, height, depth) {
@@ -314,6 +327,7 @@ Texture3D.prototype.generateMipmap = function (hint) {
 Texture3D.prototype.copyFrom = function (options) {
     const xOffset = defaultValue(options.xOffset, 0);
     const yOffset = defaultValue(options.yOffset, 0);
+    const zOffset = defaultValue(options.zOffset, 0);
 
     if (PixelFormat.isDepthFormat(this._pixelFormat)) {
         throw new DeveloperError(
@@ -340,13 +354,9 @@ Texture3D.prototype.copyFrom = function (options) {
     const depth = defaultValue(source.depth, this._depth);
     let arrayBufferView = source.arrayBufferView;
 
-    const textureWidth = this._width;
-    const textureHeight = this._height;
-    const textureDepth = this._depth;
-    const internalFormat = this._internalFormat;
     const pixelFormat = this._pixelFormat;
     const pixelDatatype = this._pixelDatatype;
-    const levels = defaultValue(options.levels, this._levels);
+    const glPixelDatatype = toWebGL2PixelDatatype(pixelDatatype);
 
     const preMultiplyAlpha = this._preMultiplyAlpha;
     const flipY = this._flipY;
@@ -375,89 +385,30 @@ Texture3D.prototype.copyFrom = function (options) {
         );
     }
 
-    let uploaded = false;
-    if (!this._initialized) {
-        if (
-            xOffset === 0 &&
-            yOffset === 0 &&
-            width === textureWidth &&
-            height === textureHeight &&
-            depth === textureDepth
-        ) {
-            // initialize the entire texture
-            if (defined(arrayBufferView)) {
-                _gl.pixelStorei(_gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-                _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL, false);
+    if (defined(arrayBufferView)) {
+        _gl.pixelStorei(_gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL, false);
 
-                if (flipY) {
-                    arrayBufferView = PixelFormat.flipY(
-                        arrayBufferView,
-                        pixelFormat,
-                        pixelDatatype,
-                        textureWidth,
-                        textureHeight
-                    );
-                }
-
-                _gl.texImage3D(target, 0, internalFormat,
-                    textureWidth, textureHeight, textureDepth, 0,
-                    pixelFormat, PixelDatatype.toWebGLConstant(pixelDatatype, context), arrayBufferView);
-            } else {
-                // Only valid for DOM-Element uploads
-                _gl.pixelStorei(_gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, preMultiplyAlpha);
-                _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL, flipY);
-
-                _gl.texImage3D(target, 0, internalFormat,
-                    textureWidth, textureHeight, textureDepth, 0,
-                    pixelFormat, PixelDatatype.toWebGLConstant(pixelDatatype, context), source);
-            }
-            uploaded = true;
-        } else {
-            _gl.pixelStorei(_gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-            _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL, false);
-
-            // initialize the entire texture to zero
-            const bufferView = PixelFormat.createTypedArray(
+        if (flipY) {
+            arrayBufferView = PixelFormat.flipY(
+                arrayBufferView,
                 pixelFormat,
                 pixelDatatype,
-                textureWidth,
-                textureHeight
+                width,
+                height
             );
-
-            _gl.texImage3D(target, 0, internalFormat,
-                textureWidth, textureHeight, textureDepth, 0,
-                pixelFormat, PixelDatatype.toWebGLConstant(pixelDatatype, context), bufferView);
         }
-        this._initialized = true;
+    } else {
+        // Only valid for DOM-Element uploads
+        _gl.pixelStorei(_gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, preMultiplyAlpha);
+        _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL, flipY);
     }
 
-    if (!uploaded) {
-        if (defined(arrayBufferView)) {
-            _gl.pixelStorei(_gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-            _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL, false);
-
-            if (flipY) {
-                arrayBufferView = PixelFormat.flipY(
-                    arrayBufferView,
-                    pixelFormat,
-                    pixelDatatype,
-                    width,
-                    height
-                );
-            }
-
-            _gl.texStorage3D(target, levels, this._internalFormat, width, height, depth);
-            _gl.texSubImage3D(target, 0, 0, 0, 0, width, height, depth, pixelFormat,
-                PixelDatatype.toWebGLConstant(pixelDatatype, context), arrayBufferView);
-        } else {
-            // Only valid for DOM-Element uploads
-            _gl.pixelStorei(_gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, preMultiplyAlpha);
-            _gl.pixelStorei(_gl.UNPACK_FLIP_Y_WEBGL, flipY);
-
-            _gl.texSubImage3D(target, 0, 0, 0, 0, width, height, depth, pixelFormat,
-                PixelDatatype.toWebGLConstant(pixelDatatype, context), source);
-        }
-    }
+    // The constructor already allocates and zero-initializes every layer. Both
+    // mutable and immutable storage must be updated without allocating it again.
+    _gl.texSubImage3D(target, 0, xOffset, yOffset, zOffset, width, height, depth, pixelFormat,
+        glPixelDatatype, defined(arrayBufferView) ? arrayBufferView : source);
+    this._initialized = true;
 
     _gl.bindTexture(target, null);
 };

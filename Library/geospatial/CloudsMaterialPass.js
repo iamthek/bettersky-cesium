@@ -79,6 +79,7 @@ const intervalsScratch = Array.from(
 export default class CloudMaterialPass {
 
     constructor(scene, options = {}) {
+        this._destroyed = false;
 
         this.id = createGuid();
         this._show = options.show ?? true;
@@ -328,6 +329,7 @@ export default class CloudMaterialPass {
     }
 
     init(isUpdate = false) {
+        if (this._destroyed) return;
         const context = this._scene.context;
         let defines = ``
 
@@ -782,9 +784,11 @@ export default class CloudMaterialPass {
         );
     }
     destroy() {
+        if (this._destroyed) return;
+        this._destroyed = true;
         this._releaseRenderTargets();
         for (const command of [this._cloudDrawComomand, this._cloudResolveDrawComomand]) {
-            if (command && command.shaderProgram) command.shaderProgram.destroy();
+            if (command) command.shaderProgram = command.shaderProgram?.destroy();
         }
         this._cloudDrawComomand = undefined;
         this._cloudResolveDrawComomand = undefined;
@@ -793,7 +797,7 @@ export default class CloudMaterialPass {
 
     isDestroyed() {
 
-        return false;
+        return this._destroyed;
     }
 }
 

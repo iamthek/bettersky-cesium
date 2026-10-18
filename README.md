@@ -15,21 +15,21 @@ BetterSky for Cesium is a CesiumJS visual effects plugin. Its **BetterSky** adds
 
 > npm SDK packaging and release verification are pending. The version below is provisional; these commands do not indicate that `0.1.0` is available yet.
 
-Use Cesium **1.142.0**, a browser bundler and one active BetterSky/Viewer per page. The browser/GPU must support WebGL 2, 3D/array textures, the required floating-point render targets, native `Float16Array` and `structuredClone`.
+Use Cesium **1.142.0 or later**, three **0.160.1 or later**, a browser bundler and one active BetterSky/Viewer per page. These are minimum supported versions; they do not imply that every future release has already been tested. Check rendering and lifecycle behavior when upgrading dependencies because the plugin uses renderer internals. The browser/GPU must support WebGL 2, 3D/array textures, the required floating-point render targets, native `Float16Array` and `structuredClone`.
 
 ### Install
 
 After release, choose npm or pnpm in the consuming application's directory:
 
 ```bash
-npm install --save-exact bettersky-cesium@0.1.0 cesium@1.142.0
+npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
 
 ```bash
-pnpm add -E bettersky-cesium@0.1.0 cesium@1.142.0
+pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
 
-Both install the same package. Cesium is shared with the application; three is installed automatically as a runtime dependency.
+Both install the same package. Cesium is shared with the application; three (`>=0.160.1`) is installed automatically as a runtime dependency. Applications may pin versions they have verified within these ranges.
 
 ### Copy assets
 
@@ -86,6 +86,8 @@ Keep rendering continuously for animated clouds. The pipeline applies scene sett
 effects.dispose()
 viewer.destroy()
 ```
+
+`dispose()` is safe to call more than once, including while assets are loading. Requests are not actively canceled; late callbacks skip GPU resource creation after disposal. Dispose of the previous instance before creating a replacement.
 
 If effects are missing, first check resource requests under `CESIUM_BASE_URL + 'BetterSkyAssets/'`, the browser console and WebGL capabilities. Requests must return actual files rather than an HTML fallback.
 

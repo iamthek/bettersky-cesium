@@ -6,7 +6,7 @@
 
 发布一份经过编译、压缩和混淆的标准 ESM 包到 npm registry，同时支持 npm、pnpm 安装。pnpm 使用同一个 registry，不需要再向一个独立的“pnpm 平台”发布。包名使用 `bettersky-cesium`，首版目标版本 `0.1.0`，正式发布前确认 npm 名称可用性。
 
-首版支持 Cesium `1.142.0`、同页单 Viewer；资源随包分发，由接入项目配置复制。
+首版支持 Cesium `>=1.142.0`、three `>=0.160.1` 及同页单 Viewer；版本下限不是精确版本限制。资源随包分发，由接入项目配置复制。后续版本纳入支持范围，但每次升级仍须验证渲染器内部接口；不能宣称已验证所有未来版本。
 
 SDK 定位为 CesiumJS 的效果插件，直接复用宿主的 `CESIUM_BASE_URL`，不新增资源基址参数。接入项目只需将包内效果资源复制到 Cesium 静态资源根目录下的 `BetterSkyAssets/`。
 
@@ -15,14 +15,14 @@ SDK 定位为 CesiumJS 的效果插件，直接复用宿主的 `CESIUM_BASE_URL`
 发布并验收后，接入项目可以任选一种方式安装（当前不代表该版本已可用）：
 
 ```bash
-npm install --save-exact bettersky-cesium@0.1.0 cesium@1.142.0
+npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
 
 ```bash
-pnpm add -E bettersky-cesium@0.1.0 cesium@1.142.0
+pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
 
-`three` 作为 SDK 的运行依赖自动安装。接入项目不必使用与 SDK 仓库相同的包管理器。
+`three`（`>=0.160.1`）作为 SDK 的运行依赖自动安装。接入项目不必使用与 SDK 仓库相同的包管理器，可以在支持范围内锁定已经验证的依赖版本。
 
 交付要求：不分发原始实现、未混淆副本、sourcemap 或无关项目文件；必要静态资源与 SDK 放在同一个版本的 npm 包中上传；npm 包页面直接展示包含 npm/pnpm 安装和资源复制步骤的 Quick Start。
 
@@ -42,8 +42,8 @@ pnpm add -E bettersky-cesium@0.1.0 cesium@1.142.0
 - 仓库根 `package.json` 保持 `private: true`。未来生成独立的 `.sdk-package/` 发布目录，只在该目录生成可发布的精简 `package.json`，补齐版本号、`type: module`、`exports`、`types`、文件白名单和公开可用的联系方式。禁止在仓库根执行发布。`private` 字段不等于 npm 私有包的访问权限。
 - `package.json` 使用 `"license": "SEE LICENSE IN LICENSE"`，包内仅附上自有 `LICENSE` 和合并后的 `THIRD_PARTY_NOTICES.md`；后者列出确认复用的代码、权利人、使用条件及必要许可全文，不维护单独的 `licenses/` 副本目录。源码仓库保持私有，npm 仅分发运行产物；当前免费使用范围和未来转收费条件以许可正文为准。
 - 保留仓库内部 JavaScript 实现，包内只提供编译混淆后的实现及公开 API 的 `.d.ts`；类型声明不暴露内部实现和私有路径，也不生成 declaration map。
-- Cesium 声明为 `peerDependencies`，固定 `1.142.0`，与宿主共享；SDK 仓库开发时使用同一版本。
-- three 作为普通运行依赖固定为 `0.160.1`。Cesium 和 three 均设置为构建外部依赖，不打入 SDK 产物。
+- Cesium 声明为 `peerDependencies`，范围为 `>=1.142.0`，与宿主共享；仓库锁文件保留 1.142.0 作为可复现开发基线，不将开发基线误写为唯一支持版本。
+- three 作为普通运行依赖，范围为 `>=0.160.1`；仓库锁文件保留 0.160.1 作为可复现开发基线。Cesium 和 three 均设置为构建外部依赖，不打入 SDK 产物。
 - 仓库继续使用 pnpm 和现有锁文件；所有运行依赖明确声明，不依赖依赖提升或 `.pnpm` 内部目录结构。
 - 采用显式“构建 → 混淆 → 组装 → 校验 → 打包”流程；发布目录不携带仓库的构建脚本、开发依赖或 `prepack` / `prepare` / `postinstall` 生命周期。使用方安装时无需构建 SDK 或运行自动复制脚本；打包与发布不重新生成已经验收的文件。
 
@@ -96,7 +96,7 @@ package/
 - README 提供从 `node_modules/bettersky-cesium/dist/assets/` 复制全部内容到 `public/cesium/BetterSkyAssets/` 的路径表和 Node.js 命令。这里以宿主 `CESIUM_BASE_URL='/cesium/'` 为例；已有其他 Cesium 资源根目录时，将 `BetterSkyAssets/` 放到那个根目录下即可。不得硬编码 `.pnpm` 存储路径或依赖提升。
 - Cesium 官方资源与插件效果资源共用宿主的 `CESIUM_BASE_URL`；SDK 不覆盖该配置，构建 SDK 时也不能把 demo 的 `/cesium/` 固化进库产物。
 - 限制同页一个活动实例，第二实例在改变场景前报错，销毁后允许重建。
-- 修复影响单实例生命周期的异步加载后销毁、SMAA 重复加载及实例拥有的阴影和纹理资源释放问题。
+- 在混淆包中保留并验证源码的单实例生命周期保障：幂等销毁，SMAA 避免重复并发加载，释放实例拥有的阴影、纹理和帧缓冲，销毁后迟到的回调跳过 GPU 资源创建。请求不主动中止，不增加公开的全部资源就绪 Promise；不得把辅助方法/原型扩展或宿主设置宣称为完全回滚。
 - 明确并检查必要的浏览器能力，包括 WebGL 2、所需浮点纹理能力、`Float16Array` 和 `structuredClone`。
 - 保留当前场景设置行为，说明时钟、HDR 等影响及销毁恢复范围。
 - 保留源码内的原始通知，发布包附上 [第三方代码及许可](THIRD_PARTY_NOTICES.md) 中合并的必要声明。该清单只列已确认的复用关系，不列推测来源。MIT/BSD/Apache 代码按原条款用于闭源商业产品，不要求公开整个 SDK 或业务项目源码；本项目的收费条款不改变这些第三方材料的原有许可。
@@ -145,7 +145,7 @@ effects.dispose()
 1. 按实际分发内容核对第三方许可条件及自有代码授权范围，确认合并声明完整；资源清单逐文件核实用途和分发权。
 2. 编译混淆并组装 `.sdk-package/`，按上述白名单检查文件、文本内容及资源哈希；无 sourcemap、原始实现、未混淆副本、环境变量、demo 或开发数据，必要通知齐全。
 3. 在 `.sdk-package/` 中用 `npm pack --dry-run --json` 预审，再用 `npm pack` 或 `pnpm pack` 生成实际 `.tgz`。解压逐项复核文件、包元数据、README、资源字节和映射痕迹，记录 SHA-256；dry-run 不能代替实际包验收。
-4. 同一份 `.tgz` 分别安装到独立 npm 项目和默认依赖布局的 pnpm 项目，以 Vite、TypeScript、Cesium `1.142.0` 验证导出、类型、外部依赖解析与文档命令。不得用源码别名或工作区链接代替安装验证。
+4. 同一份 `.tgz` 分别安装到独立 npm 项目和默认依赖布局的 pnpm 项目，以 Vite、TypeScript 和最低/当前最新版本的 Cesium、three 交叉组合验证导出、类型、外部依赖解析与文档命令。以 2026-10-18 已核实的 registry 版本为例，矩阵为 `1.142.0 / 0.160.1`、`1.142.0 / 0.186.1`、`1.146.0 / 0.160.1`、`1.146.0 / 0.186.1`（Cesium / three）；发布验收时重新核实最新版本，并记录实际版本与结果。仓库源码回归不代替混淆包的安装验收，不得用源码别名或工作区链接代替安装验证。
 5. 使用 `@browser` 验证混淆包的渲染、参数更新、开关和所有必要纹理；检查根路径、`/app/` 子路径和自定义 Cesium 资源根目录均只需配置宿主的 `CESIUM_BASE_URL`，以及宿主生产构建后二次压缩的运行情况。确认 JS/GLSL 无编译错误、资源非 404/HTML 回退，控制台无新增错误，并对照混淆前后的加载耗时、包大小和同场景帧耗时。
 6. 验证资源加载期间销毁、重复销毁、销毁后重建和第二实例限制；以计划中的生命周期修复实际完成为准，不因文档写入即视为通过。
 7. 核实中英文 Quick Start 与真实产物一致，源码链接不进入包 README；许可条件沿用现有正文。确认包名、版本、账号权限和认证可用，最终签出待发布 `.tgz` 的哈希。任一步失败均不得发布。

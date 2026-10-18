@@ -15,21 +15,21 @@ BetterSky for Cesium 是 CesiumJS 视觉效果插件，通过 **BetterSky** 为�
 
 > npm SDK 打包与发布验收尚未完成。下方版本暂定，安装命令不代表 `0.1.0` 已可使用。
 
-使用 Cesium **1.142.0** 和浏览器构建工具，同页保留一个活动的 BetterSky/Viewer。浏览器/GPU 需支持 WebGL 2、三维/数组纹理、所需浮点渲染目标，并具有原生 `Float16Array` 和 `structuredClone`。
+使用 Cesium **1.142.0 或更高版本**、three **0.160.1 或更高版本**和浏览器构建工具，同页保留一个活动的 BetterSky/Viewer。这些版本是支持下限，不代表已经测试所有未来版本；插件使用渲染器内部接口，升级依赖时应检查渲染与生命周期行为。浏览器/GPU 需支持 WebGL 2、三维/数组纹理、所需浮点渲染目标，并具有原生 `Float16Array` 和 `structuredClone`。
 
 ### 安装
 
 正式发布后，在使用项目目录中任选 npm 或 pnpm：
 
 ```bash
-npm install --save-exact bettersky-cesium@0.1.0 cesium@1.142.0
+npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
 
 ```bash
-pnpm add -E bettersky-cesium@0.1.0 cesium@1.142.0
+pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
 
-两种命令安装同一个包。Cesium 与应用共享，three 作为运行依赖自动安装。
+两种命令安装同一个包。Cesium 与应用共享，three（`>=0.160.1`）作为运行依赖自动安装；应用可以在上述范围内锁定已经验证的版本。
 
 ### 复制资源
 
@@ -86,6 +86,8 @@ effects.enabled = true
 effects.dispose()
 viewer.destroy()
 ```
+
+`dispose()` 可重复调用，也可在资源加载期间调用。请求不会主动取消，销毁后迟到的回调会跳过 GPU 资源创建；创建替代实例前应先销毁旧实例。
 
 效果未显示时，先检查 `CESIUM_BASE_URL + 'BetterSkyAssets/'` 下的资源请求、浏览器控制台及 WebGL 能力；请求应返回真实文件，不能是 HTML 回退页。
 

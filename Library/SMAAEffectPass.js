@@ -43,6 +43,7 @@ import SMAANeighborhoodBlendingFS from "./shaders/smaa/neighborhoodBlending.frag
  */
 export default function SMAAEffectPass(scene, options = {}) {
     this._scene = scene;
+    this._disposed = false;
     this._id = createGuid();
     this._edgeDetectionCommand = undefined;
     this._weightCalculationCommand = undefined;
@@ -56,6 +57,8 @@ export default function SMAAEffectPass(scene, options = {}) {
     this._blendingFBO = undefined;
     this._searchTexture = undefined;
     this._areaTexture = undefined;
+    this._searchImage = undefined;
+    this._areaImage = undefined;
     this._clearCommand = new ClearCommand({
         color: new Color(0, 0, 0, 0)
     });
@@ -76,6 +79,33 @@ function createSampler2() {
         minificationFilter: WebGLConstants.LINEAR,
         magnificationFilter: WebGLConstants.LINEAR
     })
+}
+
+// 每张查找表只发起一次加载；销毁后即使旧回调到达，也不再分配 GPU 纹理。
+function loadLookupTexture(pass, context, textureKey, imageKey, source, pixelFormat, samplerFactory) {
+    if (defined(pass[textureKey]) || defined(pass[imageKey])) return;
+    const image = new Image();
+    pass[imageKey] = image;
+    const clearHandlers = () => {
+        image.onload = null;
+        image.onerror = null;
+    };
+    image.onload = () => {
+        clearHandlers();
+        if (pass._disposed) return;
+        pass[textureKey] = new Texture({
+            context,
+            source: image,
+            pixelFormat,
+            pixelDatatype: WebGLConstants.UNSIGNED_BYTE,
+            flipY: false,
+            sampler: samplerFactory(),
+        });
+        pass[imageKey] = undefined;
+    };
+    // 保留失败的加载标记，避免每帧反复创建 Image。
+    image.onerror = clearHandlers;
+    image.src = source;
 }
 
 SMAAEffectPass.prototype._isSupported = function () {
@@ -108,35 +138,10 @@ SMAAEffectPass.prototype.update = function (context) {
         const n = context.drawingBufferHeight;
         this._resolution.x = 1 / t;
         this._resolution.y = 1 / n;
-        let i = this;
-        if (!defined(this._searchTexture)) {
-            let r = new Image;
-            r.src = this.getSearchTexture(),
-                r.onload = function () {
-                    i._searchTexture = new Texture({
-                        context: context,
-                        source: this,
-                        pixelFormat: WebGLConstants.RGBA,
-                        pixelDatatype: WebGLConstants.UNSIGNED_BYTE,
-                        flipY: false,
-                        sampler: createSampler()
-                    })
-                }
-        }
-        if (!defined(this._areaTexture)) {
-            let o = new Image;
-            o.src = this.getAreaTexture(),
-                o.onload = function () {
-                    i._areaTexture = new Texture({
-                        context: context,
-                        source: this,
-                        pixelFormat: WebGLConstants.RGB,
-                        pixelDatatype: WebGLConstants.UNSIGNED_BYTE,
-                        flipY: false,
-                        sampler: createSampler2()
-                    })
-                }
-        }
+        loadLookupTexture(this, context, "_searchTexture", "_searchImage",
+            this.getSearchTexture(), WebGLConstants.RGBA, createSampler);
+        loadLookupTexture(this, context, "_areaTexture", "_areaImage",
+            this.getAreaTexture(), WebGLConstants.RGB, createSampler2);
         defined(this._edgeDetectionCommand) || this.createCommand(context);
         let edgeDetectionFBO = this._edgeDetectionFBO
         let texture = defined(edgeDetectionFBO) && edgeDetectionFBO.getColorTexture(0) || undefined;
@@ -281,8 +286,20 @@ SMAAEffectPass.prototype.destroyFBO = function () {
 }
 
 SMAAEffectPass.prototype.destroy = function () {
+    this._disposed = true;
+    for (const key of ["_searchImage", "_areaImage"]) {
+        const image = this[key];
+        if (image) {
+            image.onload = null;
+            image.onerror = null;
+        }
+        this[key] = undefined;
+    }
     if (this._areaTexture) this._areaTexture.destroy();
     if (this._searchTexture) this._searchTexture.destroy();
+    this._areaTexture = undefined;
+    this._searchTexture = undefined;
+    this._inputTexture = undefined;
     return this.destroyFBO(),
         this._edgeDetectionCommand = this._edgeDetectionCommand && this._edgeDetectionCommand.shaderProgram && this._edgeDetectionCommand.shaderProgram.destroy(),
         this._weightCalculationCommand = this._weightCalculationCommand && this._weightCalculationCommand.shaderProgram && this._weightCalculationCommand.shaderProgram.destroy(),

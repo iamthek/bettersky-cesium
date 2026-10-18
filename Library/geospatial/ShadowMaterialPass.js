@@ -73,6 +73,7 @@ let resolutionScratch = new Cartesian2;
 export default class ShadowMaterialPass {
 
     constructor(scene, options = {}) {
+        this._destroyed = false;
 
         this.id = createGuid();
         this._show = options.show ?? true;
@@ -193,6 +194,7 @@ export default class ShadowMaterialPass {
     }
 
     init(isUpdate = false) {
+        if (this._destroyed) return;
         const context = this._scene.context;
         let defines = ``
 
@@ -210,6 +212,7 @@ export default class ShadowMaterialPass {
         if (this._width !== this._scene.drawingBufferWidth ||
             this._height !== this._scene.drawingBufferHeight
         ) {
+            this._releaseRenderTargets();
             this.invalidateHistory();
             this._width = this._scene.drawingBufferWidth;
             this._height = this._scene.drawingBufferHeight;
@@ -317,20 +320,8 @@ export default class ShadowMaterialPass {
                 uniformMap: this._shadowUniform,
                 primitiveType: PrimitiveType.TRIANGLES
             }, shadowMaterialVS);
-            this._passState.viewport = new BoundingRectangle(0, 0, this.shadowMapSize.x, this.shadowMapSize.y);
-            this._passState.framebuffer = new Framebuffer({
-                context: this._scene.context,
-                colorTextures: [this._shadowLevel, this._shadowLevel2, this._shadowLevel3,
-                this._shadowVecLevel1, this._shadowVecLevel2, this._shadowVecLevel3
-                ],
-            });
             // 2
             this._passState2 = new PassState(this._scene.context);
-            this._passState2.viewport = new BoundingRectangle(0, 0, this.shadowMapSize.x, this.shadowMapSize.y);
-            this._passState2.framebuffer = new Framebuffer({
-                context: this._scene.context,
-                colorTextures: [this._shadowLevel, this._shadowLevel2, this._shadowLevel3],
-            });
 
             this._shadowResolveDrawComomand = this._scene.context.createViewportQuadCommand(shadowResolveMaterialFS, {
                 renderState: renderState,
@@ -346,6 +337,22 @@ export default class ShadowMaterialPass {
                 },
                 primitiveType: PrimitiveType.TRIANGLES
             }, shadowResolveMaterialVS);
+        }
+        if (!this._passState.framebuffer) {
+            this._passState.viewport = new BoundingRectangle(0, 0, this.shadowMapSize.x, this.shadowMapSize.y);
+            this._passState.framebuffer = new Framebuffer({
+                context,
+                colorTextures: [this._shadowLevel, this._shadowLevel2, this._shadowLevel3,
+                    this._shadowVecLevel1, this._shadowVecLevel2, this._shadowVecLevel3],
+                // Both framebuffers share attachments and rebind array layers during drawing.
+                destroyAttachments: false,
+            });
+            this._passState2.viewport = new BoundingRectangle(0, 0, this.shadowMapSize.x, this.shadowMapSize.y);
+            this._passState2.framebuffer = new Framebuffer({
+                context,
+                colorTextures: [this._shadowLevel, this._shadowLevel2, this._shadowLevel3],
+                destroyAttachments: false,
+            });
         }
     }
 
@@ -483,18 +490,44 @@ export default class ShadowMaterialPass {
     }
 
     update(context, useLogDepth) {
-
+        if (this._width !== this._scene.drawingBufferWidth ||
+            this._height !== this._scene.drawingBufferHeight) this.init(true);
     }
 
+    _releaseRenderTargets() {
+        for (const passState of [this._passState, this._passState2]) {
+            if (passState?.framebuffer) {
+                passState.framebuffer.destroy();
+                passState.framebuffer = undefined;
+            }
+        }
+        for (const key of [
+            "_shadowLevel", "_shadowLevel2", "_shadowLevel3",
+            "_shadowVecLevel1", "_shadowVecLevel2", "_shadowVecLevel3",
+            "_shadowBuffer", "_currentBuffer", "_historyBuffer",
+        ]) {
+            if (this[key]) {
+                this[key].destroy();
+                this[key] = undefined;
+            }
+        }
+    }
 
     destroy() {
-
+        if (this._destroyed) return;
+        this._destroyed = true;
+        this._releaseRenderTargets();
+        for (const command of [this._shadowDrawComomand, this._shadowResolveDrawComomand]) {
+            if (command) command.shaderProgram = command.shaderProgram?.destroy();
+        }
+        this._shadowDrawComomand = undefined;
+        this._shadowResolveDrawComomand = undefined;
         return destroyObject(this)
     }
 
     isDestroyed() {
 
-        return false;
+        return this._destroyed;
     }
 }
 

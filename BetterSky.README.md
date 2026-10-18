@@ -12,12 +12,25 @@ For the planned npm/pnpm package, see [Usage](README.md#usage). This CesiumJS pl
 | --- | --- |
 | Node.js | 22 or newer |
 | Package manager | pnpm 12.8.1 |
-| Cesium | Lockfile version 1.142.0 |
-| three | Lockfile version 0.160.1; runtime dependency for texture loaders and cascaded shadows |
+| Cesium | Supported range `>=1.142.0`; reproducible repository lockfile baseline 1.142.0 |
+| three | Supported range `>=0.160.1`; reproducible repository lockfile baseline 0.160.1; runtime dependency for texture loaders and cascaded shadows |
 | Demo tools | Vite 6.4.3 and vite-plugin-static-copy 2.3.2, as resolved in the lockfile |
 | Browser / GPU | Modern browser with WebGL 2, 3D/array textures and floating-point render targets; native `Float16Array` and `structuredClone` are also required |
 
-Use one BetterSky instance with one Viewer and a globe in 3D perspective mode. Renderer internals are version-sensitive; verify compatibility when changing Cesium versions.
+Use one active BetterSky instance per page with one Viewer and a globe in 3D perspective mode. The supported ranges include later dependency versions, while the lockfile preserves the development baseline. Renderer internals are version-sensitive: test dependency upgrades before deployment, and extend the minimum/current-latest matrix when new versions are released. A version range does not mean every future release has already been verified.
+
+### Compatibility regression matrix
+
+The current-latest versions below were checked against the npm registry on 2026-10-18. The four endpoint combinations cover the minimum and current-latest versions independently; they do not cover every intermediate or future release. SDK packaging and installation verification remain pending separately.
+
+| Cesium | three | Source browser API and lifecycle regression (2026-10-18) |
+| --- | --- | --- |
+| 1.142.0 | 0.160.1 | Passed |
+| 1.142.0 | 0.186.1 | Passed |
+| 1.146.0 | 0.160.1 | Passed |
+| 1.146.0 | 0.186.1 | Passed |
+
+The same source regression run passed 24 automated tests. The browser checks covered parameter updates, switches, resize and teardown/recreation, including disposal during asset loading; they do not replace packaged-SDK release verification.
 
 SSR and SSS are outside the supported BetterSky feature set.
 
@@ -104,11 +117,13 @@ The repository currently provides the SDK as source modules. Copy `BetterSky.js`
 
 Shader sources live in `Library/shaders/` and are imported as strings using Vite's `?raw` feature, for example `import shaderSource from './Library/shaders/geospatial/cloudsMaterial.frag.glsl?raw'` in a module at the project root. Vite projects require no additional GLSL plugin; include this directory when copying the SDK. Other bundlers need equivalent raw-text import support.
 
-Install the versions used by this repository:
+Install dependencies within the supported ranges:
 
 ```bash
-pnpm add cesium@1.142.0 three@0.160.1
+pnpm add "cesium@>=1.142.0" "three@>=0.160.1"
 ```
+
+The repository lockfile uses Cesium 1.142.0 and three 0.160.1 to reproduce its development baseline. These exact versions are optional for source integration; applications may pin any verified versions within the supported ranges.
 
 ### Deploy static assets
 
@@ -393,7 +408,7 @@ Changing cloud shape, density, coverage, lighting or visibility parameters inval
 | `fx.hbaoIntensity` / `fx.hbaoMaxRadius` | Setters for AO strength/radius. |
 | `fx.pass` | Getter for the underlying GeospatialPipelinePass; advanced access. |
 | `fx.stage` | Getter for the current sky PostProcessStageComposite. Re-read after stage rebuilds. |
-| `fx.dispose()` | Remove the frame listener and registered stages, and invoke pass cleanup. |
+| `fx.dispose()` | Idempotently remove the frame listener and registered stages, restore captured sky/globe fields and clean up instance-owned pass resources. |
 
 ## Common adjustments
 
@@ -475,9 +490,11 @@ fx.dispose();
 viewer.destroy();
 ```
 
-Call `dispose()` before `viewer.destroy()`; do not use the instance afterward. Disposal is not a complete rollback of every installed helper or GPU allocation. Asset requests are asynchronous and currently have no public cancellation or all-assets-ready promise, so avoid repeatedly constructing/disposing instances while initial resources are loading.
+Call `dispose()` before `viewer.destroy()`; do not use the instance afterward. Disposal is idempotent and cleans up the instance-owned effect textures, framebuffers, shadow resources and shader-cache references through its passes. Host default textures and shared viewport geometry remain under host/shared ownership.
 
-The implementation adds context helpers, uses selected Cesium renderer internals and extends some `Cartesian2/3/4` and `Matrix4` prototype methods. HBAO also has shared module state. Use one pipeline per Viewer and one active Viewer for this implementation; isolated concurrent instances are not supported.
+It is safe to dispose while initial assets are loading, then create a replacement after disposal returns. Requests are not actively aborted and there is no public all-assets-ready promise. Late completion callbacks check the destroyed state and skip GPU resource creation. SMAA prevents duplicate concurrent lookup loads per stage, and its callbacks also respect disposal.
+
+Disposal does not remove the installed context helpers, added sun fields on `context.uniformState` or `Cartesian2/3/4` and `Matrix4` prototype extensions. The implementation uses selected Cesium renderer internals, and HBAO also has shared module state. Use one pipeline per Viewer and one active Viewer per page; isolated concurrent instances are not supported.
 
 ## Troubleshooting
 

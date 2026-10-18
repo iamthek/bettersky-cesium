@@ -24,6 +24,7 @@ export default class SMAAStage {
    */
   constructor(scene, options = {}) {
     this._scene = scene;
+    this._destroyed = false;
     this._smaa = new SMAAEffectPass(scene, options);
     this._smaa.enabled = options.show ?? true;
 
@@ -95,15 +96,18 @@ export default class SMAAStage {
   }
 
   isDestroyed() {
-    return false;
+    return this._destroyed;
   }
 
   destroy() {
+    if (this._destroyed) return;
+    this._destroyed = true;
     if (this._smaa && !this._smaa.isDestroyed()) {
       this._smaa.destroy();
     }
     this._smaa = undefined;
-    // _stage 由 postProcessStages.remove() 负责销毁
+    // 集合通常先销毁 stage；直接销毁包装器时也要释放它。
+    if (this._stage && !this._stage.isDestroyed()) this._stage.destroy();
     this._stage = undefined;
   }
 }
