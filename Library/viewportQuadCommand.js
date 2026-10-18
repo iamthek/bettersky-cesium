@@ -54,15 +54,15 @@ function getSamplerContext(gl) {
  * 顶点位置使用裁剪空间 [-1,1]，顶点着色器里 gl_Position = vec4(position.xy, 1.0, 1.0)。
  */
 function getViewportVertexArray(context) {
-  if (defined(context._effectPipelineViewportVA)) {
-    return context._effectPipelineViewportVA;
+  if (defined(context._betterSkyViewportVA)) {
+    return context._betterSkyViewportVA;
   }
   // 官方 Context 自带的全屏四边形（若存在则直接复用，几何与属性命名一致）
   if (typeof context.getViewportQuadVertexArray === "function") {
     try {
       const va = context.getViewportQuadVertexArray();
       if (defined(va)) {
-        context._effectPipelineViewportVA = va;
+        context._betterSkyViewportVA = va;
         return va;
       }
     } catch (e) {
@@ -93,7 +93,7 @@ function getViewportVertexArray(context) {
     interleave: true,
   });
   va.isViewportPipelineShared = true;
-  context._effectPipelineViewportVA = va;
+  context._betterSkyViewportVA = va;
   return va;
 }
 
@@ -122,7 +122,7 @@ function buildCommand(context, fragmentShaderSource, vertexShaderText, overrides
 
 /** 在帧缓冲绑定流程中调用绘制回调，支持数组分层和历史纹理交换。 */
 export function installFramebufferCallbacks(framebuffer) {
-  if (framebuffer._effectPipelineCallbacksInstalled) return;
+  if (framebuffer._betterSkyCallbacksInstalled) return;
   const originalBind = framebuffer._bind;
   framebuffer._bind = function () {
     originalBind.call(this);
@@ -130,7 +130,7 @@ export function installFramebufferCallbacks(framebuffer) {
     if (this.onBindEvent) this.onBindEvent(buffers);
     if (this.onDrawEvent) this.onDrawEvent(buffers);
   };
-  framebuffer._effectPipelineCallbacksInstalled = true;
+  framebuffer._betterSkyCallbacksInstalled = true;
 }
 
 /**
@@ -139,7 +139,7 @@ export function installFramebufferCallbacks(framebuffer) {
  * @param {Context} context Cesium 场景上下文（viewer.scene.context）
  */
 export function installViewportCommands(context) {
-  if (!defined(context) || context._effectPipelineViewportInstalled) {
+  if (!defined(context) || context._betterSkyViewportInstalled) {
     return;
   }
 
@@ -168,5 +168,5 @@ export function installViewportCommands(context) {
     );
   };
 
-  context._effectPipelineViewportInstalled = true;
+  context._betterSkyViewportInstalled = true;
 }

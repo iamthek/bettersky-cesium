@@ -1,10 +1,10 @@
-# EffectPipeline Rendering and API Reference
+# BetterSky Rendering and API Reference
 
-**English** | [简体中文](EffectPipeline.README.zh-CN.md) · [Project overview](README.md)
+**English** | [简体中文](BetterSky.README.zh-CN.md) · [Project overview](README.md)
 
 This repository-only reference covers rendering principles, the demo and source integration, configuration and lifecycle management. It is not included in the npm package.
 
-For the planned npm/pnpm package, see [Usage](README.md#usage). This CesiumJS plugin uses the host's existing `CESIUM_BASE_URL`; copy the bundled assets from `node_modules` into `EffectPipelineAssets/` under that Cesium asset root. SDK packaging and these examples are pending release verification. The source-copy instructions below describe the current repository workflow, rather than the future npm package contents.
+For the planned npm/pnpm package, see [Usage](README.md#usage). This CesiumJS plugin uses the host's existing `CESIUM_BASE_URL`; copy the bundled assets from `node_modules` into `BetterSkyAssets/` under that Cesium asset root. SDK packaging and these examples are pending release verification. The source-copy instructions below describe the current repository workflow, rather than the future npm package contents.
 
 ## Requirements
 
@@ -17,9 +17,9 @@ For the planned npm/pnpm package, see [Usage](README.md#usage). This CesiumJS pl
 | Demo tools | Vite 6.4.3 and vite-plugin-static-copy 2.3.2, as resolved in the lockfile |
 | Browser / GPU | Modern browser with WebGL 2, 3D/array textures and floating-point render targets; native `Float16Array` and `structuredClone` are also required |
 
-Use one EffectPipeline instance with one Viewer and a globe in 3D perspective mode. Renderer internals are version-sensitive; verify compatibility when changing Cesium versions.
+Use one BetterSky instance with one Viewer and a globe in 3D perspective mode. Renderer internals are version-sensitive; verify compatibility when changing Cesium versions.
 
-SSR and SSS are outside the supported EffectPipeline feature set.
+SSR and SSS are outside the supported BetterSky feature set.
 
 ## Rendering capabilities
 
@@ -100,7 +100,7 @@ The demo adjusts `viewer.resolutionScale` to cap large drawing buffers at approx
 
 ## Add the SDK source to another project
 
-The repository currently provides the SDK as source modules. Copy `EffectPipeline.js`, the complete `Library/` directory and `static/EffectPipelineAssets/`, preserving relative paths.
+The repository currently provides the SDK as source modules. Copy `BetterSky.js`, the complete `Library/` directory and `static/BetterSkyAssets/`, preserving relative paths.
 
 Shader sources live in `Library/shaders/` and are imported as strings using Vite's `?raw` feature, for example `import shaderSource from './Library/shaders/geospatial/cloudsMaterial.frag.glsl?raw'` in a module at the project root. Vite projects require no additional GLSL plugin; include this directory when copying the SDK. Other bundlers need equivalent raw-text import support.
 
@@ -120,7 +120,7 @@ Set `CESIUM_BASE_URL` to the deployed Cesium asset root. The repository uses `/c
   Assets/
   ThirdParty/
   Widgets/
-  EffectPipelineAssets/
+  BetterSkyAssets/
     snowCoverMask.png
     ...other effect assets
     GeospatialAssets/
@@ -129,7 +129,7 @@ Set `CESIUM_BASE_URL` to the deployed Cesium asset root. The repository uses `/c
       *.png
 ```
 
-Copy the first four directories from `node_modules/cesium/Build/Cesium/`, and copy the complete `static/EffectPipelineAssets/` folder alongside them. Keep `GeospatialAssets` spelled exactly as shown. It contains the atmosphere lookup tables, 3D noise and weather textures.
+Copy the first four directories from `node_modules/cesium/Build/Cesium/`, and copy the complete `static/BetterSkyAssets/` folder alongside them. Keep `GeospatialAssets` spelled exactly as shown. It contains the atmosphere lookup tables, 3D noise and weather textures.
 
 The repository's [Vite configuration](vite.config.js) already serves and copies these resources. For another Vite project, install `vite-plugin-static-copy` and merge the equivalent settings into its configuration:
 
@@ -149,7 +149,7 @@ export default defineConfig({
           dest: "cesium",
         },
         {
-          src: "static/EffectPipelineAssets",
+          src: "static/BetterSkyAssets",
           dest: "cesium",
         },
       ],
@@ -166,9 +166,9 @@ Import Cesium's widget stylesheet in the application entry. After creating your 
 
 ```js
 import "cesium/Build/Cesium/Widgets/widgets.css";
-import { EffectPipeline } from "./EffectPipeline.js";
+import { BetterSky } from "./BetterSky.js";
 
-const fx = new EffectPipeline(viewer, {
+const fx = new BetterSky(viewer, {
   time: undefined, // Preserve the application's current clock time.
 });
 
@@ -178,19 +178,19 @@ fx.update({
 });
 ```
 
-`new EffectPipeline(viewer)` applies the complete built-in preset, including its fixed clock time. You can also pass `viewer.scene`; clock-setting options then have no effect.
+`new BetterSky(viewer)` applies the complete built-in preset, including its fixed clock time. You can also pass `viewer.scene`; clock-setting options then have no effect.
 
 Keep `requestRenderMode: false` for continuous cloud animation and temporal reconstruction. If your application enables explicit rendering, it must continue calling `scene.requestRender()` to supply frames and request a frame after parameter changes; the SDK does not schedule those requests.
 
 ## Configuration
 
-`new EffectPipeline(viewerOrScene, options?)` merges options into the built-in defaults. Nested objects merge by field and arrays replace whole arrays. Supply only the fields you need to change.
+`new BetterSky(viewerOrScene, options?)` merges options into the built-in defaults. Nested objects merge by field and arrays replace whole arrays. Supply only the fields you need to change.
 
 `false`, `null` and `undefined` are preserved during merging; their meaning depends on the option. In particular, `time: undefined` preserves the Viewer clock, and the documented nullable cloud controls use `null` to disable their corresponding mode.
 
 ```js
-const defaults = EffectPipeline.defaultOptions; // An independent copy.
-const fx = new EffectPipeline(viewer, {
+const defaults = BetterSky.defaultOptions; // An independent copy.
+const fx = new BetterSky(viewer, {
   time: undefined,
   coverage: 0.5,
   cloud: { denoise: { motionAlpha: 0.4 } },
@@ -198,7 +198,7 @@ const fx = new EffectPipeline(viewer, {
 });
 ```
 
-These defaults come from the public entry point in [EffectPipeline.js](EffectPipeline.js), which overrides several lower-level pass defaults.
+These defaults come from the public entry point in [BetterSky.js](BetterSky.js), which overrides several lower-level pass defaults.
 
 ### General options
 
@@ -378,7 +378,7 @@ Changing cloud shape, density, coverage, lighting or visibility parameters inval
 
 | API | Access / purpose |
 | --- | --- |
-| `EffectPipeline.defaultOptions` | Static getter; returns a fresh default configuration. |
+| `BetterSky.defaultOptions` | Static getter; returns a fresh default configuration. |
 | `fx.update(options)` | Apply supported fields from a partial configuration. |
 | `fx.enabled` | Get/set the pipeline switch. |
 | `fx.coverage` | Get/set weather coverage. |
@@ -446,7 +446,7 @@ fx.pass.showSnow = true;
 fx.pass.showRain = true;
 ```
 
-These setters rebuild the affected stages. Snow uses `EffectPipelineAssets/snowCoverMask.png`; `showRain` enables flashes and screen rain streaks over scene surfaces. These are pass-level controls, not constructor options on EffectPipeline.
+These setters rebuild the affected stages. Snow uses `BetterSkyAssets/snowCoverMask.png`; `showRain` enables flashes and screen rain streaks over scene surfaces. These are pass-level controls, not constructor options on BetterSky.
 
 Keep `systemLight: true` for consistent sunlight across effects. With `false`, the atmosphere/composition path uses custom sun uniforms while the cloud and cloud-shadow passes still read Cesium's system sun. This is not a unified custom-light API.
 
@@ -483,7 +483,7 @@ The implementation adds context helpers, uses selected Cesium renderer internals
 
 | Symptom | Check |
 | --- | --- |
-| Missing or incorrect sky/clouds at startup | Inspect failed requests under `/cesium/EffectPipelineAssets/GeospatialAssets/`, including EXR/BIN files. Verify `CESIUM_BASE_URL`, directory casing and WebGL support. Resources load asynchronously. |
+| Missing or incorrect sky/clouds at startup | Inspect failed requests under `/cesium/BetterSkyAssets/GeospatialAssets/`, including EXR/BIN files. Verify `CESIUM_BASE_URL`, directory casing and WebGL support. Resources load asynchronously. |
 | Clouds disappear when zooming out | Check `cloud.altitudeFadeRange`; the default reaches zero at 90 km camera ellipsoid height. Use `null` to disable this fade if needed. |
 | Little or no volumetric light | Check `volumetricLight.mode`, active shadow-casting layers and sun/view direction. Look toward the sun or a cloud gap; other directions naturally scatter less light. In volumetric mode, check `density`, `intensity`, `layerDepth` and `maxDistance`; weather holes do not turn off its medium. In legacy mode, check `cloud.hazeDensityScale`, coverage gating and local distance limits. |
 | Broad haze instead of distinct shafts | Check that clouds create actual light/shadow gaps. Reduce `density`, `layerDepth` or `maxDistance` to limit the affected air; adjust `intensity` separately for brightness. Raising global exposure/Bloom also brightens other effects and does not restore missing shadow boundaries. |
@@ -496,7 +496,7 @@ The implementation adds context helpers, uses selected Cesium renderer internals
 
 ## Explore the implementation
 
-- [EffectPipeline.js](EffectPipeline.js): public API, defaults, validation and updates.
+- [BetterSky.js](BetterSky.js): public API, defaults, validation and updates.
 - [GeospatialPipelinePass.js](Library/GeospatialPipelinePass.js): scene integration, atmosphere and composition.
 - [CloudsMaterialPass.js](Library/geospatial/CloudsMaterialPass.js): cloud/light integration and temporal reconstruction.
 - [VolumetricLightPass.js](Library/geospatial/VolumetricLightPass.js) and [FocusedCloudShadowPass.js](Library/geospatial/FocusedCloudShadowPass.js): independent local volumetric light, temporal history and focused sunlight visibility.

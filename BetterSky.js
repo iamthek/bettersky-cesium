@@ -1,17 +1,17 @@
 /**
- * EffectPipeline —— 体积云 / 大气散射 / 体积光（丁达尔）/ 镜头光晕 天空渲染管线。
+ * BetterSky —— 体积云 / 大气散射 / 体积光（丁达尔）/ 镜头光晕 天空渲染管线。
  *
- * BetterSky4Cesium SDK 的天空渲染入口，在 Cesium（ESM）中一行开启后处理效果：
+ * BetterSky for Cesium SDK 的天空渲染入口，在 Cesium（ESM）中一行开启后处理效果：
  *
- *   import { EffectPipeline } from "./EffectPipeline.js";
- *   const fx = new EffectPipeline(viewer);          // 使用内置默认预设
+ *   import { BetterSky } from "./BetterSky.js";
+ *   const fx = new BetterSky(viewer);          // 使用内置默认预设
  *   // 或覆盖参数：
- *   const fx = new EffectPipeline(viewer, { coverage: 0.35, toneMappingExposure: 6 });
+ *   const fx = new BetterSky(viewer, { coverage: 0.35, toneMappingExposure: 6 });
  *
  * 依赖与前置条件：
  *   1. 官方 Cesium（建议 1.140+，已验证 1.142 导出所需的渲染器内部类）。
  *   2. three（资源加载器 EXRLoader / CSM 阴影使用，工程内执行 `npm i three`）。
- *   3. 设置 window.CESIUM_BASE_URL 指向包含 EffectPipelineAssets/GeospatialAssets/ 的静态目录
+ *   3. 设置 window.CESIUM_BASE_URL 指向包含 BetterSkyAssets/GeospatialAssets/ 的静态目录
  *      （大气 LUT *.exr、3D 噪声 *.bin、天气图 *.png）。
  *
  * 设计：零侵入官方内核——不 patch Scene.prototype；仅用官方导出 API + 运行时配置，
@@ -181,7 +181,7 @@ function deepMerge(base, override) {
   if (!isPlainObject(override)) return out;
   for (const key of Object.keys(override)) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") {
-      throw new Error("[EffectPipeline] 非法配置字段。");
+      throw new Error("[BetterSky] 非法配置字段。");
     }
     const ov = override[key];
     if (isPlainObject(ov) && isPlainObject(base[key])) {
@@ -206,26 +206,26 @@ function validateVolumetricLightOptions(options) {
   if (!("volumetricLight" in options)) return;
   const volumetricLight = options.volumetricLight;
   if (!isPlainObject(volumetricLight)) {
-    throw new Error("[EffectPipeline] volumetricLight 必须是体积光参数对象。");
+    throw new Error("[BetterSky] volumetricLight 必须是体积光参数对象。");
   }
   if ("mode" in volumetricLight && !["volumetric", "legacy", "off"].includes(volumetricLight.mode)) {
-    throw new Error("[EffectPipeline] volumetricLight.mode 必须是 volumetric、legacy 或 off。");
+    throw new Error("[BetterSky] volumetricLight.mode 必须是 volumetric、legacy 或 off。");
   }
   if ("quality" in volumetricLight && !["low", "balanced", "high"].includes(volumetricLight.quality)) {
-    throw new Error("[EffectPipeline] volumetricLight.quality 必须是 low、balanced 或 high。");
+    throw new Error("[BetterSky] volumetricLight.quality 必须是 low、balanced 或 high。");
   }
   for (const key of ["density", "intensity"]) {
     if (key in volumetricLight && (!Number.isFinite(volumetricLight[key]) || volumetricLight[key] < 0)) {
-      throw new Error(`[EffectPipeline] volumetricLight.${key} 必须是非负有限数字。`);
+      throw new Error(`[BetterSky] volumetricLight.${key} 必须是非负有限数字。`);
     }
   }
   for (const key of ["layerDepth", "maxDistance"]) {
     if (key in volumetricLight && (!Number.isFinite(volumetricLight[key]) || volumetricLight[key] <= 0)) {
-      throw new Error(`[EffectPipeline] volumetricLight.${key} 必须是正的有限距离（米）。`);
+      throw new Error(`[BetterSky] volumetricLight.${key} 必须是正的有限距离（米）。`);
     }
   }
   if ("anisotropy" in volumetricLight && (!Number.isFinite(volumetricLight.anisotropy) || volumetricLight.anisotropy < 0 || volumetricLight.anisotropy > 0.9)) {
-    throw new Error("[EffectPipeline] volumetricLight.anisotropy 必须在 0..0.9 范围内。");
+    throw new Error("[BetterSky] volumetricLight.anisotropy 必须在 0..0.9 范围内。");
   }
 }
 
@@ -243,82 +243,82 @@ function toCartesian4(v) {
 
 function validateCloudOptions(options) {
   if ("aerialPerspectiveStrength" in options && (!Number.isFinite(options.aerialPerspectiveStrength) || options.aerialPerspectiveStrength < 0 || options.aerialPerspectiveStrength > 1)) {
-    throw new Error("[EffectPipeline] aerialPerspectiveStrength 必须在 0..1 范围内。");
+    throw new Error("[BetterSky] aerialPerspectiveStrength 必须在 0..1 范围内。");
   }
   if ("irradianceScale" in options && (!Number.isFinite(options.irradianceScale) || options.irradianceScale < 0)) {
-    throw new Error("[EffectPipeline] irradianceScale 必须是非负有限数字。");
+    throw new Error("[BetterSky] irradianceScale 必须是非负有限数字。");
   }
   const cloud = options.cloud;
   if (!isPlainObject(cloud)) return;
   if ("hazeCloudAttached" in cloud && typeof cloud.hazeCloudAttached !== "boolean") {
-    throw new Error("[EffectPipeline] cloud.hazeCloudAttached 必须是布尔值。");
+    throw new Error("[BetterSky] cloud.hazeCloudAttached 必须是布尔值。");
   }
   if ("hazeGroundDensityScale" in cloud && (!Number.isFinite(cloud.hazeGroundDensityScale) || cloud.hazeGroundDensityScale < 0 || cloud.hazeGroundDensityScale > 1)) {
-    throw new Error("[EffectPipeline] cloud.hazeGroundDensityScale 必须在 0..1 范围内。");
+    throw new Error("[BetterSky] cloud.hazeGroundDensityScale 必须在 0..1 范围内。");
   }
   for (const key of ["hazeViewDistance", "hazeVolumeLength"]) {
     if (key in cloud && (!Number.isFinite(cloud[key]) || cloud[key] <= 0)) {
-      throw new Error(`[EffectPipeline] cloud.${key} 必须是正的有限距离（米）。`);
+      throw new Error(`[BetterSky] cloud.${key} 必须是正的有限距离（米）。`);
     }
   }
   if ("layerTypes" in cloud && cloud.layerTypes !== null) {
     if (!Array.isArray(cloud.layerTypes) || cloud.layerTypes.length !== 3 || !cloud.layerTypes.every(type => CLOUD_LAYER_TYPES.includes(type))) {
-      throw new Error("[EffectPipeline] cloud.layerTypes 必须是三个 cumulus/altocumulus/cirrus 云型，或 null。");
+      throw new Error("[BetterSky] cloud.layerTypes 必须是三个 cumulus/altocumulus/cirrus 云型，或 null。");
     }
   }
   if ("lodRange" in cloud && cloud.lodRange !== null) {
     const range = cloud.lodRange;
     if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isFinite) || range[0] < 0 || range[1] <= range[0]) {
-      throw new Error("[EffectPipeline] cloud.lodRange 必须为 [非负近景距离, 更大的远景距离]（米），或 null。");
+      throw new Error("[BetterSky] cloud.lodRange 必须为 [非负近景距离, 更大的远景距离]（米），或 null。");
     }
   }
   if ("hazeQuality" in cloud && !Object.keys(HAZE_QUALITY_SAMPLES).includes(cloud.hazeQuality)) {
-    throw new Error("[EffectPipeline] cloud.hazeQuality 必须是 low、balanced 或 high。");
+    throw new Error("[BetterSky] cloud.hazeQuality 必须是 low、balanced 或 high。");
   }
   if ("hazeHeightFalloff" in cloud && (!Number.isFinite(cloud.hazeHeightFalloff) || cloud.hazeHeightFalloff <= 0)) {
-    throw new Error("[EffectPipeline] cloud.hazeHeightFalloff 必须是正的有限高度（米）。");
+    throw new Error("[BetterSky] cloud.hazeHeightFalloff 必须是正的有限高度（米）。");
   }
   if ("hazeAnisotropy" in cloud && (!Number.isFinite(cloud.hazeAnisotropy) || cloud.hazeAnisotropy < 0 || cloud.hazeAnisotropy > 0.9)) {
-    throw new Error("[EffectPipeline] cloud.hazeAnisotropy 必须在 0..0.9 范围内。");
+    throw new Error("[BetterSky] cloud.hazeAnisotropy 必须在 0..0.9 范围内。");
   }
   if ("altitudeFadeRange" in cloud && cloud.altitudeFadeRange !== null) {
     const range = cloud.altitudeFadeRange;
     if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isFinite) || range[0] < 0 || range[1] <= range[0]) {
-      throw new Error("[EffectPipeline] cloud.altitudeFadeRange 必须为 [非负开始高度, 更大的结束高度]，或 null。");
+      throw new Error("[BetterSky] cloud.altitudeFadeRange 必须为 [非负开始高度, 更大的结束高度]，或 null。");
     }
   }
   if ("maxShadowLengthRayDistance" in cloud && (!Number.isFinite(cloud.maxShadowLengthRayDistance) || cloud.maxShadowLengthRayDistance <= 0)) {
-    throw new Error("[EffectPipeline] cloud.maxShadowLengthRayDistance 必须大于 0。");
+    throw new Error("[BetterSky] cloud.maxShadowLengthRayDistance 必须大于 0。");
   }
   if ("hazeSunColor" in cloud && (!Array.isArray(cloud.hazeSunColor) || cloud.hazeSunColor.length !== 3 || cloud.hazeSunColor.some(value => !Number.isFinite(value) || value < 0))) {
-    throw new Error("[EffectPipeline] cloud.hazeSunColor 必须是三个非负有限数字。");
+    throw new Error("[BetterSky] cloud.hazeSunColor 必须是三个非负有限数字。");
   }
   for (const key of ["skyIrradianceScale", "groundIrradianceScale", "hazeDensityScale", "hazeDirectLightScale"]) {
     if (key in cloud && (!Number.isFinite(cloud[key]) || cloud[key] < 0)) {
-      throw new Error(`[EffectPipeline] cloud.${key} 必须是非负有限数字。`);
+      throw new Error(`[BetterSky] cloud.${key} 必须是非负有限数字。`);
     }
   }
   if ("shapeDetailAmounts" in cloud) {
     const value = cloud.shapeDetailAmounts;
     const components = value instanceof Cartesian4 ? [value.x, value.y, value.z, value.w] : value;
     if (!Array.isArray(components) || components.length !== 4) {
-      throw new Error("[EffectPipeline] cloud.shapeDetailAmounts 必须是含四个 0..1 有限数字的 Array 或 Cartesian4。");
+      throw new Error("[BetterSky] cloud.shapeDetailAmounts 必须是含四个 0..1 有限数字的 Array 或 Cartesian4。");
     }
     for (let i = 0; i < 4; i++) {
       if (!Number.isFinite(components[i]) || components[i] < 0 || components[i] > 1) {
-        throw new Error(`[EffectPipeline] cloud.shapeDetailAmounts[${i}] 必须是 0..1 的有限数字。`);
+        throw new Error(`[BetterSky] cloud.shapeDetailAmounts[${i}] 必须是 0..1 的有限数字。`);
       }
     }
   }
   if ("denoise" in cloud) {
     if (!isPlainObject(cloud.denoise)) {
-      throw new Error("[EffectPipeline] cloud.denoise 必须是降噪参数对象。");
+      throw new Error("[BetterSky] cloud.denoise 必须是降噪参数对象。");
     }
     for (const key of Object.keys(DEFAULT_OPTIONS.cloud.denoise)) {
       if (!(key in cloud.denoise)) continue;
       const value = cloud.denoise[key];
       if (!Number.isFinite(value) || (key === "varianceGamma" ? value <= 0 : value < 0 || value > 1)) {
-        throw new Error(`[EffectPipeline] cloud.denoise.${key} 必须是${key === "varianceGamma" ? "大于 0" : " 0..1"}的有限数字。`);
+        throw new Error(`[BetterSky] cloud.denoise.${key} 必须是${key === "varianceGamma" ? "大于 0" : " 0..1"}的有限数字。`);
       }
     }
   }
@@ -330,7 +330,7 @@ function getUseLogDepth(scene) {
   return !!scene.logarithmicDepthBuffer;
 }
 
-export class EffectPipeline {
+export class BetterSky {
   /** 内置默认预设的独立副本，可用于读取默认值或生成自定义预设。 */
   static get defaultOptions() {
     return structuredClone(DEFAULT_OPTIONS);
@@ -345,15 +345,15 @@ export class EffectPipeline {
     validateVolumetricLightOptions(options);
     validateCloudOptions(options);
     if (!defined(viewerOrScene)) {
-      throw new Error("[EffectPipeline] 需要传入 Cesium Viewer 或 Scene。");
+      throw new Error("[BetterSky] 需要传入 Cesium Viewer 或 Scene。");
     }
     const scene = defined(viewerOrScene.scene) ? viewerOrScene.scene : viewerOrScene;
     if (!defined(scene) || !defined(scene.context)) {
-      throw new Error("[EffectPipeline] 无法获取 scene.context，请确认传入的是 Viewer/Scene。");
+      throw new Error("[BetterSky] 无法获取 scene.context，请确认传入的是 Viewer/Scene。");
     }
     this._viewer = defined(viewerOrScene.scene) ? viewerOrScene : undefined;
     this._scene = scene;
-    this._options = deepMerge(EffectPipeline.defaultOptions, options);
+    this._options = deepMerge(BetterSky.defaultOptions, options);
 
     // 1) 在 context 上安装支持自定义顶点着色器的视口命令
     installViewportCommands(scene.context);
@@ -405,7 +405,7 @@ export class EffectPipeline {
         if (this._smaa) this._smaa.update(scene.context, useLog);
       } catch (e) {
         // 单帧异常不应中断渲染循环
-        console.error("[EffectPipeline] update error:", e);
+        console.error("[BetterSky] update error:", e);
       }
     });
 
@@ -666,4 +666,4 @@ export class EffectPipeline {
   }
 }
 
-export default EffectPipeline;
+export default BetterSky;

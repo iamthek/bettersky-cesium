@@ -1,8 +1,8 @@
-# BetterSky4Cesium
+# BetterSky for Cesium
 
 **English** | [简体中文](README.zh-CN.md)
 
-BetterSky4Cesium is a CesiumJS visual effects plugin. Its **EffectPipeline** adds volumetric clouds, atmosphere, cloud shadows, volumetric light and image enhancement to an existing 3D globe scene.
+BetterSky for Cesium is a CesiumJS visual effects plugin. Its **BetterSky** adds volumetric clouds, atmosphere, cloud shadows, volumetric light and image enhancement to an existing 3D globe scene.
 
 ## Highlights
 
@@ -13,41 +13,41 @@ BetterSky4Cesium is a CesiumJS visual effects plugin. Its **EffectPipeline** add
 
 ## Usage
 
-> npm SDK packaging and release verification are pending. The package name/version below are provisional; these commands do not indicate that `0.1.0` is available yet.
+> npm SDK packaging and release verification are pending. The version below is provisional; these commands do not indicate that `0.1.0` is available yet.
 
-Use Cesium **1.142.0**, a browser bundler and one active EffectPipeline/Viewer per page. The browser/GPU must support WebGL 2, 3D/array textures, the required floating-point render targets, native `Float16Array` and `structuredClone`.
+Use Cesium **1.142.0**, a browser bundler and one active BetterSky/Viewer per page. The browser/GPU must support WebGL 2, 3D/array textures, the required floating-point render targets, native `Float16Array` and `structuredClone`.
 
 ### Install
 
 After release, choose npm or pnpm in the consuming application's directory:
 
 ```bash
-npm install --save-exact better-sky4cesium@0.1.0 cesium@1.142.0
+npm install --save-exact bettersky-cesium@0.1.0 cesium@1.142.0
 ```
 
 ```bash
-pnpm add -E better-sky4cesium@0.1.0 cesium@1.142.0
+pnpm add -E bettersky-cesium@0.1.0 cesium@1.142.0
 ```
 
 Both install the same package. Cesium is shared with the application; three is installed automatically as a runtime dependency.
 
 ### Copy assets
 
-The plugin uses the host's **`CESIUM_BASE_URL`**. Copy the contents of `node_modules/better-sky4cesium/dist/assets/` into **`EffectPipelineAssets/` under that Cesium asset root**. For `CESIUM_BASE_URL='/cesium/'` in a Vite application:
+The plugin uses the host's **`CESIUM_BASE_URL`**. Copy the contents of `node_modules/bettersky-cesium/dist/assets/` into **`BetterSkyAssets/` under that Cesium asset root**. For `CESIUM_BASE_URL='/cesium/'` in a Vite application:
 
 | Source | Destination |
 | --- | --- |
-| `node_modules/better-sky4cesium/dist/assets/` contents | `public/cesium/EffectPipelineAssets/` |
-| SDK `LICENSE` and `THIRD_PARTY_NOTICES.md` | `public/cesium/EffectPipelineAssets/` |
+| `node_modules/bettersky-cesium/dist/assets/` contents | `public/cesium/BetterSkyAssets/` |
+| SDK `LICENSE` and `THIRD_PARTY_NOTICES.md` | `public/cesium/BetterSkyAssets/` |
 | Cesium's `Workers/`, `Assets/`, `ThirdParty/`, `Widgets/` | Keep the application's existing copies under `public/cesium/` |
 
 For example, run this from the application directory with Node.js 22 or newer:
 
 ```bash
-node --input-type=module -e "import { cpSync } from 'node:fs'; cpSync('node_modules/better-sky4cesium/dist/assets', 'public/cesium/EffectPipelineAssets', { recursive: true }); for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync('node_modules/better-sky4cesium/' + file, 'public/cesium/EffectPipelineAssets/' + file);"
+node --input-type=module -e "import { cpSync } from 'node:fs'; cpSync('node_modules/bettersky-cesium/dist/assets', 'public/cesium/BetterSkyAssets', { recursive: true }); for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync('node_modules/bettersky-cesium/' + file, 'public/cesium/BetterSkyAssets/' + file);"
 ```
 
-Keep `snowCoverMask.png` and `GeospatialAssets/` directly inside `EffectPipelineAssets/`; do not add an extra `assets/` level. npm and pnpm both use the paths above, without accessing `.pnpm/`. Repeat the copy before building in CI. On upgrade, replace only `EffectPipelineAssets/` and refresh cached assets so JavaScript and resources stay on the same version.
+Keep `snowCoverMask.png` and `GeospatialAssets/` directly inside `BetterSkyAssets/`; do not add an extra `assets/` level. npm and pnpm both use the paths above, without accessing `.pnpm/`. Repeat the copy before building in CI. On upgrade, replace only `BetterSkyAssets/` and refresh cached assets so JavaScript and resources stay on the same version.
 
 Keep the application's existing Cesium asset configuration. If it is not set yet, this Vite example matches the paths above:
 
@@ -61,7 +61,7 @@ export default defineConfig({
 })
 ```
 
-For a site hosted at `/app/`, use the matching application base and `CESIUM_BASE_URL='/app/cesium/'`. Plugin assets then load from `/app/cesium/EffectPipelineAssets/`. If Cesium resources are already hosted elsewhere, put `EffectPipelineAssets/` alongside their `Workers/` directory. No additional plugin asset URL is needed.
+For a site hosted at `/app/`, use the matching application base and `CESIUM_BASE_URL='/app/cesium/'`. Plugin assets then load from `/app/cesium/BetterSkyAssets/`. If Cesium resources are already hosted elsewhere, put `BetterSkyAssets/` alongside their `Workers/` directory. No additional plugin asset URL is needed.
 
 ### Attach to a Viewer
 
@@ -69,9 +69,9 @@ After the application has created its Cesium `viewer` on the client:
 
 ```js
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { EffectPipeline } from 'better-sky4cesium'
+import { BetterSky } from 'bettersky-cesium'
 
-const effects = new EffectPipeline(viewer, {
+const effects = new BetterSky(viewer, {
   time: undefined, // Preserve the application's current clock time.
 })
 
@@ -87,7 +87,7 @@ effects.dispose()
 viewer.destroy()
 ```
 
-If effects are missing, first check resource requests under `CESIUM_BASE_URL + 'EffectPipelineAssets/'`, the browser console and WebGL capabilities. Requests must return actual files rather than an HTML fallback.
+If effects are missing, first check resource requests under `CESIUM_BASE_URL + 'BetterSkyAssets/'`, the browser console and WebGL capabilities. Requests must return actual files rather than an HTML fallback.
 
 ## License
 

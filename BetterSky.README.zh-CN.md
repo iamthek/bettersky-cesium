@@ -1,10 +1,10 @@
-# EffectPipeline 渲染原理与 API 参考
+# BetterSky 渲染原理与 API 参考
 
-[English](EffectPipeline.README.md) | **简体中文** · [项目介绍](README.zh-CN.md)
+[English](BetterSky.README.md) | **简体中文** · [项目介绍](README.zh-CN.md)
 
 本文是仓库内参考文档，介绍渲染原理、示例与源码接入、参数配置及生命周期管理，不随 npm 包发布。
 
-计划中的 npm/pnpm 包接入见[使用](README.zh-CN.md#使用)。SDK 作为 CesiumJS 插件，直接使用宿主已有的 `CESIUM_BASE_URL`，将 `node_modules` 中的随包资源复制到该 Cesium 资源根目录下的 `EffectPipelineAssets/` 即可。SDK 打包与这些示例尚待发布验收。下文复制源码的步骤描述当前仓库流程，不代表未来 npm 包的内容。
+计划中的 npm/pnpm 包接入见[使用](README.zh-CN.md#使用)。SDK 作为 CesiumJS 插件，直接使用宿主已有的 `CESIUM_BASE_URL`，将 `node_modules` 中的随包资源复制到该 Cesium 资源根目录下的 `BetterSkyAssets/` 即可。SDK 打包与这些示例尚待发布验收。下文复制源码的步骤描述当前仓库流程，不代表未来 npm 包的内容。
 
 ## 环境要求
 
@@ -17,9 +17,9 @@
 | 示例工具 | 锁文件中的 Vite 6.4.3、vite-plugin-static-copy 2.3.2 |
 | 浏览器 / GPU | 支持 WebGL 2、三维/数组纹理、浮点渲染目标的现代浏览器，同时需要原生 `Float16Array` 和 `structuredClone` |
 
-使用一个 EffectPipeline 实例管理一个包含地球的 Viewer，目标场景为三维透视模式。渲染器内部接口对版本敏感，更换 Cesium 版本需要验证兼容性。
+使用一个 BetterSky 实例管理一个包含地球的 Viewer，目标场景为三维透视模式。渲染器内部接口对版本敏感，更换 Cesium 版本需要验证兼容性。
 
-SSR 和 SSS 不属于 EffectPipeline 当前支持的功能。
+SSR 和 SSS 不属于 BetterSky 当前支持的功能。
 
 ## 渲染功能
 
@@ -100,7 +100,7 @@ pnpm preview  # 预览 dist/，以终端输出地址为准
 
 ## 以源码接入其他项目
 
-当前仓库以源码模块形式提供 SDK。复制 `EffectPipeline.js`、完整 `Library/` 目录及 `static/EffectPipelineAssets/`，保留相对路径。
+当前仓库以源码模块形式提供 SDK。复制 `BetterSky.js`、完整 `Library/` 目录及 `static/BetterSkyAssets/`，保留相对路径。
 
 着色器源码位于 `Library/shaders/`，通过 Vite 的 `?raw` 导入为字符串，例如从项目根目录的模块中使用 `import shaderSource from './Library/shaders/geospatial/cloudsMaterial.frag.glsl?raw'`。接入 Vite 项目无需额外 GLSL 插件；复制库时必须包含该目录。其他构建工具需要提供等效的原文字符串导入支持。
 
@@ -120,7 +120,7 @@ pnpm add cesium@1.142.0 three@0.160.1
   Assets/
   ThirdParty/
   Widgets/
-  EffectPipelineAssets/
+  BetterSkyAssets/
     snowCoverMask.png
     ...其他效果资源
     GeospatialAssets/
@@ -129,7 +129,7 @@ pnpm add cesium@1.142.0 three@0.160.1
       *.png
 ```
 
-前四个目录来自 `node_modules/cesium/Build/Cesium/`；将完整 `static/EffectPipelineAssets/` 复制到它们旁边。`GeospatialAssets` 的拼写及大小写必须一致，里面包含大气查找表、三维噪声和天气纹理。
+前四个目录来自 `node_modules/cesium/Build/Cesium/`；将完整 `static/BetterSkyAssets/` 复制到它们旁边。`GeospatialAssets` 的拼写及大小写必须一致，里面包含大气查找表、三维噪声和天气纹理。
 
 本仓库的 [Vite 配置](vite.config.js) 已完成资源服务与复制。其他 Vite 项目需安装 `vite-plugin-static-copy`，并将等效设置合并到已有配置：
 
@@ -149,7 +149,7 @@ export default defineConfig({
           dest: "cesium",
         },
         {
-          src: "static/EffectPipelineAssets",
+          src: "static/BetterSkyAssets",
           dest: "cesium",
         },
       ],
@@ -166,9 +166,9 @@ export default defineConfig({
 
 ```js
 import "cesium/Build/Cesium/Widgets/widgets.css";
-import { EffectPipeline } from "./EffectPipeline.js";
+import { BetterSky } from "./BetterSky.js";
 
-const fx = new EffectPipeline(viewer, {
+const fx = new BetterSky(viewer, {
   time: undefined, // 保留业务当前的时钟时间。
 });
 
@@ -178,19 +178,19 @@ fx.update({
 });
 ```
 
-`new EffectPipeline(viewer)` 会应用完整内置预设，包括预设的固定时钟时间。也可传入 `viewer.scene`，此时时钟设置无效。
+`new BetterSky(viewer)` 会应用完整内置预设，包括预设的固定时钟时间。也可传入 `viewer.scene`，此时时钟设置无效。
 
 建议保持 `requestRenderMode: false`，让云动画和时域重建持续获得新帧。若应用采用显式渲染模式，需要自行持续调用 `scene.requestRender()`，并在参数变化后请求一帧；SDK 不会调度这些请求。
 
 ## 参数配置
 
-`new EffectPipeline(viewerOrScene, options?)` 将参数合并到内置默认值。嵌套对象逐字段合并，数组整项替换，只需传入想修改的字段。
+`new BetterSky(viewerOrScene, options?)` 将参数合并到内置默认值。嵌套对象逐字段合并，数组整项替换，只需传入想修改的字段。
 
 合并时会保留显式传入的 `false`、`null` 和 `undefined`，具体含义取决于参数。例如 `time: undefined` 保留 Viewer 时钟；下文支持空值的云参数通过 `null` 关闭对应模式。
 
 ```js
-const defaults = EffectPipeline.defaultOptions; // 独立的默认配置副本。
-const fx = new EffectPipeline(viewer, {
+const defaults = BetterSky.defaultOptions; // 独立的默认配置副本。
+const fx = new BetterSky(viewer, {
   time: undefined,
   coverage: 0.5,
   cloud: { denoise: { motionAlpha: 0.4 } },
@@ -198,7 +198,7 @@ const fx = new EffectPipeline(viewer, {
 });
 ```
 
-下列默认值来自公开入口 [EffectPipeline.js](EffectPipeline.js)，会覆盖部分底层 pass 的默认配置。
+下列默认值来自公开入口 [BetterSky.js](BetterSky.js)，会覆盖部分底层 pass 的默认配置。
 
 ### 通用参数
 
@@ -378,7 +378,7 @@ fx.update({
 
 | API | 读写方式 / 用途 |
 | --- | --- |
-| `EffectPipeline.defaultOptions` | 静态 getter，返回新的默认配置副本。 |
+| `BetterSky.defaultOptions` | 静态 getter，返回新的默认配置副本。 |
 | `fx.update(options)` | 应用局部配置中支持的字段。 |
 | `fx.enabled` | 读取/设置管线总开关。 |
 | `fx.coverage` | 读取/设置天气覆盖度。 |
@@ -446,7 +446,7 @@ fx.pass.showSnow = true;
 fx.pass.showRain = true;
 ```
 
-这些 setter 会重建相关阶段。积雪使用 `EffectPipelineAssets/snowCoverMask.png`；`showRain` 在场景表面叠加闪光和屏幕雨条纹。它们属于底层 pass 控制，不是 EffectPipeline 的构造参数。
+这些 setter 会重建相关阶段。积雪使用 `BetterSkyAssets/snowCoverMask.png`；`showRain` 在场景表面叠加闪光和屏幕雨条纹。它们属于底层 pass 控制，不是 BetterSky 的构造参数。
 
 建议保持 `systemLight: true`，让效果使用一致的太阳光源。设为 `false` 后，大气/合成路径会使用自定义太阳 uniform，但云体与云影仍读取 Cesium 系统太阳；这不是统一的自定义光源 API。
 
@@ -483,7 +483,7 @@ viewer.destroy();
 
 | 现象 | 检查项 |
 | --- | --- |
-| 启动时天空或云缺失、显示异常 | 检查 `/cesium/EffectPipelineAssets/GeospatialAssets/` 下 EXR/BIN 等资源请求、`CESIUM_BASE_URL`、目录大小写及 WebGL 能力；资源异步加载。 |
+| 启动时天空或云缺失、显示异常 | 检查 `/cesium/BetterSkyAssets/GeospatialAssets/` 下 EXR/BIN 等资源请求、`CESIUM_BASE_URL`、目录大小写及 WebGL 能力；资源异步加载。 |
 | 拉远后云消失 | 检查 `cloud.altitudeFadeRange`，默认在相机椭球高度 90 km 时完全淡出；需要时可设为 `null`。 |
 | 穿云光很弱或看不到 | 检查 `volumetricLight.mode`、有效投影云层及太阳与观察方向。朝太阳或云隙观察，其他方向的散射自然较弱。volumetric 模式检查 `density`、`intensity`、`layerDepth` 和 `maxDistance`，天气孔洞不会关闭其介质；legacy 模式检查 `cloud.hazeDensityScale`、覆盖度门控和局部距离范围。 |
 | 空气大片泛白，光束轮廓不明显 | 先确认云分布形成了实际的亮区和暗带。减小 `density`、`layerDepth` 或 `maxDistance` 限制受影响空气，再单独调整 `intensity` 控制亮度。提高全局曝光/Bloom 会同时提亮其他效果，不能恢复缺失的阴影边界。 |
@@ -496,7 +496,7 @@ viewer.destroy();
 
 ## 源码导览
 
-- [EffectPipeline.js](EffectPipeline.js)：公开 API、默认值、参数校验与更新。
+- [BetterSky.js](BetterSky.js)：公开 API、默认值、参数校验与更新。
 - [GeospatialPipelinePass.js](Library/GeospatialPipelinePass.js)：场景接入、大气与效果合成。
 - [CloudsMaterialPass.js](Library/geospatial/CloudsMaterialPass.js)：云体/光照积分与时域重建。
 - [VolumetricLightPass.js](Library/geospatial/VolumetricLightPass.js) 和 [FocusedCloudShadowPass.js](Library/geospatial/FocusedCloudShadowPass.js)：独立局部体积光、时域历史与聚焦日光可见性。

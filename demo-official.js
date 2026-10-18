@@ -1,18 +1,18 @@
 /**
- * demo-official.js —— BetterSky4Cesium SDK 的接入示例。
+ * demo-official.js —— BetterSky for Cesium SDK 的接入示例。
  *
  * 本示例直接 import 官方 cesium，
- * 通过一行 `new EffectPipeline(viewer)` 叠加 体积云 / 大气散射 / 体积光 / 镜头光晕。
+ * 通过一行 `new BetterSky(viewer)` 叠加 体积云 / 大气散射 / 体积光 / 镜头光晕。
  *
  * 运行：pnpm dev，打开 Vite 输出的根地址。
- * Vite 提供 npm 模块，官方静态资源位于 /cesium/，天空效果资源位于 /cesium/EffectPipelineAssets/GeospatialAssets/。
+ * Vite 提供 npm 模块，官方静态资源位于 /cesium/，天空效果资源位于 /cesium/BetterSkyAssets/GeospatialAssets/。
  */
 import * as Cesium from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
-import { EffectPipeline } from "./EffectPipeline.js";
+import { BetterSky } from "./BetterSky.js";
 
 // 控件只转换参数形状，默认值统一由管线内置预设提供。
-const DEFAULT_OPTIONS = EffectPipeline.defaultOptions;
+const DEFAULT_OPTIONS = BetterSky.defaultOptions;
 const CONTROL_DEFAULTS = {
   enabled: DEFAULT_OPTIONS.enabled,
   systemLight: DEFAULT_OPTIONS.systemLight,
@@ -170,7 +170,7 @@ function updateTimelineRange(viewer, time) {
 function createEffectControlPanel(viewer, fx) {
   const panel = document.getElementById("effectPanel");
   const controlsRoot = document.getElementById("effectControls");
-  // 首页没有控制面板，渲染预设由 EffectPipeline 内置默认值提供。
+  // 首页没有控制面板，渲染预设由 BetterSky 内置默认值提供。
   if (!panel || !controlsRoot) return;
   const footer = panel.querySelector(".effect-panel__footer");
   const toggleButton = document.getElementById("toggleEffectPanel");
@@ -837,7 +837,7 @@ window.onload = async () => {
   });
 
   // ====== 一行开启天空效果 ======
-  const fx = new EffectPipeline(viewer);
+  const fx = new BetterSky(viewer);
 
   updateTimelineRange(viewer, CONTROL_DEFAULTS.time);
   createEffectControlPanel(viewer, fx);

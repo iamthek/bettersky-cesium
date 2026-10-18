@@ -1,6 +1,6 @@
 # Third-party notices
 
-This file lists confirmed third-party code incorporated into BetterSky4Cesium
+This file lists confirmed third-party code incorporated into BetterSky for Cesium
 and its external runtime dependencies. The project remains proprietary; its
 trial license does not replace the licenses of these third-party portions.
 

@@ -665,7 +665,7 @@ export default class GeospatialPipelinePass {
         }
         if (!this._snowCoverMaskMap && this._showSnow) {
             this._snowCoverMaskMap = this._scene.context.defaultTexture;
-            Resource.createIfNeeded(buildModuleUrl("EffectPipelineAssets/snowCoverMask.png")).fetchImage().then(image => {
+            Resource.createIfNeeded(buildModuleUrl("BetterSkyAssets/snowCoverMask.png")).fetchImage().then(image => {
                 this._snowCoverMaskMap = new Texture({
                     context: this._scene.context,
                     source: image,
@@ -1065,7 +1065,7 @@ export default class GeospatialPipelinePass {
     }
 
     precomputed() {
-        Resource.createIfNeeded(buildModuleUrl("EffectPipelineAssets/GeospatialAssets/local_weather.png")).fetchImage().then(image => {
+        Resource.createIfNeeded(buildModuleUrl("BetterSkyAssets/GeospatialAssets/local_weather.png")).fetchImage().then(image => {
             this.localWeatherTexture = new Texture({
                 context: this._scene.context,
                 source: image,
@@ -1080,7 +1080,7 @@ export default class GeospatialPipelinePass {
             });
             this.localWeatherTexture.generateMipmap();
         });
-        Resource.createIfNeeded(buildModuleUrl("EffectPipelineAssets/GeospatialAssets/turbulence.png")).fetchImage().then(image => {
+        Resource.createIfNeeded(buildModuleUrl("BetterSkyAssets/GeospatialAssets/turbulence.png")).fetchImage().then(image => {
             this.turbulenceTexture = new Texture({
                 context: this._scene.context,
                 source: image,
@@ -1109,7 +1109,7 @@ export default class GeospatialPipelinePass {
         })
         const loader = new Loader();
         (async () => {
-            const texture = await loader.loadAsync(buildModuleUrl("EffectPipelineAssets/GeospatialAssets/shape.bin"))
+            const texture = await loader.loadAsync(buildModuleUrl("BetterSkyAssets/GeospatialAssets/shape.bin"))
             this.shapeTexture = new Texture3D({
                 context: this._scene.context,
                 width: CLOUD_SHAPE_TEXTURE_SIZE,
@@ -1149,7 +1149,7 @@ export default class GeospatialPipelinePass {
         })
         const loader2 = new Loader2();
         (async () => {
-            const texture = await loader2.loadAsync(buildModuleUrl("EffectPipelineAssets/GeospatialAssets/shape_detail.bin"))
+            const texture = await loader2.loadAsync(buildModuleUrl("BetterSkyAssets/GeospatialAssets/shape_detail.bin"))
             this.shapeDetailTexture = new Texture3D({
                 context: this._scene.context,
                 width: CLOUD_SHAPE_DETAIL_TEXTURE_SIZE,
@@ -1188,7 +1188,7 @@ export default class GeospatialPipelinePass {
         })
         const loader3 = new STBNLoader();
         (async () => {
-            const texture = await loader3.loadAsync(buildModuleUrl("EffectPipelineAssets/GeospatialAssets/stbn.bin"))
+            const texture = await loader3.loadAsync(buildModuleUrl("BetterSkyAssets/GeospatialAssets/stbn.bin"))
             this.stbnTexture = new Texture3D({
                 context: this._scene.context,
                 width: STBN_TEXTURE_WIDTH,
@@ -1213,7 +1213,7 @@ export default class GeospatialPipelinePass {
             console.error(error)
         })
         new PrecomputedTexturesLoader().load(
-            buildModuleUrl("EffectPipelineAssets/GeospatialAssets/"),
+            buildModuleUrl("BetterSkyAssets/GeospatialAssets/"),
             (result) => {
                 this._u_scattering_texture = new Texture3D({
                     context: this._scene.context,

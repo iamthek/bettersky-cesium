@@ -1,8 +1,8 @@
-# BetterSky4Cesium
+# BetterSky for Cesium
 
 [English](README.md) | **简体中文**
 
-BetterSky4Cesium 是 CesiumJS 视觉效果插件，通过 **EffectPipeline** 为已有三维地球场景增加体积云、大气、云影、体积光和画面增强。
+BetterSky for Cesium 是 CesiumJS 视觉效果插件，通过 **BetterSky** 为已有三维地球场景增加体积云、大气、云影、体积光和画面增强。
 
 ## 项目亮点
 
@@ -13,41 +13,41 @@ BetterSky4Cesium 是 CesiumJS 视觉效果插件，通过 **EffectPipeline** 为
 
 ## 使用
 
-> npm SDK 打包与发布验收尚未完成。下方包名和版本暂定，安装命令不代表 `0.1.0` 已可使用。
+> npm SDK 打包与发布验收尚未完成。下方版本暂定，安装命令不代表 `0.1.0` 已可使用。
 
-使用 Cesium **1.142.0** 和浏览器构建工具，同页保留一个活动的 EffectPipeline/Viewer。浏览器/GPU 需支持 WebGL 2、三维/数组纹理、所需浮点渲染目标，并具有原生 `Float16Array` 和 `structuredClone`。
+使用 Cesium **1.142.0** 和浏览器构建工具，同页保留一个活动的 BetterSky/Viewer。浏览器/GPU 需支持 WebGL 2、三维/数组纹理、所需浮点渲染目标，并具有原生 `Float16Array` 和 `structuredClone`。
 
 ### 安装
 
 正式发布后，在使用项目目录中任选 npm 或 pnpm：
 
 ```bash
-npm install --save-exact better-sky4cesium@0.1.0 cesium@1.142.0
+npm install --save-exact bettersky-cesium@0.1.0 cesium@1.142.0
 ```
 
 ```bash
-pnpm add -E better-sky4cesium@0.1.0 cesium@1.142.0
+pnpm add -E bettersky-cesium@0.1.0 cesium@1.142.0
 ```
 
 两种命令安装同一个包。Cesium 与应用共享，three 作为运行依赖自动安装。
 
 ### 复制资源
 
-插件直接使用宿主的 **`CESIUM_BASE_URL`**。将 `node_modules/better-sky4cesium/dist/assets/` 的全部内容复制到 **Cesium 资源根目录下的 `EffectPipelineAssets/`**。以 Vite 项目配置 `CESIUM_BASE_URL='/cesium/'` 为例：
+插件直接使用宿主的 **`CESIUM_BASE_URL`**。将 `node_modules/bettersky-cesium/dist/assets/` 的全部内容复制到 **Cesium 资源根目录下的 `BetterSkyAssets/`**。以 Vite 项目配置 `CESIUM_BASE_URL='/cesium/'` 为例：
 
 | 来源 | 目标 |
 | --- | --- |
-| `node_modules/better-sky4cesium/dist/assets/` 内的全部内容 | `public/cesium/EffectPipelineAssets/` |
-| SDK 的 `LICENSE` 和 `THIRD_PARTY_NOTICES.md` | `public/cesium/EffectPipelineAssets/` |
+| `node_modules/bettersky-cesium/dist/assets/` 内的全部内容 | `public/cesium/BetterSkyAssets/` |
+| SDK 的 `LICENSE` 和 `THIRD_PARTY_NOTICES.md` | `public/cesium/BetterSkyAssets/` |
 | Cesium 的 `Workers/`、`Assets/`、`ThirdParty/`、`Widgets/` | 沿用项目在 `public/cesium/` 下已有的副本 |
 
 例如，在使用项目目录中通过 Node.js 22 或更高版本执行：
 
 ```bash
-node --input-type=module -e "import { cpSync } from 'node:fs'; cpSync('node_modules/better-sky4cesium/dist/assets', 'public/cesium/EffectPipelineAssets', { recursive: true }); for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync('node_modules/better-sky4cesium/' + file, 'public/cesium/EffectPipelineAssets/' + file);"
+node --input-type=module -e "import { cpSync } from 'node:fs'; cpSync('node_modules/bettersky-cesium/dist/assets', 'public/cesium/BetterSkyAssets', { recursive: true }); for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync('node_modules/bettersky-cesium/' + file, 'public/cesium/BetterSkyAssets/' + file);"
 ```
 
-`snowCoverMask.png` 和 `GeospatialAssets/` 应直接位于 `EffectPipelineAssets/` 内，不要多嵌套一层 `assets/`。npm 和 pnpm 均使用上述路径，无需访问 `.pnpm/`。CI 构建前也应复制资源；升级时只替换 `EffectPipelineAssets/` 并刷新缓存，确保 JavaScript 和资源属于同一版本。
+`snowCoverMask.png` 和 `GeospatialAssets/` 应直接位于 `BetterSkyAssets/` 内，不要多嵌套一层 `assets/`。npm 和 pnpm 均使用上述路径，无需访问 `.pnpm/`。CI 构建前也应复制资源；升级时只替换 `BetterSkyAssets/` 并刷新缓存，确保 JavaScript 和资源属于同一版本。
 
 沿用项目已有的 Cesium 资源配置。尚未配置时，以下 Vite 示例与上述复制路径对应：
 
@@ -61,7 +61,7 @@ export default defineConfig({
 })
 ```
 
-部署到 `/app/` 时，同步设置应用基础路径及 `CESIUM_BASE_URL='/app/cesium/'`，插件资源自动从 `/app/cesium/EffectPipelineAssets/` 加载。若项目已将 Cesium 资源部署在其他位置，把 `EffectPipelineAssets/` 放到其 `Workers/` 目录旁边即可，无需额外的插件资源 URL。
+部署到 `/app/` 时，同步设置应用基础路径及 `CESIUM_BASE_URL='/app/cesium/'`，插件资源自动从 `/app/cesium/BetterSkyAssets/` 加载。若项目已将 Cesium 资源部署在其他位置，把 `BetterSkyAssets/` 放到其 `Workers/` 目录旁边即可，无需额外的插件资源 URL。
 
 ### 接入 Viewer
 
@@ -69,9 +69,9 @@ export default defineConfig({
 
 ```js
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { EffectPipeline } from 'better-sky4cesium'
+import { BetterSky } from 'bettersky-cesium'
 
-const effects = new EffectPipeline(viewer, {
+const effects = new BetterSky(viewer, {
   time: undefined, // 保留业务当前的时钟时间。
 })
 
@@ -87,7 +87,7 @@ effects.dispose()
 viewer.destroy()
 ```
 
-效果未显示时，先检查 `CESIUM_BASE_URL + 'EffectPipelineAssets/'` 下的资源请求、浏览器控制台及 WebGL 能力；请求应返回真实文件，不能是 HTML 回退页。
+效果未显示时，先检查 `CESIUM_BASE_URL + 'BetterSkyAssets/'` 下的资源请求、浏览器控制台及 WebGL 能力；请求应返回真实文件，不能是 HTML 回退页。
 
 ## 许可
 
