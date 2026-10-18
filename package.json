@@ -1,6 +1,7 @@
 {
   "name": "better-sky4cesium",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
     "dev": "vite",

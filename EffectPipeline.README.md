@@ -4,6 +4,8 @@
 
 This guide covers running the demo, adding EffectPipeline to an existing Cesium scene, configuring effects and managing its lifecycle.
 
+For the planned npm/pnpm package, see [SDK Quick Start](START.md). This CesiumJS plugin uses the host's existing `CESIUM_BASE_URL`; copy the bundled assets from `node_modules` into `EffectPipelineAssets/` under that Cesium asset root. SDK packaging and these examples are pending release verification. This guide describes the current source/demo workflow; its repository-copy instructions do not describe the future npm package contents.
+
 ## Requirements
 
 | Dependency | Repository configuration |
@@ -50,7 +52,7 @@ pnpm preview  # Preview dist/; use the printed URL
 
 The demo adjusts `viewer.resolutionScale` to cap large drawing buffers at approximately four million pixels. Applications using the SDK manage their own overall render resolution.
 
-## Add the SDK to another project
+## Add the SDK source to another project
 
 The repository currently provides the SDK as source modules. Copy `EffectPipeline.js`, the complete `Library/` directory and `static/EffectPipelineAssets/`, preserving relative paths.
 

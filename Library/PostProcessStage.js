@@ -1,3 +1,9 @@
+/*!
+ * Contains modified CesiumJS PostProcessStage code (Apache-2.0).
+ * Copyright 2011-2026 CesiumJS Contributors.
+ * Local changes: RenderPass, custom vertex shaders, uniform buffers and time slicing.
+ * See THIRD_PARTY_NOTICES.md for the original attribution and license.
+ */
 import { 
   BoundingRectangle,
   Check,

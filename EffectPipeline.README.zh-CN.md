@@ -4,6 +4,8 @@
 
 本文介绍如何运行示例、接入已有 Cesium 场景、配置效果及管理生命周期。
 
+计划中的 npm/pnpm 包接入见 [SDK 快速开始](START.zh-CN.md)。SDK 作为 CesiumJS 插件，直接使用宿主已有的 `CESIUM_BASE_URL`，将 `node_modules` 中的随包资源复制到该 Cesium 资源根目录下的 `EffectPipelineAssets/` 即可。SDK 打包与这些示例尚待发布验收。本文仍描述当前源码/示例流程，其中复制仓库源码的步骤不代表未来 npm 包的内容。
+
 ## 环境要求
 
 | 依赖 | 仓库配置 |
@@ -50,7 +52,7 @@ pnpm preview  # 预览 dist/，以终端输出地址为准
 
 示例会调整 `viewer.resolutionScale`，将大窗口的绘制缓冲限制在约 400 万像素。自行接入 SDK 的应用需要管理自己的整体渲染分辨率。
 
-## 接入其他项目
+## 以源码接入其他项目
 
 当前仓库以源码模块形式提供 SDK。复制 `EffectPipeline.js`、完整 `Library/` 目录及 `static/EffectPipelineAssets/`，保留相对路径。
 

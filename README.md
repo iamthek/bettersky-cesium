@@ -2,9 +2,11 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**EffectPipeline** is the sky rendering pipeline in BetterSky4Cesium, a visual effects SDK for Cesium. It brings layered volumetric clouds, atmospheric scattering, cloud shadows, volumetric light and image enhancement into one configurable pipeline for 3D globe scenes.
+**EffectPipeline** is the sky rendering pipeline in BetterSky4Cesium, a visual effects SDK used as a CesiumJS plugin. It brings layered volumetric clouds, atmospheric scattering, cloud shadows, volumetric light and image enhancement into one configurable pipeline for 3D globe scenes. Plugin assets use the host's `CESIUM_BASE_URL`, under `EffectPipelineAssets/`.
 
 [Usage guide](EffectPipeline.README.md) · [Demo source](demo-official.js)
+
+**Planned npm SDK:** [Quick Start for npm and pnpm](START.md). Packaging, obfuscation and bundled-asset deployment are not implemented or release-validated yet; the [SDK publishing plan](SDK_PUBLISH_PLAN.md) defines the intended delivery. The current source/demo workflow remains in the usage guide.
 
 ## Highlights
 
@@ -80,4 +82,6 @@ SSR and SSS are outside the supported EffectPipeline feature set. For installati
 
 ## License
 
-[MIT](LICENSE).
+[Proprietary trial license](LICENSE). All individuals and organizations may currently try the SDK at no charge, including in commercial projects and production deployments, without individual approval. The SDK and applications using it may remain closed source. There is no fixed charging date. The licensor may end the free trial for specified versions or uses with at least 30 calendar days' published notice; continued affected use then requires separate authorization, which may be paid. No fee is imposed retroactively on lawful trial use, and existing separate authorizations retain their agreed terms.
+
+Third-party materials retain their original licenses; see [third-party code and license terms](THIRD_PARTY_NOTICES.md).

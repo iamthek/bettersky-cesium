@@ -1,5 +1,8 @@
 
+// Copyright 2019 Google LLC. Original portions are licensed under Apache-2.0.
 // Derived from https://gist.github.com/mikhailov-work/0d177465a8151eb6ede1768d51d476c7
+// Local changes: function naming, clamping, coefficient formatting and expressions.
+// See THIRD_PARTY_NOTICES.md for the original attribution and license.
 
 const vec4 kRedVec4 = vec4(0.13572138, 4.6153926, -42.66032258, 132.13108234);
 const vec4 kGreenVec4 = vec4(0.09140261, 2.19418839, 4.84296658, -14.18503333);

@@ -2,9 +2,11 @@
 
 [English](README.md) | **简体中文**
 
-**EffectPipeline** 是 BetterSky4Cesium SDK 的天空渲染管线，为 Cesium 三维地球场景提供多层体积云、大气散射、云影、体积光和画面增强，并通过统一参数控制这些效果。
+**EffectPipeline** 是 BetterSky4Cesium SDK 的天空渲染管线，作为 CesiumJS 插件，为三维地球场景提供多层体积云、大气散射、云影、体积光和画面增强，并通过统一参数控制这些效果。插件资源直接使用宿主的 `CESIUM_BASE_URL`，放在其下的 `EffectPipelineAssets/` 目录。
 
 [使用说明](EffectPipeline.README.zh-CN.md) · [示例源码](demo-official.js)
+
+**npm SDK 接入规划：**[npm/pnpm 快速开始](START.zh-CN.md)。打包混淆与随包资源部署尚未实施或完成发布验收，目标交付方式见 [SDK 发布方案](SDK_PUBLISH_PLAN.md)；当前源码和示例的使用流程仍见使用说明。
 
 ## 核心亮点
 
@@ -80,4 +82,6 @@ SSR 和 SSS 不属于 EffectPipeline 当前支持的功能。安装、静态资�
 
 ## 许可
 
-[MIT](LICENSE)。
+[专有试用许可](LICENSE)。目前所有个人和组织均可零费用试用，包括商业项目和生产上线，无须逐一申请；SDK 和接入项目均可闭源。暂未设定收费日期。权利人可提前至少 30 个日历日公布通知，结束指定版本或用途的免费试用；此后继续相应用途须取得单独授权，授权可以收费。此前合法试用不追溯收费，已有单独授权继续按原约定执行。
+
+第三方材料继续适用原许可，见[第三方代码及许可条件](THIRD_PARTY_NOTICES.md)。

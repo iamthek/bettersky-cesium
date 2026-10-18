@@ -1,21 +1,127 @@
-MIT License
+BetterSky4Cesium Proprietary Trial License
+Version 1.0, 2026-10-18
 
-Copyright (c) 2026 sean-k
+Copyright (c) 2026 sean-kong. All rights reserved, except as expressly granted below.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. Scope and third-party materials
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This license applies only to the copyright interests in BetterSky4Cesium that
+sean-k (the "Licensor") owns or is authorized to license (the "SDK"). Third-party
+code, dependencies, shaders, textures, data and other materials are excluded
+from these proprietary restrictions and remain subject to their own licenses.
+See THIRD_PARTY_NOTICES.md and the notices supplied with those materials.
+Nothing here restricts rights granted directly by a third-party rights holder
+or grants rights in materials the Licensor is not authorized to license.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+By exercising rights granted by this license, you accept its terms. If you do
+not accept them, do not use or distribute the SDK under this license.
+
+2. Zero-fee trial for all users
+
+Subject to this license, the Licensor grants you a non-exclusive, worldwide,
+zero-fee license to install, run, reproduce and privately modify the SDK during
+the Trial Period defined below. This trial is available to all individuals and
+organizations, including businesses, educational institutions and public bodies.
+It permits learning, research, development, evaluation, commercial projects and
+production deployment, subject to the distribution limits in section 4.
+
+No individual application, prior written commercial authorization or payment
+is required for use within this trial grant. This is a temporary trial grant,
+not a promise of permanently free use or an open-source license.
+
+3. Trial Period and prospective transition to paid licensing
+
+The Trial Period begins when you first use a copy supplied under this license.
+There is currently no fixed end date and no published commitment to a future
+price or charging date. The Licensor reserves the right to end the zero-fee
+trial for specified SDK versions or uses and offer continued use under a
+separate written license, which may require an authorization fee.
+
+To end the trial, the Licensor must publish a dated transition notice in the
+official project or package documentation or release channel through which
+the SDK is distributed. That notice must identify the affected versions or
+uses, the date the trial ends, and how to obtain continued-use authorization.
+The trial end date must be at least 30 calendar days after publication. Where
+you have supplied a contact address for licensing notices, the Licensor will
+also send the notice there. You should monitor the official licensing notices
+while relying on this trial grant.
+
+Until the notified end date, the existing trial remains free within its scope.
+After that date, continued affected use or distribution requires a separate
+applicable authorization; otherwise you must stop that affected use and
+distribution. You are not required to purchase a license, and a notice does
+not automatically create a payment obligation. No fee is charged retroactively
+for use lawfully made during the Trial Period. A price announcement without
+the notice and transition period required here does not end this trial.
+
+4. Closed-source integration and distribution
+
+Neither the SDK nor an application using it must be released as open source
+under this license. You may keep your application code and permitted private
+SDK modifications confidential.
+
+During the Trial Period, you may distribute the SDK's runtime build and required
+assets solely as integrated parts of your application, including commercial
+applications, and permit recipients to run those parts within this trial grant.
+Include this license and the applicable third-party notices with such copies,
+and inform recipients of the temporary trial and prospective licensing terms.
+After the Trial Period, distribution and recipients' continued affected use
+must be covered by an applicable authorization.
+This does not permit distributing SDK source, publishing an SDK package or fork,
+or selling, sublicensing or offering the SDK as a standalone development product
+without express written permission. Third-party license rights remain unaffected.
+
+5. Separate authorizations, renewals and future releases
+
+The Licensor may issue separate authorizations at no charge and may charge
+for new authorizations, renewals, future releases, updates or support. Such an
+authorization should identify its recipient, covered SDK versions, application
+or project scope, deployment and distribution rights, duration, and fee, which
+may be zero. Its express terms control over this trial license where they differ.
+A free authorization does not promise free renewal, upgrades, support or access
+to future releases unless its written terms expressly provide otherwise.
+
+Apart from the prospective end of the temporary trial under section 3, pricing
+and license changes do not alter an existing separate authorization's granted
+scope, duration or agreed fees. Existing separate authorizations
+continue according to their own terms; renewal or use outside their scope
+requires a new applicable authorization. Changing this license does not withdraw
+rights in copies previously lawfully received under the MIT License or another
+license, or require payment for use that remains authorized under those terms.
+
+6. Notices, ownership and reserved rights
+
+You must retain applicable copyright, license and third-party attribution
+notices in SDK copies and distributions. No SDK ownership is transferred.
+Except as expressly permitted above, in a separate written authorization,
+by a third-party license, or by applicable law, no rights to copy, modify,
+distribute, sublicense or otherwise exploit the SDK are granted. No rights
+to the Licensor's trademarks are granted beyond identifying the SDK's origin.
+
+7. Termination
+
+The rights granted by this license terminate if you materially breach its
+conditions and do not remedy that breach within 30 days after written notice.
+Upon termination, you must stop the affected unauthorized SDK use and
+distribution. Separate written authorizations govern their own termination.
+Termination here does not terminate rights granted directly by third parties.
+The cure period in this section does not extend a Trial Period ended under
+section 3.
+
+8. Disclaimer of warranty and limitation of liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SDK IS PROVIDED "AS IS",
+WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SDK OR ITS USE OR OTHER DEALINGS,
+EXCEPT TO THE EXTENT SUCH LIABILITY CANNOT LAWFULLY BE EXCLUDED.
+
+9. Authorization requests
+
+Licensing notices and requests for separate authorization are handled through
+the project owner's published project or package contact channel. The rights
+expressly granted by this trial license require no individual approval. Outside
+this trial or another applicable license, an unanswered request does not grant
+permission.
