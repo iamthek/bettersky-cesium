@@ -94,3 +94,12 @@ viewer.destroy()
 [专有试用许可](LICENSE)。目前所有个人和组织均可零费用试用，包括商业项目和生产上线，无须逐一申请。SDK 和接入项目均可闭源。暂未设定收费日期；权利人可提前至少 30 个日历日公布通知，结束指定版本或用途的免费试用，此后继续相应用途须另获授权，授权可以收费。此前合法试用不追溯收费，已有单独授权继续按原约定执行。
 
 允许的应用交付需附带许可和[第三方声明](THIRD_PARTY_NOTICES.md)，并告知接收者试用与未来授权条件。第三方材料继续适用各自原条款，分发限制以完整许可正文为准。
+
+## 赞助支持
+
+如果这个项目帮到了你，可以请我喝杯咖啡🙏☕ 牛马打工不易，你的支持是项目持续维护和改进的动力。
+
+<p align="center">
+  <img src="https://iamthek.github.io/buy_me_a_coffee_alipay.jpg" alt="支付宝" width="200" height="300">
+  <img src="https://iamthek.github.io/buy_me_a_coffee_wechat.jpg" alt="微信支付" width="200" height="300">
+</p>
