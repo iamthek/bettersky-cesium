@@ -27,7 +27,14 @@ const CONTROL_DEFAULTS = {
   aerialPerspectiveStrength: DEFAULT_OPTIONS.aerialPerspectiveStrength,
   darkParamY: DEFAULT_OPTIONS.darkParamY,
   bloomIntensity: DEFAULT_OPTIONS.bloomIntensity,
-  sunShaftsIntensity: DEFAULT_OPTIONS.cloud.hazeDensityScale / 0.0001,
+  volumetricLightMode: DEFAULT_OPTIONS.volumetricLight.mode,
+  volumetricDensity: DEFAULT_OPTIONS.volumetricLight.density,
+  volumetricIntensity: DEFAULT_OPTIONS.volumetricLight.intensity,
+  volumetricLayerDepth: DEFAULT_OPTIONS.volumetricLight.layerDepth,
+  volumetricMaxDistance: DEFAULT_OPTIONS.volumetricLight.maxDistance,
+  volumetricAnisotropy: DEFAULT_OPTIONS.volumetricLight.anisotropy,
+  volumetricQuality: DEFAULT_OPTIONS.volumetricLight.quality,
+  sunShaftsIntensity: Number((DEFAULT_OPTIONS.cloud.hazeDensityScale / 0.0001).toFixed(4)),
   altitude0: DEFAULT_OPTIONS.cloud.altitudes[0],
   altitude1: DEFAULT_OPTIONS.cloud.altitudes[1],
   altitude2: DEFAULT_OPTIONS.cloud.altitudes[2],
@@ -51,6 +58,7 @@ const CONTROL_DEFAULTS = {
   skyIrradianceScale: DEFAULT_OPTIONS.cloud.skyIrradianceScale,
   groundIrradianceScale: DEFAULT_OPTIONS.cloud.groundIrradianceScale,
   hazeCloudAttached: DEFAULT_OPTIONS.cloud.hazeCloudAttached,
+  hazeGroundDensityScale: DEFAULT_OPTIONS.cloud.hazeGroundDensityScale,
   hazeViewDistance: DEFAULT_OPTIONS.cloud.hazeViewDistance,
   hazeVolumeLength: DEFAULT_OPTIONS.cloud.hazeVolumeLength,
   hazeDirectLightScale: DEFAULT_OPTIONS.cloud.hazeDirectLightScale,
@@ -101,6 +109,15 @@ function buildPipelineOptions(values) {
     logarithmicDepthBuffer: values.logarithmicDepthBuffer,
     gamma: values.gamma,
     bloomIntensity: values.bloomIntensity,
+    volumetricLight: {
+      mode: values.volumetricLightMode,
+      density: values.volumetricDensity,
+      intensity: values.volumetricIntensity,
+      layerDepth: values.volumetricLayerDepth,
+      maxDistance: values.volumetricMaxDistance,
+      anisotropy: values.volumetricAnisotropy,
+      quality: values.volumetricQuality,
+    },
     cloud: {
       layerTypes: values.layerTypesEnabled ? [values.layerType0, values.layerType1, values.layerType2] : null,
       lodRange: values.lodEnabled ? [values.lodNear, values.lodFar] : null,
@@ -113,6 +130,7 @@ function buildPipelineOptions(values) {
       groundIrradianceScale: values.groundIrradianceScale,
       hazeDensityScale: values.sunShaftsIntensity * 0.0001,
       hazeCloudAttached: values.hazeCloudAttached,
+      hazeGroundDensityScale: values.hazeGroundDensityScale,
       hazeViewDistance: values.hazeViewDistance,
       hazeVolumeLength: values.hazeVolumeLength,
       hazeDirectLightScale: values.hazeDirectLightScale,
@@ -406,6 +424,9 @@ function createEffectControlPanel(viewer, fx) {
     apply(value);
   };
   const updateCloud = (key, value) => fx.update({ cloud: { [key]: value } });
+  const updateVolumetricLight = (key, value) => fx.update({
+    volumetricLight: { mode: state.volumetricLightMode, [key]: value },
+  });
   const layerVector = (prefix) => [0, 1, 2, 3].map((index) => state[`${prefix}${index}`]);
   const updateHbao = () => fx.update({ hbao: buildPipelineOptions(state).hbao });
   const refreshCloudTops = () => {
@@ -424,7 +445,18 @@ function createEffectControlPanel(viewer, fx) {
     for (let index = 0; index < 3; index++) setDependency(`layerType${index}`, state.layerTypesEnabled);
     for (const key of ["lodNear", "lodFar"]) setDependency(key, state.lodEnabled);
     for (const key of ["altitudeFadeStart", "altitudeFadeEnd"]) setDependency(key, state.altitudeFadeEnabled);
-    for (const key of ["hazeViewDistance", "hazeVolumeLength"]) setDependency(key, state.hazeCloudAttached);
+    const volumetricEnabled = state.volumetricLightMode === "volumetric";
+    const legacyEnabled = state.volumetricLightMode === "legacy";
+    for (const key of ["volumetricDensity", "volumetricIntensity", "volumetricLayerDepth", "volumetricMaxDistance", "volumetricAnisotropy", "volumetricQuality"]) {
+      setDependency(key, volumetricEnabled);
+      controls.get(key).wrapper.hidden = legacyEnabled;
+    }
+    for (const key of ["sunShaftsIntensity", "hazeCloudAttached", "hazeGroundDensityScale", "hazeViewDistance", "hazeVolumeLength", "hazeDirectLightScale", "hazeHeightFalloff", "hazeAnisotropy", "hazeQuality", "hazeSunR", "hazeSunG", "hazeSunB", "maxShadowLengthRayDistance"]) {
+      const requiresLocalLayer = ["hazeGroundDensityScale", "hazeViewDistance", "hazeVolumeLength"].includes(key);
+      setDependency(key, legacyEnabled && (!requiresLocalLayer || state.hazeCloudAttached));
+      controls.get(key).wrapper.hidden = volumetricEnabled;
+    }
+    if (activeHelp?.wrapper.hidden) closeHelp();
     for (const key of ["hbaoIntensity", "hbaoMaxRadius", "hbaoBias", "hbaoFrustumLength", "hbaoBlackPoint", "hbaoWhitePoint", "hbaoGamma"]) {
       setDependency(key, state.hbaoEnabled);
     }
@@ -517,23 +549,52 @@ function createEffectControlPanel(viewer, fx) {
     "API：cloud.groundIrradianceScale。地面反射辐照度对云体的补光倍率。\n单位：无量纲；调大云下部更亮，调小补光更弱，0 移除此补光。不等于地表光照增益 irradianceScale。\n受大气和地面反射估计影响，过高会冲淡暗部；不增加采样预算，调节会清云历史。");
 
   const godray = createSection("Godray", true);
+  addSelect(godray, "volumetricLightMode", "体积光模式", [
+    ["volumetric", "独立体积光 · volumetric"], ["legacy", "旧 haze · legacy"], ["off", "关闭 · off"],
+  ], commitValue("volumetricLightMode", () => {
+    fx.update({ volumetricLight: buildPipelineOptions(state).volumetricLight });
+    refreshDependencies();
+  }),
+  "API：volumetricLight.mode。volumetric 使用独立低分辨率体积光及其历史，legacy 使用现有 cloud.haze* 算法，off 关闭两条额外体积光路径。\n两条路径互斥；切换保留各自参数并重新积累历史。关闭时两组数值禁用，仍可切换模式。仅提交旧 cloud.haze* 且未显式传新 mode 的 API 调用自动选择 legacy。");
+  addRange(godray, "volumetricDensity", "体积光介质密度", 0, 0.0001, 0.000001,
+    commitValue("volumetricDensity", (value) => updateVolumetricLight("density", value)),
+    "API：volumetricLight.density。独立体积光介质的消光密度。\n单位：米的倒数，非负有限值；调大同时增加散射和消光，调小更透明，0 不产生此介质。\n仅 volumetric 模式生效；不改变云体密度，改变会清除独立体积光历史。");
+  addRange(godray, "volumetricIntensity", "体积光散射亮度", 0, 10, 0.1,
+    commitValue("volumetricIntensity", (value) => updateVolumetricLight("intensity", value)),
+    "API：volumetricLight.intensity。散射亮度的非负倍率。\n单位：无量纲；调大增强散射亮部，调小减弱，0 移除散射亮度但保留介质消光。\n仅 volumetric 模式生效；不改变介质密度、云体照明或全局曝光，改变会清除独立体积光历史。");
+  addRange(godray, "volumetricLayerDepth", "云底体积层厚度", 1, 20000, 1,
+    commitValue("volumetricLayerDepth", (value) => updateVolumetricLight("layerDepth", value)),
+    "API：volumetricLight.layerDepth。参与投影的云底向下延伸的体积层厚度。\n单位：正有限米数；调大增加垂直介质范围，调小使光束层更薄，不移动云层本身。\n仅 volumetric 模式生效；实际视线还受场景深度和云前缘约束，改变会清除独立体积光历史。");
+  addRange(godray, "volumetricMaxDistance", "体积光最大积分距离", 1, 100000, 1,
+    commitValue("volumetricMaxDistance", (value) => updateVolumetricLight("maxDistance", value)),
+    "API：volumetricLight.maxDistance。沿相机视线积分体积光的最大距离。\n单位：正有限米数；调大允许更远介质参与，调小更早停止，还受场景深度限制。\n仅 volumetric 模式生效；同时决定聚焦云影接收范围，不改变地表大范围云影或主云追踪距离，改变会清除独立体积光历史。");
+  addRange(godray, "volumetricAnisotropy", "体积光散射方向性", 0, 0.9, 0.01,
+    commitValue("volumetricAnisotropy", (value) => updateVolumetricLight("anisotropy", value)),
+    "API：volumetricLight.anisotropy。散射相位的前向偏好 g。\n单位：无量纲，0–0.9；0 为各向同性，调大更集中于朝太阳的观察方向。\n仅 volumetric 模式生效；需结合太阳夹角、密度和亮度检查，改变会清除独立体积光历史。");
+  addSelect(godray, "volumetricQuality", "体积光质量", [
+    ["low", "低 · low"], ["balanced", "平衡 · balanced"], ["high", "高 · high"],
+  ], commitValue("volumetricQuality", (value) => updateVolumetricLight("quality", value)),
+  "API：volumetricLight.quality。分辨率比例 / 积分步数 / 可见性图尺寸：low = 0.25 / 24 / 512；balanced = 0.5 / 48 / 1024；high = 0.5 / 64 / 2048。\n仅 volumetric 模式生效；更高预算增加 GPU 工作，不保证在任意场景达到固定耗时。切换会重建对应资源并清除独立体积光历史。");
   addRange(godray, "sunShaftsIntensity", "穿云光介质强度", 0, 1, 0.01,
     commitValue("sunShaftsIntensity", (value) => updateCloud("hazeDensityScale", value * 0.0001)),
-    "API：cloud.hazeDensityScale = sunShaftsIntensity × 0.0001。控制 haze 介质密度，不是云密度或曝光。\n单位：面板为缩放量；示例 0.12 对应 0.000012。调大散射和消光都更强，调小更透明，0 关闭额外穿云光。\n需要有效太阳、云影、介质和视线交会；过大易形成灰幕。覆盖率及高度淡出会联动，改变会清历史。");
+    `API：cloud.hazeDensityScale = sunShaftsIntensity × 0.0001。控制 haze 介质密度，不是云密度或曝光。\n单位：面板为缩放量；项目默认 ${CONTROL_DEFAULTS.sunShaftsIntensity} 对应 ${DEFAULT_OPTIONS.cloud.hazeDensityScale}。调大散射和消光都更强，调小更透明，0 关闭额外穿云光。\n需要有效太阳、云影、介质和视线交会；过大易形成灰幕。覆盖率及高度淡出会联动，改变会清历史。`);
   addToggle(godray, "hazeCloudAttached", "世界固定局部薄层", commitValue("hazeCloudAttached", (value) => {
     updateCloud("hazeCloudAttached", value);
     refreshDependencies();
   }), () =>
-    `API：cloud.hazeCloudAttached，库默认 false，示例开启作为调试起点。\n单位：布尔值；开启时只在近地/参与投影云层的云底附近有限、世界固定薄层积分；关闭回到传统行星表面以上的指数高度雾。\n当前${state.hazeCloudAttached ? `开启：${state.hazeViewDistance} m 是观察上限，累计候选散射区间上限为 ${state.hazeVolumeLength} m，空路不铺雾也不计入体积长度` : "关闭：HAZE 与 SHADOW_LENGTH 都受旧大气阴影长度限制，新两距离暂不生效"}。\n不是随真实山地高度的雾，也未实现太阳方向的地形阴影；仍受场景深度和云前缘遮挡。切换清历史，光束不保证在任意镜头出现。`);
+    `API：cloud.hazeCloudAttached，项目默认 ${DEFAULT_OPTIONS.cloud.hazeCloudAttached}。\n单位：布尔值；开启时在参与投影云层的云底附近有限、世界固定薄层积分，近地层由 cloud.hazeGroundDensityScale 独立控制；关闭回到传统行星表面以上的指数高度雾。\n当前${state.hazeCloudAttached ? `开启：${state.hazeViewDistance} m 是观察上限，累计候选散射区间上限为 ${state.hazeVolumeLength} m，近地薄雾强度为 ${state.hazeGroundDensityScale}，空路不铺雾也不计入体积长度` : "关闭：HAZE 与 SHADOW_LENGTH 都受旧大气阴影长度限制，近地强度与新两距离暂不生效"}。\n不是随真实山地高度的雾，也未实现太阳方向的地形阴影；仍受场景深度和云前缘遮挡。切换清历史，光束不保证在任意镜头出现。`);
+  addRange(godray, "hazeGroundDensityScale", "近地薄雾强度", 0, 1, 0.05,
+    commitValue("hazeGroundDensityScale", (value) => updateCloud("hazeGroundDensityScale", value)), () =>
+    `API：cloud.hazeGroundDensityScale，项目默认 ${DEFAULT_OPTIONS.cloud.hazeGroundDensityScale}。\n单位：0–1 密度倍率；仅世界固定局部薄层模式生效，当前${state.hazeCloudAttached ? "生效" : "不生效，值保留"}。0 关闭近地雾，仅保留云底薄层；1 恢复原有近地层。调大增加近地散射和消光，不改变云底薄层密度。\n不影响传统指数高度雾，也不随真实山地抬升；修改清历史。`);
   addRange(godray, "hazeDirectLightScale", "haze 日光直射增益", 0, 8, 0.1,
     commitValue("hazeDirectLightScale", (value) => updateCloud("hazeDirectLightScale", value)),
-    "API：cloud.hazeDirectLightScale，库默认 1；示例 2 只是待验证的调试起点。\n单位：非负无量纲倍率；调大只增强 haze 的太阳直射散射，调小降低直射亮部，0 移除该项。\n不增加消光、天空补光、云体照明或全局曝光，不制造不存在的云影；过大易在朝太阳方向裁白，不增加采样预算但调节清历史。");
+    `API：cloud.hazeDirectLightScale，项目默认 ${DEFAULT_OPTIONS.cloud.hazeDirectLightScale}。\n单位：非负无量纲倍率；调大只增强 haze 的太阳直射散射，调小降低直射亮部，0 移除该项。\n不增加消光、天空补光、云体照明或全局曝光，不制造不存在的云影；过大易在朝太阳方向裁白，不增加采样预算但调节清历史。`);
   addRange(godray, "hazeViewDistance", "局部光束最大观察距离", 1, 100000, 1,
     commitValue("hazeViewDistance", (value) => updateCloud("hazeViewDistance", value)), () =>
-    `API：cloud.hazeViewDistance，库默认 20000。\n单位：正有限米数；仅局部模式使用，当前${state.hazeCloudAttached ? "生效" : "不生效，值保留"}。调大可看到更远的候选薄层，调小更早退出，观察末端平滑淡出。\n20 km 不是从相机起连续铺雾 20 km；空空间不增加介质。实际贡献仍受场景深度、云前缘及体积总长度限制，远处可能更难稳定；改变清历史。`);
+    `API：cloud.hazeViewDistance，项目默认 ${DEFAULT_OPTIONS.cloud.hazeViewDistance}。\n单位：正有限米数；仅局部模式使用，当前${state.hazeCloudAttached ? "生效" : "不生效，值保留"}。调大可看到更远的候选薄层，调小更早退出，观察末端平滑淡出。\n观察距离不表示从相机起连续铺雾；空空间不增加介质。实际贡献仍受场景深度、云前缘及体积总长度限制，远处可能更难稳定；改变清历史。`);
   addRange(godray, "hazeVolumeLength", "累计局部散射区间上限", 1, 20000, 1,
     commitValue("hazeVolumeLength", (value) => updateCloud("hazeVolumeLength", value)), () =>
-    `API：cloud.hazeVolumeLength，库默认 3000。\n单位：正有限米数；仅局部模式使用，当前${state.hazeCloudAttached ? "生效" : "不生效，值保留"}。按近到远累积候选散射区间，调大可积分更多介质路程，调小减少积分长度；空路不算。\n3 km 不是离相机 3 km 硬裁剪，也不是主云追踪距离；实际长度同时受观察上限和深度限制。总样本仍由质量档决定，长区间可能稀释采样、增强灰雾或拖影；改变清历史。`);
+    `API：cloud.hazeVolumeLength，项目默认 ${DEFAULT_OPTIONS.cloud.hazeVolumeLength}。\n单位：正有限米数；仅局部模式使用，当前${state.hazeCloudAttached ? "生效" : "不生效，值保留"}。按近到远累积候选散射区间，调大可积分更多介质路程，调小减少积分长度；空路不算。\n累计区间上限不是距相机的硬裁剪，也不是主云追踪距离；实际长度同时受观察上限和深度限制。总样本仍由质量档决定，长区间可能稀释采样、增强灰雾或拖影；改变清历史。`);
   addRange(godray, "hazeHeightFalloff", "haze 高度/薄层密度尺度", 1, 10000, 1,
     commitValue("hazeHeightFalloff", (value) => updateCloud("hazeHeightFalloff", value)), () =>
     `API：cloud.hazeHeightFalloff。\n单位：正有限米数；当前${state.hazeCloudAttached ? "局部模式：控制世界固定薄层的密度衰减尺度，约两倍尺度外平滑归零，参与投影云层的薄层位于云底下方" : "传统模式：控制渲染行星表面以上的指数衰减，高度到一个尺度时密度为 1/e"}。\n调大垂直分布更厚、远离高度基准处仍有更多介质；调小更集中，不是实际山地上方的雾高。与累计区间上限联动，过大易铺雾，改变清历史。`);
@@ -548,11 +609,11 @@ function createEffectControlPanel(viewer, fx) {
     const key = `hazeSun${channel}`;
     addRange(godray, key, `日光线性 RGB · ${channel}`, 0, 10, 0.01,
       commitValue(key, () => updateCloud("hazeSunColor", [state.hazeSunR, state.hazeSunG, state.hazeSunB])),
-      `API：cloud.hazeSunColor[${component}]。haze 日光的线性 RGB ${channel} 分量，不是 CSS sRGB 字节或取色器值。\n单位：非负线性系数，1 保持该通道，允许大于 1；调大增强该通道，调小减弱，0 移除该通道。示例 RGB 为 [1, 0.78, 0.42]，不做隐式色彩转换。\n三通道共同决定色调，与直射增益/曝光联动；不改变云色或样本预算，过大可能裁白，调节清历史。`, false);
+      `API：cloud.hazeSunColor[${component}]。haze 日光的线性 RGB ${channel} 分量，不是 CSS sRGB 字节或取色器值。\n单位：非负线性系数，1 保持该通道，允许大于 1；调大增强该通道，调小减弱，0 移除该通道。项目默认 RGB 为 [${DEFAULT_OPTIONS.cloud.hazeSunColor.join(", ")}]，不做隐式色彩转换。\n三通道共同决定色调，与直射增益/曝光联动；不改变云色或样本预算，过大可能裁白，调节清历史。`, false);
   }
   addRange(godray, "maxShadowLengthRayDistance", "大气阴影长度上限", 1, 200000, 1,
     commitValue("maxShadowLengthRayDistance", (value) => updateCloud("maxShadowLengthRayDistance", value)), () =>
-    `API：cloud.maxShadowLengthRayDistance，保留旧字段和示例 6000 m。\n单位：正有限米数；当前${state.hazeCloudAttached ? "局部模式：只限制旧 SHADOW_LENGTH 大气阴影长度路径，HAZE 使用新观察距离/累计区间长度" : "传统模式：同时限制 HAZE 和 SHADOW_LENGTH 的光路"}。\n调大允许更长的大气阴影积分，调小更近处截断；不是主云 LOD 距离，也不扩展云影级联。较大范围可能增加工作或降低阴影稳定性，调节清历史。`);
+    `API：cloud.maxShadowLengthRayDistance，保留旧字段，项目默认 ${DEFAULT_OPTIONS.cloud.maxShadowLengthRayDistance} m。\n单位：正有限米数；当前${state.hazeCloudAttached ? "局部模式：只限制旧 SHADOW_LENGTH 大气阴影长度路径，HAZE 使用新观察距离/累计区间长度" : "传统模式：同时限制 HAZE 和 SHADOW_LENGTH 的光路"}。\n调大允许更长的大气阴影积分，调小更近处截断；不是主云 LOD 距离，也不扩展云影级联。较大范围可能增加工作或降低阴影稳定性，调节清历史。`);
 
   const stability = createSection("云距离与稳定性");
   addToggle(stability, "lodEnabled", "启用云距离 LOD", commitValue("lodEnabled", () => {

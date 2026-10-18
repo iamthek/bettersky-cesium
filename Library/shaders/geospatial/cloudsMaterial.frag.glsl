@@ -1006,6 +1006,7 @@ uniform vec3 shapeOffset;
 #ifdef HAZE
     uniform float hazeDensityScale;
     uniform bool hazeCloudAttached;
+    uniform float hazeGroundDensityScale;
     uniform float hazeViewDistance;
     uniform float hazeVolumeLength;
     uniform float hazeDirectLightScale;
@@ -2109,6 +2110,7 @@ const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const floa
         if (!firstActive && !secondActive) return intervals;
         float heightScale = 1.0 / max(hazeExponent, 1e-7);
         for (int region = 0; region < 3; ++region) {
+            if (region == 0 && hazeGroundDensityScale <= 0.0) continue;
             float lower = 0.0;
             float upper = heightScale * 2.0;
             if (region > 0) {
@@ -2186,7 +2188,24 @@ const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const floa
                 attached = exp(-belowBase * hazeExponent) * smoothstep(0.0, heightScale * 0.15, belowBase) *
                     (1.0 - smoothstep(heightScale * 1.5, heightScale * 2.0, belowBase));
             }
-            weight = max(weight, max(ground, attached) * gate);
+            // At low sun angles, cloud gaps project far from the vertical weather footprint.
+            float attachedGate = 0.0;
+            if (attached > 0.0) {
+                vec2 sunHits;
+                if (cloudSphereHits(position, sunDirection, bottomRadius + minLayerHeights[layer], sunHits)) {
+                    float sunDistance = sunHits.x > 0.0 ? sunHits.x : sunHits.y;
+                    vec2 groundHits;
+                    bool planetOcclusion = cloudSphereHits(position, sunDirection, bottomRadius, groundHits) &&
+                        groundHits.x > 0.0 && groundHits.x < sunDistance;
+                    if (sunDistance > 0.0 && !planetOcclusion) {
+                        vec3 lightEntry = position + sunDirection * sunDistance;
+                        vec2 lightUv = getGlobeUv(lightEntry);
+                        vec4 lightWeather = pow(textureLod(localWeatherTexture, lightUv * localWeatherRepeat + localWeatherOffset, 2.0).LOCAL_WEATHER_CHANNELS, weatherExponents);
+                        attachedGate = smoothstep(max(0.0, 1.0 - coverage - 0.6), max(0.1, 1.0 - coverage - 0.1), lightWeather[layer]);
+                    }
+                }
+            }
+            weight = max(weight, max(ground * hazeGroundDensityScale * gate, attached * attachedGate));
         }
         if (weight > 0.0 && insideCloudShell) {
             float cameraDistance = length(position - (vCameraPosition - vEllipsoidCenter));
@@ -2256,7 +2275,7 @@ const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const floa
                 float sunlight = hasSunlight ? sampleHazeSunlight(position) : 1.0;
                 float contribution = transmission * opacity;
                 // Cloud-shadow leakage must not become a uniform direct-light fog floor.
-                float directVisibility = smoothstep(0.1, 0.9, sunlight);
+                float directVisibility = smoothstep(0.02, 0.65, sunlight);
                 inscatter += contribution * (skyLight * 0.02 + sunLight * directVisibility);
                 depthSum += contribution * rayDistance;
                 depthWeight += contribution;

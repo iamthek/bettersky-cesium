@@ -151,6 +151,7 @@ export default class CloudMaterialPass {
         // 6.2
         this.hazeDensityScale = 0.0;
         this.hazeCloudAttached = false;
+        this.hazeGroundDensityScale = 1;
         this.hazeViewDistance = 20000;
         this.hazeVolumeLength = 3000;
         this.hazeDirectLightScale = 1;
@@ -203,8 +204,10 @@ export default class CloudMaterialPass {
             secondaryStepScale: () => { return this.secondaryStepScale },
 
             albedo: () => { return this.albedo },
-            hazeDensityScale: () => { return this.hazeDensityScale },
+            hazeDensityScale: () => this.pipeline.volumetricLightOptions?.mode === "volumetric" ||
+                this.pipeline.volumetricLightOptions?.mode === "off" ? 0.0 : this.hazeDensityScale,
             hazeCloudAttached: () => this.hazeCloudAttached,
+            hazeGroundDensityScale: () => this.hazeGroundDensityScale,
             hazeViewDistance: () => this.hazeViewDistance,
             hazeVolumeLength: () => this.hazeVolumeLength,
             hazeDirectLightScale: () => this.hazeDirectLightScale,
@@ -506,6 +509,7 @@ export default class CloudMaterialPass {
         this._historyValid = false;
         this._historyFrames = 0;
         this.pipeline.shadowMaterialPass?.invalidateHistory();
+        this.pipeline.volumetricLightPass?.invalidateHistory();
     }
 
     _releaseRenderTargets() {

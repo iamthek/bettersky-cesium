@@ -58,6 +58,8 @@ import { parseInt8Array, parseUint8Array } from "./geospatial/typedArrayParsers.
 import { createData3DTextureLoaderClass } from "./geospatial/PrecomputedDataLoader.js";
 import ShadowMaterialPass from "./geospatial/ShadowMaterialPass.js";
 import CloudMaterialPass from "./geospatial/CloudsMaterialPass.js";
+import FocusedCloudShadowPass from "./geospatial/FocusedCloudShadowPass.js";
+import VolumetricLightPass, { volumetricLightCompositeGLSL } from "./geospatial/VolumetricLightPass.js";
 import { downsampleThresholdMaterial, downsampleThresholdMaterialFS, downsampleThresholdMaterialVS } from "./geospatial/downsampleThresholdMaterial.js";
 import { downsamplingMaterial } from "./geospatial/downsamplingMaterial.js";
 import { upsamplingMaterial } from "./geospatial/upsamplingMaterial.js";
@@ -526,7 +528,30 @@ export default class GeospatialPipelinePass {
             show: true,
             pipeline: this
         })
+        // Standalone callers keep legacy haze until the public pipeline selects a mode.
+        this.volumetricLightOptions = { mode: "legacy" };
+        this.focusedCloudShadowPass = new FocusedCloudShadowPass(scene, { pipeline: this });
+        this.volumetricLightPass = new VolumetricLightPass(scene, {
+            pipeline: this,
+            shadowPass: this.focusedCloudShadowPass,
+        });
+        Object.assign(this.aerialPerspectiveUniforms, this.volumetricLightPass.uniformMap);
+        this.aerialPerspectiveUniforms.u_volumetricLightEnabled = () =>
+            this.volumetricLightOptions.mode === "volumetric" && this.cloudVisibility > 0 &&
+            this.volumetricLightPass.ready;
         this.init();
+    }
+
+    setVolumetricLightOptions(options) {
+        const previousMode = this.volumetricLightOptions.mode;
+        this.volumetricLightOptions = { ...this.volumetricLightOptions, ...options };
+        this.volumetricLightPass.setOptions(this.volumetricLightOptions);
+        if (this.volumetricLightOptions.mode !== "volumetric") {
+            this.focusedCloudShadowPass.releaseResources();
+        }
+        if (previousMode !== this.volumetricLightOptions.mode) {
+            this.cloudMaterialPass.invalidateHistory();
+        }
     }
 
     set toneMappingMode(mode) {
@@ -661,7 +686,7 @@ export default class GeospatialPipelinePass {
         }
         const AerialPerspectiveEffectShader = new ShaderSource({
             defines: ["LOG_DEPTH"],
-            sources: [defines + "\n" + AerialPerspectiveEffectFS]
+            sources: [defines + "\n" + AerialPerspectiveEffectFS.replace("/*__VOLUMETRIC_LIGHT_COMPOSITE__*/", volumetricLightCompositeGLSL)]
         });
         this._aerialPerspectiveComoman = this._scene.context.createViewportQuadCommand(AerialPerspectiveEffectShader, {
             uniformMap: this.aerialPerspectiveUniforms,
@@ -838,6 +863,10 @@ export default class GeospatialPipelinePass {
             if (that.cloudVisibility > 0) {
                 that.shadowMaterialPass.execute(context, colorTexture, depthTexture, idTexture);
                 that.cloudMaterialPass.execute(context, colorTexture, depthTexture, idTexture);
+                if (that.volumetricLightOptions.mode === "volumetric") {
+                    that.focusedCloudShadowPass.execute(context, that.volumetricLightOptions);
+                    that.volumetricLightPass.execute(context, colorTexture, depthTexture, idTexture);
+                }
             }
             that._aerialPerspectiveComoman.execute(context, that._passState);
             that.downsampleThresholdDrawComomand.execute(context, that._downsampleThresholdPassState);
@@ -1269,6 +1298,12 @@ export default class GeospatialPipelinePass {
     }
 
     destroy() {
+        if (this.volumetricLightPass && !this.volumetricLightPass.isDestroyed()) {
+            this.volumetricLightPass.destroy();
+        }
+        if (this.focusedCloudShadowPass && !this.focusedCloudShadowPass.isDestroyed()) {
+            this.focusedCloudShadowPass.destroy();
+        }
         if (this.cloudMaterialPass && !this.cloudMaterialPass.isDestroyed()) {
             this.cloudMaterialPass.destroy();
         }

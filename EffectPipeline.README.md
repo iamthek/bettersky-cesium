@@ -126,7 +126,7 @@ const fx = new EffectPipeline(viewer, {
 
 fx.update({
   coverage: 0.45,
-  cloud: { hazeQuality: "balanced" },
+  volumetricLight: { quality: "balanced" },
 });
 ```
 
@@ -162,7 +162,7 @@ These defaults come from the public entry point in [EffectPipeline.js](EffectPip
 | `toneMappingMode` | number | `9` | 2/3 Reinhard2; 4 Uncharted2; 7 AgX; 8 Neutral; 9 ACES; 10 Linear; 11 Reinhard; 12 Cineon. Changing the mode rebuilds sky stages. |
 | `toneMappingExposure` | number | `2.8` | Brightness multiplier before tone mapping; not EV stops. |
 | `irradianceScale` | number | `0.15` | Nonnegative ground irradiance gain. |
-| `aerialPerspectiveStrength` | number | `0.25` | Ground atmospheric-perspective strength in [0, 1]. Zero removes this blend. |
+| `aerialPerspectiveStrength` | number | `0.15` | Ground atmospheric-perspective strength in [0, 1]. Zero removes this blend. |
 | `darkParamY` | number | `0.5` | Night-sky glow modulation; generally subtle during daytime. |
 | `bloomIntensity` | number | `0.002` | Bloom intensity. Zero removes this contribution, but is not a pass-disable switch. |
 | `systemLight` | boolean | `true` | Keep true for consistent Cesium sun lighting. false switches only part of the pipeline to custom sun uniforms; see advanced notes. |
@@ -192,20 +192,56 @@ Four-component layer values use `[layer1, layer2, layer3, reserved]`; keep the f
 
 Distance LOD adjusts sampling/detail quality. Altitude fading changes cloud visibility, shadows and associated light together; at the end height it also skips cloud and shadow drawing. These are independent controls. Disabling distance LOD does not disable all footprint-based texture filtering.
 
-### Volumetric light / haze
+### Volumetric light and legacy haze
 
-Local haze occupies world-space regions near the ground and below the first two active, shadow-casting cloud layers. Its distance controls bound the sampled medium rather than placing fog at the camera. The exponential mode instead uses a height-dependent density above the rendering planet.
+`volumetricLight.mode` selects one of two mutually exclusive paths: `"volumetric"` (the default) uses an independent, low-resolution volumetric pass with its own temporal history; `"legacy"` uses the existing `cloud.haze*` integration; `"off"` disables both extra volumetric-light paths. The global `enabled` switch also controls volumetric rendering.
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `volumetricLight.mode` | string | `"volumetric"` | `"volumetric"`, `"legacy"` or `"off"`. |
+| `volumetricLight.density` | number | `0.000008` | Nonnegative finite extinction density in inverse meters; zero removes this medium. |
+| `volumetricLight.intensity` | number | `2` | Nonnegative finite scattering-brightness multiplier; does not change density or extinction. |
+| `volumetricLight.layerDepth` | number | `2400` | Positive finite depth in meters below shadow-casting cloud bases. |
+| `volumetricLight.maxDistance` | number | `16000` | Positive finite integration distance in meters, also bounded by scene depth and the cloud front. |
+| `volumetricLight.anisotropy` | number | `0.55` | Finite forward-scattering preference in [0, 0.9]; zero is isotropic. |
+| `volumetricLight.quality` | string | `"balanced"` | `"low"`, `"balanced"` or `"high"`; selects the budgets below. |
+
+| Quality | Resolution scale | Integration steps | Visibility map size |
+| --- | --- | --- | --- |
+| `low` | 0.25 | 24 | 512 × 512 |
+| `balanced` | 0.5 | 48 | 1024 × 1024 |
+| `high` | 0.5 | 64 | 2048 × 2048 |
+
+Higher budgets increase GPU work; these settings do not imply a fixed frame time. Changes to these options clear the independent volumetric history, and quality changes recreate the corresponding resources.
+
+Compatibility is decided for each constructor or `update()` call: an explicitly supplied `volumetricLight.mode` takes priority, even when the same call also contains old haze fields. Supplying any `cloud.haze*` field without a new mode automatically selects `"legacy"`. Other partial updates preserve the current mode; construction with no options uses `"volumetric"`. Existing haze values are retained when switching modes.
+
+```js
+fx.update({ volumetricLight: { mode: "volumetric", intensity: 2, quality: "balanced" } });
+fx.update({ volumetricLight: { mode: "off" } });
+fx.update({ cloud: { hazeDensityScale: 0.000008 } }); // Selects legacy.
+fx.update({ volumetricLight: { mode: "legacy" } });  // Uses retained legacy values.
+```
+
+The demo's Godray section shows the controls for the selected path. `off` disables both groups while preserving their values; Restore defaults reads the complete built-in preset, including the default mode.
+
+#### Legacy haze
+
+The options below apply in `"legacy"` mode. Their algorithm and defaults remain available for existing callers.
+
+Local haze occupies world-space regions below the first two active, shadow-casting cloud layers. The default disables the separate near-ground layer and limits the accumulated scattering path to 1.2 km. Cloud-base regions follow the cloud weather footprint projected along the sunlight direction, keeping low-angle shafts aligned with cloud gaps. Its distance controls bound the sampled medium rather than placing fog at the camera. The exponential mode instead uses a height-dependent density above the rendering planet.
 
 | Option | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `cloud.hazeDensityScale` | number | `0.000012` | Nonnegative medium density; zero removes the extra haze contribution. |
-| `cloud.hazeCloudAttached` | boolean | `true` | true integrates local world-space layers near the ground/cloud bases; false uses an exponential height medium. |
-| `cloud.hazeViewDistance` | number | `20000` | Positive maximum viewing distance in meters for local layers. |
-| `cloud.hazeVolumeLength` | number | `3000` | Positive total medium-path budget in meters for local layers; gaps do not consume this length. |
-| `cloud.hazeDirectLightScale` | number | `2` | Nonnegative direct sunlight-scattering gain; separate from medium extinction. |
-| `cloud.hazeQuality` | string | `"balanced"` | Integration-sample budget / shadow-filter taps: low = 16 / 1; balanced = 24 / 2; high = 32 / 4. |
-| `cloud.hazeHeightFalloff` | number | `1000` | Positive height scale in meters: exponential falloff scale, or local-layer thickness control. |
-| `cloud.hazeAnisotropy` | number | `0.6` | Forward-scattering preference in [0, 0.9]; zero is isotropic. |
+| `cloud.hazeDensityScale` | number | `0.000008` | Nonnegative medium density; zero removes the extra haze contribution. |
+| `cloud.hazeCloudAttached` | boolean | `true` | true integrates local world-space layers below cloud bases, with optional near-ground haze; false uses an exponential height medium. |
+| `cloud.hazeGroundDensityScale` | number | `0` | Near-ground density multiplier in [0, 1], only in local mode. Zero keeps cloud-base shafts only; one restores the full near-ground layer. |
+| `cloud.hazeViewDistance` | number | `16000` | Positive maximum viewing distance in meters for local layers. |
+| `cloud.hazeVolumeLength` | number | `1200` | Positive total medium-path budget in meters for local layers; gaps do not consume this length. |
+| `cloud.hazeDirectLightScale` | number | `8` | Nonnegative direct sunlight-scattering gain; separate from medium extinction. |
+| `cloud.hazeQuality` | string | `"high"` | Integration-sample budget / shadow-filter taps: low = 16 / 1; balanced = 24 / 2; high = 32 / 4. |
+| `cloud.hazeHeightFalloff` | number | `1200` | Positive height scale in meters: exponential falloff scale, or local-layer thickness control. |
+| `cloud.hazeAnisotropy` | number | `0.55` | Forward-scattering preference in [0, 0.9]; zero is isotropic. |
 | `cloud.maxShadowLengthRayDistance` | number | `6000` | Positive atmospheric shadow-length integration limit in meters; also bounds haze in exponential mode. |
 | `cloud.hazeSunColor` | array | `[1, 0.78, 0.42]` | Three nonnegative linear RGB multipliers, not 0–255 sRGB values. |
 
@@ -263,7 +299,7 @@ fx.update({
 });
 ```
 
-Changing cloud shape, density, coverage, lighting or visibility parameters invalidates cloud history as needed. Frequent large changes can repeatedly restart accumulation.
+Changing cloud shape, density, coverage, lighting or visibility parameters invalidates cloud history as needed. Volumetric-light options invalidate their separate history. Frequent large changes can repeatedly restart accumulation.
 
 | API | Access / purpose |
 | --- | --- |
@@ -292,30 +328,29 @@ Changing cloud shape, density, coverage, lighting or visibility parameters inval
 fx.update({
   irradianceScale: 0.15,
   aerialPerspectiveStrength: 0.2,
+  volumetricLight: { mode: "volumetric", intensity: 2 },
   cloud: {
     skyIrradianceScale: 1.8,
     groundIrradianceScale: 1.3,
-    hazeDirectLightScale: 2,
-    hazeSunColor: [1, 0.78, 0.42],
   },
 });
 ```
 
-`irradianceScale` affects the ground; the two cloud irradiance controls affect cloud fill light. `hazeSunColor` affects haze sunlight, while exposure changes the final tone-mapped image.
+`irradianceScale` affects the ground; the two cloud irradiance controls affect cloud fill light. `volumetricLight.intensity` adjusts independent volumetric scattering. In legacy mode, `cloud.hazeDirectLightScale` and `cloud.hazeSunColor` retain their sunlight controls. Exposure changes the final tone-mapped image.
 
 ### Reduce rendering cost
 
 ```js
 fx.update({
+  volumetricLight: { mode: "volumetric", quality: "low" },
   cloud: {
     lodRange: [120000, 300000],
-    hazeQuality: "low",
   },
   hbao: false,
 });
 ```
 
-This example starts distance-based simplification sooner, reduces the haze sample budget and disables AO. Evaluate the resulting detail and shading in your scene. Keep altitude fading enabled when the application includes high-altitude views.
+This example starts distance-based simplification sooner, reduces the independent volumetric-light budget and disables AO. Evaluate the resulting detail and shading in your scene. Keep altitude fading enabled when the application includes high-altitude views.
 
 ### Control sun time and weather motion
 
@@ -375,7 +410,7 @@ The implementation adds context helpers, uses selected Cesium renderer internals
 | --- | --- |
 | Missing or incorrect sky/clouds at startup | Inspect failed requests under `/cesium/EffectPipelineAssets/GeospatialAssets/`, including EXR/BIN files. Verify `CESIUM_BASE_URL`, directory casing and WebGL support. Resources load asynchronously. |
 | Clouds disappear when zooming out | Check `cloud.altitudeFadeRange`; the default reaches zero at 90 km camera ellipsoid height. Use `null` to disable this fade if needed. |
-| Little or no volumetric light | Check coverage, the first two layers' density/thickness, sun/view direction, `hazeDensityScale` and the local haze distance limits. |
+| Little or no volumetric light | Check `volumetricLight.mode`, coverage, the first two layers' density/thickness and sun/view direction. In volumetric mode, check `density`, `intensity`, `layerDepth` and `maxDistance`; in legacy mode, check `cloud.hazeDensityScale` and its local distance limits. |
 | Motion trails or noisy distant clouds | Adjust denoising weights incrementally, keep footprint filtering/LOD in mind and avoid continuously resetting cloud parameters. |
 | Missing cloud shadow from the third layer | The default shadow mask includes only the first two layers. |
 | SMAA has no effect immediately after startup | Its lookup textures load asynchronously; the first rendered frame is not a readiness guarantee. |

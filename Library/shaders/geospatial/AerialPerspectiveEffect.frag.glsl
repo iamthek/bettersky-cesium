@@ -1666,6 +1666,8 @@ vec4 innerLightPositionAndIntensity() {
 }
 #endif
 
+/*__VOLUMETRIC_LIGHT_COMPOSITE__*/
+
 void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   outputColor = vec4(0.0);
   float shadowLength = 0.0;
@@ -1696,7 +1698,7 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   #ifdef HAS_OVERLAY
     vec4 overlay = cloudVisibility > 0.0 ? texture(overlayBuffer, uv) * cloudVisibility : vec4(0.0);
     if (overlay.a == 1.0) {
-      outputColor = overlay;
+      outputColor = vec4(compositeVolumetricLight(uv, vec3(0.0), overlay), overlay.a);
       return;
     }
   #endif // HAS_OVERLAY
@@ -1728,7 +1730,7 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
         outputColor.rgb += stars * 2.0 * starVisibility;
     #endif
     #ifdef HAS_OVERLAY
-        vec3 overColor = outputColor.rgb * (1.0 - overlay.a) + overlay.rgb;
+        vec3 overColor = compositeVolumetricLight(uv, outputColor.rgb, overlay);
         outputColor.rgb = mix(overColor, outputColor.rgb, step(500000.0, cameraHeight));
     #endif // HAS_OVERLAY
     return;
@@ -1793,7 +1795,7 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   outputColor = vec4(radiance, inputColor.a);
 
   #ifdef HAS_OVERLAY
-   vec3 overColor = outputColor.rgb * (1.0 - overlay.a) + overlay.rgb ;
+   vec3 overColor = compositeVolumetricLight(uv, outputColor.rgb, overlay);
    outputColor.rgb = mix(overColor, outputColor.rgb, step(500000.0, cameraHeight));
   #endif // HAS_OVERLAY
 }

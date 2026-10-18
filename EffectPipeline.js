@@ -46,11 +46,28 @@ const DEFAULT_OPTIONS = {
   /** 地表光照增益（非负倍率）；越大地表越亮，独立于云体补光，仍受色调映射影响。 */
   irradianceScale: 0.15,
   /** 地表大气透视混合强度 [0,1]；越大远景雾感越强，0 关闭此混合，不改变天空和云的散射。 */
-  aerialPerspectiveStrength: 0.25,
+  aerialPerspectiveStrength: 0.15,
   /** 夜间天空辉光的调制系数（无量纲，建议 [0,1]）；作用于 _customDarkParam.y，白天通常不明显。 */
   darkParamY: 0.5,
   /** 太阳泛光/光晕强度（无量纲，建议 ≥0）；越大亮部扩散越明显，0 关闭此强度。 */
   bloomIntensity: 0.002,
+  /** 独立体积光配置；与旧 cloud.haze* 路径按 mode 互斥渲染。 */
+  volumetricLight: {
+    /** 体积光模式：volumetric 使用独立体积雾，legacy 保留旧 haze，off 关闭两条额外体积光路径。 */
+    mode: "volumetric",
+    /** 介质消光密度（非负，米的倒数）；越大散射和遮蔽越强，0 不产生体积光介质。 */
+    density: 0.000008,
+    /** 散射亮度倍率（非负）；不改变介质密度与消光，0 移除散射亮度。 */
+    intensity: 2,
+    /** 云底向下的体积层厚度（正有限米数）；越大参与散射的垂直范围越厚。 */
+    layerDepth: 2400,
+    /** 体积光沿视线的最大积分距离（正有限米数）；还受场景深度和云前缘限制。 */
+    maxDistance: 16000,
+    /** 前向散射偏好 g [0,0.9]；0 为各向同性，越大越集中于朝太阳的观察方向。 */
+    anisotropy: 0.55,
+    /** 分辨率比例/积分步数/可见性图尺寸：low=0.25/24/512，balanced=0.5/48/1024，high=0.5/64/2048。 */
+    quality: "balanced",
+  },
   /** 云层形态、照明、穿云光介质与降噪配置；初始化时可只覆盖其中的部分字段。 */
   cloud: {
     /** 按相机椭球高度淡出云量 [开始高度,消失高度]（米，0 ≤ 开始 < 消失）；null 禁用。 */
@@ -72,21 +89,23 @@ const DEFAULT_OPTIONS = {
     /** 地面反射辐照度对云体的补光倍率（非负）；越大云下部越亮，独立于地表增益 irradianceScale。 */
     groundIrradianceScale: 1.3,
     /** 穿云光 haze 介质密度缩放（非负）；越大散射和消光越强，0 关闭额外穿云光，建议小于 0.0001。 */
-    hazeDensityScale: 0.12 * 0.0001,
-    /** true 在近地及参与云影投射的云底附近积分世界固定薄层；false 使用行星表面以上的指数高度雾。 */
+    hazeDensityScale: 0.08 * 0.0001,
+    /** true 在参与云影投射的云底附近积分世界固定薄层，可独立开启近地雾；false 使用行星表面以上的指数高度雾。 */
     hazeCloudAttached: true,
+    /** 局部模式的近地薄雾密度倍率 [0,1]；0 仅保留云底薄层，1 恢复完整近地层，不影响传统高度雾。 */
+    hazeGroundDensityScale: 0,
     /** 局部薄层模式的最大观察距离（正有限米数）；只限制候选薄层的可见距离，空路不产生介质。 */
-    hazeViewDistance: 20000,
+    hazeViewDistance: 16000,
     /** 局部薄层模式沿视线累计的散射区间长度上限（正有限米数）；按近到远累积，空路不计入长度。 */
-    hazeVolumeLength: 3000,
+    hazeVolumeLength: 1200,
     /** haze 太阳直射散射增益（非负倍率）；0 移除此直射项，不改变介质消光、云体照明或天空补光。 */
-    hazeDirectLightScale: 2,
+    hazeDirectLightScale: 8,
     /** haze 积分预算：low=16 点/每点 1 次云影读取，balanced=24/2，high=32/4；越高越细腻但更耗 GPU。 */
-    hazeQuality: "balanced",
+    hazeQuality: "high",
     /** haze 垂直密度衰减尺度（正有限米数）；传统模式在此高度降至 1/e，局部模式用于限制薄层厚度。 */
-    hazeHeightFalloff: 1000,
+    hazeHeightFalloff: 1200,
     /** haze 前向散射偏好 g [0,0.9]；0 为各向同性，越大越集中于朝太阳的观察方向。 */
-    hazeAnisotropy: 0.6,
+    hazeAnisotropy: 0.55,
     /** 大气阴影长度积分上限（正有限米数）；传统模式同时限制 haze 光路，局部模式改用上方两个距离参数。 */
     maxShadowLengthRayDistance: 6000,
     /** haze 日光的线性 RGB 倍率 [r,g,b]（非负，可大于 1）；不是 0–255 的 sRGB 值，不改变云本身的颜色。 */
@@ -174,6 +193,42 @@ function deepMerge(base, override) {
   return out;
 }
 
+// 兼容判断只看本次调用：显式新 mode 优先，旧 haze 增量则自动选择 legacy。
+function normalizeVolumetricLightOptions(options) {
+  const volumetricLight = options.volumetricLight;
+  if (isPlainObject(volumetricLight) && Object.prototype.hasOwnProperty.call(volumetricLight, "mode")) return options;
+  if (!isPlainObject(options.cloud) || !Object.keys(options.cloud).some(key => key.startsWith("haze"))) return options;
+  if ("volumetricLight" in options && !isPlainObject(volumetricLight)) return options;
+  return { ...options, volumetricLight: { ...volumetricLight, mode: "legacy" } };
+}
+
+function validateVolumetricLightOptions(options) {
+  if (!("volumetricLight" in options)) return;
+  const volumetricLight = options.volumetricLight;
+  if (!isPlainObject(volumetricLight)) {
+    throw new Error("[EffectPipeline] volumetricLight 必须是体积光参数对象。");
+  }
+  if ("mode" in volumetricLight && !["volumetric", "legacy", "off"].includes(volumetricLight.mode)) {
+    throw new Error("[EffectPipeline] volumetricLight.mode 必须是 volumetric、legacy 或 off。");
+  }
+  if ("quality" in volumetricLight && !["low", "balanced", "high"].includes(volumetricLight.quality)) {
+    throw new Error("[EffectPipeline] volumetricLight.quality 必须是 low、balanced 或 high。");
+  }
+  for (const key of ["density", "intensity"]) {
+    if (key in volumetricLight && (!Number.isFinite(volumetricLight[key]) || volumetricLight[key] < 0)) {
+      throw new Error(`[EffectPipeline] volumetricLight.${key} 必须是非负有限数字。`);
+    }
+  }
+  for (const key of ["layerDepth", "maxDistance"]) {
+    if (key in volumetricLight && (!Number.isFinite(volumetricLight[key]) || volumetricLight[key] <= 0)) {
+      throw new Error(`[EffectPipeline] volumetricLight.${key} 必须是正的有限距离（米）。`);
+    }
+  }
+  if ("anisotropy" in volumetricLight && (!Number.isFinite(volumetricLight.anisotropy) || volumetricLight.anisotropy < 0 || volumetricLight.anisotropy > 0.9)) {
+    throw new Error("[EffectPipeline] volumetricLight.anisotropy 必须在 0..0.9 范围内。");
+  }
+}
+
 function toCartesian2(v) {
   if (v instanceof Cartesian2) return v;
   if (Array.isArray(v)) return new Cartesian2(v[0], v[1]);
@@ -197,6 +252,9 @@ function validateCloudOptions(options) {
   if (!isPlainObject(cloud)) return;
   if ("hazeCloudAttached" in cloud && typeof cloud.hazeCloudAttached !== "boolean") {
     throw new Error("[EffectPipeline] cloud.hazeCloudAttached 必须是布尔值。");
+  }
+  if ("hazeGroundDensityScale" in cloud && (!Number.isFinite(cloud.hazeGroundDensityScale) || cloud.hazeGroundDensityScale < 0 || cloud.hazeGroundDensityScale > 1)) {
+    throw new Error("[EffectPipeline] cloud.hazeGroundDensityScale 必须在 0..1 范围内。");
   }
   for (const key of ["hazeViewDistance", "hazeVolumeLength"]) {
     if (key in cloud && (!Number.isFinite(cloud[key]) || cloud[key] <= 0)) {
@@ -283,6 +341,8 @@ export class EffectPipeline {
    * @param {object} [options] 覆盖默认预设的配置（深合并）
    */
   constructor(viewerOrScene, options = {}) {
+    options = normalizeVolumetricLightOptions(options);
+    validateVolumetricLightOptions(options);
     validateCloudOptions(options);
     if (!defined(viewerOrScene)) {
       throw new Error("[EffectPipeline] 需要传入 Cesium Viewer 或 Scene。");
@@ -426,7 +486,7 @@ export class EffectPipeline {
         Cesium.Cartesian3.fromArray(c.hazeSunColor, 0, geo.cloudMaterialPass.hazeSunColor);
         cloudHistoryChanged = true;
       }
-      for (const key of ["skyIrradianceScale", "groundIrradianceScale", "hazeDensityScale", "maxShadowLengthRayDistance", "hazeViewDistance", "hazeVolumeLength", "hazeDirectLightScale"]) {
+      for (const key of ["skyIrradianceScale", "groundIrradianceScale", "hazeDensityScale", "hazeGroundDensityScale", "maxShadowLengthRayDistance", "hazeViewDistance", "hazeVolumeLength", "hazeDirectLightScale"]) {
         if (defined(c[key])) {
           geo.cloudMaterialPass[key] = c[key];
           cloudHistoryChanged = true;
@@ -434,6 +494,7 @@ export class EffectPipeline {
       }
     }
     if (cloudHistoryChanged) geo.cloudMaterialPass.invalidateHistory();
+    if (defined(opt.volumetricLight)) geo.setVolumetricLightOptions(this._options.volumetricLight);
     if (defined(opt.toneMappingMode)) geo.toneMappingMode = opt.toneMappingMode;
     if (defined(opt.hbao)) {
       if (isPlainObject(opt.hbao)) {
@@ -558,6 +619,8 @@ export class EffectPipeline {
 
   /** 批量更新参数（同构造时 options，部分字段即可） */
   update(options = {}) {
+    options = normalizeVolumetricLightOptions(options);
+    validateVolumetricLightOptions(options);
     validateCloudOptions(options);
     this._options = deepMerge(this._options, options);
     if (options.applySceneSettings !== false) {

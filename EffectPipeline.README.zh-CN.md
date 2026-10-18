@@ -126,7 +126,7 @@ const fx = new EffectPipeline(viewer, {
 
 fx.update({
   coverage: 0.45,
-  cloud: { hazeQuality: "balanced" },
+  volumetricLight: { quality: "balanced" },
 });
 ```
 
@@ -162,7 +162,7 @@ const fx = new EffectPipeline(viewer, {
 | `toneMappingMode` | number | `9` | 2/3 Reinhard2；4 Uncharted2；7 AgX；8 Neutral；9 ACES；10 Linear；11 Reinhard；12 Cineon。切换会重建天空渲染阶段。 |
 | `toneMappingExposure` | number | `2.8` | 色调映射前的亮度倍率，不是 EV 档位。 |
 | `irradianceScale` | number | `0.15` | 非负地表辐照度增益。 |
-| `aerialPerspectiveStrength` | number | `0.25` | 地表大气透视混合强度 [0, 1]；0 关闭此混合。 |
+| `aerialPerspectiveStrength` | number | `0.15` | 地表大气透视混合强度 [0, 1]；0 关闭此混合。 |
 | `darkParamY` | number | `0.5` | 夜间天空辉光调制，白天通常不明显。 |
 | `bloomIntensity` | number | `0.002` | 泛光强度；0 移除此贡献，但不是关闭渲染阶段的开关。 |
 | `systemLight` | boolean | `true` | 建议保持 true 以统一使用 Cesium 太阳；false 仅切换部分管线的自定义太阳 uniform，详见高级说明。 |
@@ -192,20 +192,56 @@ const fx = new EffectPipeline(viewer, {
 
 距离 LOD 调整采样与细节质量；相机高度淡出则联动改变云、云影及相关光束的可见性，到结束高度后还会跳过云体和云影绘制。两者分别生效，关闭距离 LOD 也不会关闭所有基于像素覆盖范围的纹理过滤。
 
-### 体积光 / haze
+### 体积光与旧 haze
 
-局部 haze 分布在近地和前两层有效投影云层云底下方的世界空间区域。距离参数限制实际采样的介质范围，不会把雾放在相机周围。指数模式则使用随渲染行星表面高度衰减的介质密度。
+`volumetricLight.mode` 选择两条互斥路径之一：默认 `"volumetric"` 使用独立的低分辨率体积光 pass 及其时域历史；`"legacy"` 使用现有 `cloud.haze*` 积分；`"off"` 关闭两条额外体积光路径。全局 `enabled` 开关也会控制体积光渲染。
+
+| 参数 | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `volumetricLight.mode` | string | `"volumetric"` | 支持 `"volumetric"`、`"legacy"` 或 `"off"`。 |
+| `volumetricLight.density` | number | `0.000008` | 非负有限消光密度，单位为米的倒数；0 移除此介质。 |
+| `volumetricLight.intensity` | number | `2` | 非负有限散射亮度倍率；不改变密度或消光。 |
+| `volumetricLight.layerDepth` | number | `2400` | 参与投影的云底向下延伸的体积层厚度，正有限米数。 |
+| `volumetricLight.maxDistance` | number | `16000` | 最大积分距离，正有限米数；还受场景深度与云前缘限制。 |
+| `volumetricLight.anisotropy` | number | `0.55` | 有限前向散射偏好 [0, 0.9]；0 为各向同性。 |
+| `volumetricLight.quality` | string | `"balanced"` | 支持 `"low"`、`"balanced"` 或 `"high"`，对应下表预算。 |
+
+| 质量 | 分辨率比例 | 积分步数 | 可见性图尺寸 |
+| --- | --- | --- | --- |
+| `low` | 0.25 | 24 | 512 × 512 |
+| `balanced` | 0.5 | 48 | 1024 × 1024 |
+| `high` | 0.5 | 64 | 2048 × 2048 |
+
+更高预算会增加 GPU 工作，这些设置不代表固定帧耗时。修改这些参数会清除独立体积光历史，切换质量会重建对应资源。
+
+兼容判断以每次构造或 `update()` 调用为准：显式传入的 `volumetricLight.mode` 优先，即使同一次调用也包含旧 haze 字段；仅传任意 `cloud.haze*` 字段且没有新 mode 时，自动选择 `"legacy"`。其他局部更新保留当前模式；无参数初始化默认使用 `"volumetric"`。模式切换保留已有 haze 参数值。
+
+```js
+fx.update({ volumetricLight: { mode: "volumetric", intensity: 2, quality: "balanced" } });
+fx.update({ volumetricLight: { mode: "off" } });
+fx.update({ cloud: { hazeDensityScale: 0.000008 } }); // 自动选择 legacy。
+fx.update({ volumetricLight: { mode: "legacy" } });  // 使用保留的旧参数。
+```
+
+示例 Godray 区域显示当前路径的控制项；`off` 禁用两组数值但保留它们的值。恢复默认值会读取完整内置预设，包括默认体积光模式。
+
+#### 旧 haze
+
+以下参数在 `"legacy"` 模式生效，原有算法及默认值继续兼容旧调用。
+
+局部 haze 分布在前两层有效投影云层云底下方的世界空间区域。默认关闭独立的近地薄雾层，并把累计散射光路限制为 1.2 km。云底区域沿太阳方向投影到云层天气纹理，使低太阳角度的光束仍与云隙对齐。距离参数限制实际采样的介质范围，不会把雾放在相机周围。指数模式则使用随渲染行星表面高度衰减的介质密度。
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `cloud.hazeDensityScale` | number | `0.000012` | 非负介质密度；0 移除额外 haze 贡献。 |
-| `cloud.hazeCloudAttached` | boolean | `true` | true 在近地/云底附近的世界空间局部薄层积分；false 使用指数高度雾。 |
-| `cloud.hazeViewDistance` | number | `20000` | 局部薄层的最大观察距离，正有限米数。 |
-| `cloud.hazeVolumeLength` | number | `3000` | 局部薄层累计介质光路上限，正有限米数；空隙不计入长度。 |
-| `cloud.hazeDirectLightScale` | number | `2` | 非负太阳直射散射增益，与介质消光分别控制。 |
-| `cloud.hazeQuality` | string | `"balanced"` | 积分样本预算 / 云影滤波采样数：low = 16 / 1；balanced = 24 / 2；high = 32 / 4。 |
-| `cloud.hazeHeightFalloff` | number | `1000` | 正有限高度尺度，单位米：用于指数高度衰减或局部薄层厚度控制。 |
-| `cloud.hazeAnisotropy` | number | `0.6` | 前向散射偏好 [0, 0.9]；0 为各向同性。 |
+| `cloud.hazeDensityScale` | number | `0.000008` | 非负介质密度；0 移除额外 haze 贡献。 |
+| `cloud.hazeCloudAttached` | boolean | `true` | true 在云底下方的世界空间局部薄层积分，可独立开启近地雾；false 使用指数高度雾。 |
+| `cloud.hazeGroundDensityScale` | number | `0` | 局部模式近地密度倍率 [0, 1]；0 仅保留云底光束，1 恢复完整近地层。 |
+| `cloud.hazeViewDistance` | number | `16000` | 局部薄层的最大观察距离，正有限米数。 |
+| `cloud.hazeVolumeLength` | number | `1200` | 局部薄层累计介质光路上限，正有限米数；空隙不计入长度。 |
+| `cloud.hazeDirectLightScale` | number | `8` | 非负太阳直射散射增益，与介质消光分别控制。 |
+| `cloud.hazeQuality` | string | `"high"` | 积分样本预算 / 云影滤波采样数：low = 16 / 1；balanced = 24 / 2；high = 32 / 4。 |
+| `cloud.hazeHeightFalloff` | number | `1200` | 正有限高度尺度，单位米：用于指数高度衰减或局部薄层厚度控制。 |
+| `cloud.hazeAnisotropy` | number | `0.55` | 前向散射偏好 [0, 0.9]；0 为各向同性。 |
 | `cloud.maxShadowLengthRayDistance` | number | `6000` | 大气阴影长度积分上限，正有限米数；指数模式下同时限制 haze 光路。 |
 | `cloud.hazeSunColor` | array | `[1, 0.78, 0.42]` | 三个非负线性 RGB 倍率，不是 0–255 的 sRGB 值。 |
 
@@ -263,7 +299,7 @@ fx.update({
 });
 ```
 
-改变云形、密度、覆盖度、云照明或可见性参数时，会按需清除云历史。频繁大幅修改可能让时域积累反复重新开始。
+改变云形、密度、覆盖度、云照明或可见性参数时，会按需清除云历史。体积光参数会清除其独立历史。频繁大幅修改可能让时域积累反复重新开始。
 
 | API | 读写方式 / 用途 |
 | --- | --- |
@@ -292,30 +328,29 @@ fx.update({
 fx.update({
   irradianceScale: 0.15,
   aerialPerspectiveStrength: 0.2,
+  volumetricLight: { mode: "volumetric", intensity: 2 },
   cloud: {
     skyIrradianceScale: 1.8,
     groundIrradianceScale: 1.3,
-    hazeDirectLightScale: 2,
-    hazeSunColor: [1, 0.78, 0.42],
   },
 });
 ```
 
-`irradianceScale` 影响地表；两个云体辐照度参数影响云的补光。`hazeSunColor` 影响 haze 日光，曝光则改变最终色调映射后的画面。
+`irradianceScale` 影响地表；两个云体辐照度参数影响云的补光。`volumetricLight.intensity` 调整独立体积光散射；legacy 模式仍通过 `cloud.hazeDirectLightScale` 和 `cloud.hazeSunColor` 控制 haze 日光。曝光改变最终色调映射后的画面。
 
 ### 降低渲染开销
 
 ```js
 fx.update({
+  volumetricLight: { mode: "volumetric", quality: "low" },
   cloud: {
     lodRange: [120000, 300000],
-    hazeQuality: "low",
   },
   hbao: false,
 });
 ```
 
-此示例让距离简化更早开始，降低 haze 采样预算并关闭 AO。应在实际场景中观察细节和明暗变化；包含高空视角的应用可保留相机高度淡出。
+此示例让距离简化更早开始，降低独立体积光预算并关闭 AO。应在实际场景中观察细节和明暗变化；包含高空视角的应用可保留相机高度淡出。
 
 ### 控制太阳时间与天气移动
 
@@ -375,7 +410,7 @@ viewer.destroy();
 | --- | --- |
 | 启动时天空或云缺失、显示异常 | 检查 `/cesium/EffectPipelineAssets/GeospatialAssets/` 下 EXR/BIN 等资源请求、`CESIUM_BASE_URL`、目录大小写及 WebGL 能力；资源异步加载。 |
 | 拉远后云消失 | 检查 `cloud.altitudeFadeRange`，默认在相机椭球高度 90 km 时完全淡出；需要时可设为 `null`。 |
-| 穿云光很弱或看不到 | 检查覆盖度、前两层密度/厚度、太阳与观察方向、`hazeDensityScale` 及局部 haze 距离范围。 |
+| 穿云光很弱或看不到 | 检查 `volumetricLight.mode`、覆盖度、前两层密度/厚度及太阳与观察方向。volumetric 模式检查 `density`、`intensity`、`layerDepth` 和 `maxDistance`；legacy 模式检查 `cloud.hazeDensityScale` 及局部距离范围。 |
 | 运动拖影或远景云噪点 | 小幅调整降噪权重，结合像素覆盖范围过滤/LOD，并避免持续重设云参数。 |
 | 第三层没有地面云影 | 默认阴影掩码只包含前两层。 |
 | 启动后 SMAA 没有立即生效 | 查找纹理异步加载，首个渲染帧不代表资源已经就绪。 |
