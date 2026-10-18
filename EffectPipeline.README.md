@@ -187,7 +187,7 @@ Four-component layer values use `[layer1, layer2, layer3, reserved]`; keep the f
 | `cloud.shapeDetailAmounts` | array / Cartesian4 | `[0.18, 0.12, 0, 0]` | Four values in [0, 1]; higher values erode cloud detail more strongly. |
 | `cloud.lodRange` | array / null | `[200000, 500000]` | Near/far distance thresholds in meters, 0 ≤ near < far. null disables distance LOD; it does not move the clouds. |
 | `cloud.altitudeFadeRange` | array / null | `[30000, 90000]` | Camera ellipsoid-height fade range in meters, 0 ≤ start < end. null disables the fade. |
-| `cloud.skyIrradianceScale` | number | `1.8` | Nonnegative sky fill-light gain on clouds and the extra haze medium. |
+| `cloud.skyIrradianceScale` | number | `1.8` | Nonnegative sky fill-light gain on clouds and legacy haze; independent volumetric light uses direct sunlight. |
 | `cloud.groundIrradianceScale` | number | `1.3` | Nonnegative ground-reflected fill-light gain on clouds, separate from irradianceScale. |
 
 Distance LOD adjusts sampling/detail quality. Altitude fading changes cloud visibility, shadows and associated light together; at the end height it also skips cloud and shadow drawing. These are independent controls. Disabling distance LOD does not disable all footprint-based texture filtering.
@@ -196,23 +196,35 @@ Distance LOD adjusts sampling/detail quality. Altitude fading changes cloud visi
 
 `volumetricLight.mode` selects one of two mutually exclusive paths: `"volumetric"` (the default) uses an independent, low-resolution volumetric pass with its own temporal history; `"legacy"` uses the existing `cloud.haze*` integration; `"off"` disables both extra volumetric-light paths. The global `enabled` switch also controls volumetric rendering.
 
+#### Independent volumetric light
+
+The medium occupies a world-space height envelope below the lowest active, shadow-casting cloud base. Its bottom is clamped to the rendering planet's surface, rather than following local terrain. With the default 4000 m cloud base and 2400 m layer depth, the envelope spans heights of 1600–4000 m. The lower part becomes progressively thinner, and density fades near the maximum viewing distance. This mode adds no separate near-ground fog layer. Weather-map holes do not remove the medium: air remains in cloud gaps, while actual cloud transmittance determines the sunlit and shadowed regions.
+
+Integration covers all valid medium intervals within `maxDistance`, clipped by terrain depth and the planet; the legacy 1200 m accumulated-path limit does not apply. A separate focused cloud-shadow map covers this local range, leaving the large ground-shadow cascades unchanged. World-texel alignment and filtering based on the sun's angular radius help preserve cloud-gap boundaries. Scattering before and after the cloud front is recorded separately, so translucent clouds can reveal light behind them while opaque clouds and terrain occlude it.
+
+The pass stores its own scattering-centroid depth and history. Depth/luminance-aware reconstruction and history rejection handle terrain edges, cloud silhouettes and changing illumination. It does not use the clouds' 16-phase Bayer reconstruction or add a uniform brightness floor to direct sunlight. Shafts follow the actual clouds and solar direction; no beam is generated for a particular clock time.
+
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `volumetricLight.mode` | string | `"volumetric"` | `"volumetric"`, `"legacy"` or `"off"`. |
 | `volumetricLight.density` | number | `0.000008` | Nonnegative finite extinction density in inverse meters; zero removes this medium. |
 | `volumetricLight.intensity` | number | `2` | Nonnegative finite scattering-brightness multiplier; does not change density or extinction. |
-| `volumetricLight.layerDepth` | number | `2400` | Positive finite depth in meters below shadow-casting cloud bases. |
-| `volumetricLight.maxDistance` | number | `16000` | Positive finite integration distance in meters, also bounded by scene depth and the cloud front. |
+| `volumetricLight.layerDepth` | number | `2400` | Positive finite depth in meters below the lowest active, shadow-casting cloud base. |
+| `volumetricLight.maxDistance` | number | `16000` | Positive finite viewing/integration limit in meters, clipped by scene depth and the planet; also determines the focused shadow's receiver range. |
 | `volumetricLight.anisotropy` | number | `0.55` | Finite forward-scattering preference in [0, 0.9]; zero is isotropic. |
 | `volumetricLight.quality` | string | `"balanced"` | `"low"`, `"balanced"` or `"high"`; selects the budgets below. |
 
-| Quality | Resolution scale | Integration steps | Visibility map size |
+| Quality | Width/height scale | Integration steps per pixel | Focused shadow map |
 | --- | --- | --- | --- |
 | `low` | 0.25 | 24 | 512 × 512 |
 | `balanced` | 0.5 | 48 | 1024 × 1024 |
 | `high` | 0.5 | 64 | 2048 × 2048 |
 
-Higher budgets increase GPU work; these settings do not imply a fixed frame time. Changes to these options clear the independent volumetric history, and quality changes recreate the corresponding resources.
+The scale applies to each drawing-buffer dimension, rounded up: `balanced` uses `ceil(width / 2) × ceil(height / 2)`. Higher budgets increase GPU work; these settings do not imply a fixed frame time. Changing a volumetric-light value clears its independent history; quality changes recreate the corresponding targets. Switching to `legacy` or `off` releases the new path's offscreen textures and framebuffers; returning to `volumetric` allocates them as needed.
+
+`density: 0` removes the medium. `intensity: 0` removes its added scattered light but retains extinction; use `mode: "off"` to disable both extra volumetric-light paths. Atmospheric scattering, cloud lighting and lens flare remain separate effects.
+
+#### Modes and existing callers
 
 Compatibility is decided for each constructor or `update()` call: an explicitly supplied `volumetricLight.mode` takes priority, even when the same call also contains old haze fields. Supplying any `cloud.haze*` field without a new mode automatically selects `"legacy"`. Other partial updates preserve the current mode; construction with no options uses `"volumetric"`. Existing haze values are retained when switching modes.
 
@@ -224,6 +236,19 @@ fx.update({ volumetricLight: { mode: "legacy" } });  // Uses retained legacy val
 ```
 
 The demo's Godray section shows the controls for the selected path. `off` disables both groups while preserving their values; Restore defaults reads the complete built-in preset, including the default mode.
+
+#### Performance and validation reference
+
+A local check on 2026-10-18 used an RTX 3080 through ANGLE/Direct3D11, a 1920 × 1080 drawing buffer and `balanced` defaults. The demo date was 2026-05-01; each view faced the sun with camera and weather fixed. `EXT_disjoint_timer_query_webgl2` measured 64 adjacent frame pairs with alternating order and a fixed cloud phase. The baseline retained allocated targets while skipping the new passes and their composite; the disjoint flag was false.
+
+| Demo UTC | Median added GPU time | P95 added GPU time |
+| --- | --- | --- |
+| 10:30 | 1.621 ms | 1.989 ms |
+| 23:00 | 1.467 ms | 2.279 ms |
+
+The new textures allocated 58,155,008 bytes (55.46 MiB): 47.46 MiB for scattering/depth/history and 8 MiB for the focused shadow. This is allocation accounting, not an independent measurement of driver-level VRAM growth. These scene/device-specific results are not a frame-time guarantee; conventional on/off batch differences fluctuated, so paired GPU timings were used instead of background FPS.
+
+The implementation check covered seven WebGL2 MRT/readback cases: full-interval integration, zero direct light under zero solar visibility, opaque and translucent foreground clouds, terrain clipping, distance fade and cloud-visibility fade. Mode/quality changes, odd viewport dimensions, camera movement, layer crossings and weather changes were also checked. Five enable/disable cycles matched 50 texture creations/deletions and 20 framebuffer creations/deletions. This checks the new path's resource lifecycle, not long-term memory use across every scene.
 
 #### Legacy haze
 
@@ -260,6 +285,8 @@ The quality values are budgets, not fixed texture-read counts: early exits and c
 | `cloud.denoise.spatialFilterStrength` | number | `0.8` | Depth/opacity-aware reconstruction strength in [0, 1]; higher values smooth more detail. |
 
 These are base controls. The renderer further adapts blending to history age, distance, camera motion and terrain boundaries. Increasing history dependence can reduce noise while increasing lag; stronger spatial filtering can soften detail. SMAA handles final-image edges and does not replace this cloud reconstruction.
+
+`cloud.denoise` controls cloud reconstruction, including haze rendered through the legacy path. The independent volumetric-light pass uses its own depth/luminance rejection and adaptive history weights; these cloud controls do not tune that history.
 
 ### HBAO
 
@@ -410,7 +437,9 @@ The implementation adds context helpers, uses selected Cesium renderer internals
 | --- | --- |
 | Missing or incorrect sky/clouds at startup | Inspect failed requests under `/cesium/EffectPipelineAssets/GeospatialAssets/`, including EXR/BIN files. Verify `CESIUM_BASE_URL`, directory casing and WebGL support. Resources load asynchronously. |
 | Clouds disappear when zooming out | Check `cloud.altitudeFadeRange`; the default reaches zero at 90 km camera ellipsoid height. Use `null` to disable this fade if needed. |
-| Little or no volumetric light | Check `volumetricLight.mode`, coverage, the first two layers' density/thickness and sun/view direction. In volumetric mode, check `density`, `intensity`, `layerDepth` and `maxDistance`; in legacy mode, check `cloud.hazeDensityScale` and its local distance limits. |
+| Little or no volumetric light | Check `volumetricLight.mode`, active shadow-casting layers and sun/view direction. Look toward the sun or a cloud gap; other directions naturally scatter less light. In volumetric mode, check `density`, `intensity`, `layerDepth` and `maxDistance`; weather holes do not turn off its medium. In legacy mode, check `cloud.hazeDensityScale`, coverage gating and local distance limits. |
+| Broad haze instead of distinct shafts | Check that clouds create actual light/shadow gaps. Reduce `density`, `layerDepth` or `maxDistance` to limit the affected air; adjust `intensity` separately for brightness. Raising global exposure/Bloom also brightens other effects and does not restore missing shadow boundaries. |
+| Bright rings or ghosts around the sun | These belong to lens flare, not the cloud-gap volumetric shafts. Switching volumetric light off does not disable lens flare. |
 | Motion trails or noisy distant clouds | Adjust denoising weights incrementally, keep footprint filtering/LOD in mind and avoid continuously resetting cloud parameters. |
 | Missing cloud shadow from the third layer | The default shadow mask includes only the first two layers. |
 | SMAA has no effect immediately after startup | Its lookup textures load asynchronously; the first rendered frame is not a readiness guarantee. |

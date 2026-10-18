@@ -187,7 +187,7 @@ const fx = new EffectPipeline(viewer, {
 | `cloud.shapeDetailAmounts` | array / Cartesian4 | `[0.18, 0.12, 0, 0]` | 四个 [0, 1] 数值；越大细节侵蚀越强。 |
 | `cloud.lodRange` | array / null | `[200000, 500000]` | 距相机的近/远阈值，单位米，0 ≤ 近 < 远；null 禁用距离 LOD，不改变云的位置。 |
 | `cloud.altitudeFadeRange` | array / null | `[30000, 90000]` | 相机椭球高度淡出范围，单位米，0 ≤ 开始 < 结束；null 禁用。 |
-| `cloud.skyIrradianceScale` | number | `1.8` | 非负天空补光增益，作用于云体及额外 haze 介质。 |
+| `cloud.skyIrradianceScale` | number | `1.8` | 非负天空补光增益，作用于云体及旧 haze；独立体积光使用太阳直射光。 |
 | `cloud.groundIrradianceScale` | number | `1.3` | 非负的云体地面反射补光增益，与 irradianceScale 分别控制。 |
 
 距离 LOD 调整采样与细节质量；相机高度淡出则联动改变云、云影及相关光束的可见性，到结束高度后还会跳过云体和云影绘制。两者分别生效，关闭距离 LOD 也不会关闭所有基于像素覆盖范围的纹理过滤。
@@ -196,23 +196,35 @@ const fx = new EffectPipeline(viewer, {
 
 `volumetricLight.mode` 选择两条互斥路径之一：默认 `"volumetric"` 使用独立的低分辨率体积光 pass 及其时域历史；`"legacy"` 使用现有 `cloud.haze*` 积分；`"off"` 关闭两条额外体积光路径。全局 `enabled` 开关也会控制体积光渲染。
 
+#### 独立体积光
+
+介质分布在最低有效投影云层云底下方的世界空间高度包络中，底部最低到渲染行星表面，不跟随各处地形。默认云底为 4000 m、体积层厚度为 2400 m 时，包络高度范围为 1600–4000 m。底部介质逐渐变稀，最大观察距离末段也会淡出；此模式不额外叠加独立近地雾层。天气纹理的孔洞不会关闭介质：云隙中仍有空气承接阳光，真实云透射率决定亮区与暗带。
+
+积分覆盖 `maxDistance` 内所有有效介质区间，并由地形深度和行星裁剪；旧模式累计 1200 m 的光路上限不适用于新模式。独立聚焦云影图覆盖这个局部范围，保留地表原有的大范围级联云影。阴影图按世界像素对齐，并依据太阳角半径过滤，以保留云隙边界。散射按云前、云后分别记录，使半透明云能露出后方光束，不透明云和地形则遮挡后方散射。
+
+该 pass 独立记录散射质心深度和历史帧，使用深度、亮度感知重建与历史拒绝处理地形边缘、云轮廓和光照变化。它不使用云的 16 相位 Bayer 重建，也不给太阳直射项添加统一亮度底色。光束跟随真实云分布和太阳方向，不针对特定时刻生成。
+
 | 参数 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `volumetricLight.mode` | string | `"volumetric"` | 支持 `"volumetric"`、`"legacy"` 或 `"off"`。 |
 | `volumetricLight.density` | number | `0.000008` | 非负有限消光密度，单位为米的倒数；0 移除此介质。 |
 | `volumetricLight.intensity` | number | `2` | 非负有限散射亮度倍率；不改变密度或消光。 |
-| `volumetricLight.layerDepth` | number | `2400` | 参与投影的云底向下延伸的体积层厚度，正有限米数。 |
-| `volumetricLight.maxDistance` | number | `16000` | 最大积分距离，正有限米数；还受场景深度与云前缘限制。 |
+| `volumetricLight.layerDepth` | number | `2400` | 最低有效投影云层云底向下延伸的体积层厚度，正有限米数。 |
+| `volumetricLight.maxDistance` | number | `16000` | 最大观察/积分距离，正有限米数；由场景深度与行星裁剪，同时决定聚焦云影的接收范围。 |
 | `volumetricLight.anisotropy` | number | `0.55` | 有限前向散射偏好 [0, 0.9]；0 为各向同性。 |
 | `volumetricLight.quality` | string | `"balanced"` | 支持 `"low"`、`"balanced"` 或 `"high"`，对应下表预算。 |
 
-| 质量 | 分辨率比例 | 积分步数 | 可见性图尺寸 |
+| 质量 | 宽/高分辨率比例 | 每像素积分步数 | 聚焦云影图尺寸 |
 | --- | --- | --- | --- |
 | `low` | 0.25 | 24 | 512 × 512 |
 | `balanced` | 0.5 | 48 | 1024 × 1024 |
 | `high` | 0.5 | 64 | 2048 × 2048 |
 
-更高预算会增加 GPU 工作，这些设置不代表固定帧耗时。修改这些参数会清除独立体积光历史，切换质量会重建对应资源。
+比例分别作用于绘图缓冲的宽和高，并向上取整：`balanced` 使用 `ceil(width / 2) × ceil(height / 2)`。更高预算会增加 GPU 工作，这些设置不代表固定帧耗时。体积光参数值变化会清除其独立历史，切换质量会重建对应目标。切换到 `legacy` 或 `off` 会释放新路径的离屏纹理和帧缓冲，切回 `volumetric` 时按需重新分配。
+
+`density: 0` 移除此介质；`intensity: 0` 只移除新增散射亮度，仍保留消光。需要关闭两条额外体积光路径时，使用 `mode: "off"`。大气散射、云体光照和镜头光晕分别控制。
+
+#### 模式与旧调用兼容
 
 兼容判断以每次构造或 `update()` 调用为准：显式传入的 `volumetricLight.mode` 优先，即使同一次调用也包含旧 haze 字段；仅传任意 `cloud.haze*` 字段且没有新 mode 时，自动选择 `"legacy"`。其他局部更新保留当前模式；无参数初始化默认使用 `"volumetric"`。模式切换保留已有 haze 参数值。
 
@@ -224,6 +236,19 @@ fx.update({ volumetricLight: { mode: "legacy" } });  // 使用保留的旧参数
 ```
 
 示例 Godray 区域显示当前路径的控制项；`off` 禁用两组数值但保留它们的值。恢复默认值会读取完整内置预设，包括默认体积光模式。
+
+#### 性能与验证参考
+
+2026-10-18 的一次本机检查使用 RTX 3080、ANGLE/Direct3D11、1920 × 1080 绘图缓冲及 `balanced` 默认参数。演示日期为 2026-05-01，各时刻朝向太阳，并固定机位和天气。通过 `EXT_disjoint_timer_query_webgl2` 测量 64 组相邻配对帧，交替反转顺序并固定云重建相位；基线保留已分配目标，跳过新 pass 及其合成，disjoint 标记为 false。
+
+| 演示 UTC | 新增 GPU 耗时中位数 | 新增 GPU 耗时 P95 |
+| --- | --- | --- |
+| 10:30 | 1.621 ms | 1.989 ms |
+| 23:00 | 1.467 ms | 2.279 ms |
+
+新增纹理分配为 58,155,008 字节（55.46 MiB）：散射/深度/历史占 47.46 MiB，聚焦云影占 8 MiB。这是纹理分配统计，未独立测量驱动层总显存增量。上述结果只代表该设备和场景，不保证固定帧耗时；常规分批开启/关闭的差值有波动，因此采用逐帧配对 GPU 计时，没有用后台 FPS 代替。
+
+实现检查覆盖七项 WebGL2 MRT/像素读取场景：完整区间积分、太阳可见性为零时无直射底色、不透明与半透明前景云、地形裁剪、距离淡出及云可见性淡出。另检查了模式/质量切换、奇数尺寸视口、相机移动、穿越雾层和天气变化。连续五次开启/关闭中，50 张纹理和 20 个帧缓冲均创建/删除配对；这验证新路径的资源生命周期，不代表覆盖所有场景的长期显存测试。
 
 #### 旧 haze
 
@@ -260,6 +285,8 @@ Haze 还受相机高度淡出后的有效云覆盖度调制：覆盖度 ≤ 0.2 
 | `cloud.denoise.spatialFilterStrength` | number | `0.8` | 深度/透明度感知重建强度 [0, 1]；越大越平滑，也会损失更多细节。 |
 
 这些是基础控制值，渲染器还会根据历史帧数量、距离、相机运动和地形边界调整混合。增强历史依赖可以减少噪点，但可能增加滞后；增强空间过滤会柔化细节。SMAA 负责最终画面的边缘，不能替代云体时域重建。
+
+`cloud.denoise` 控制云的重建，也包含通过旧路径渲染的 haze。独立体积光使用自身的深度/亮度拒绝和自适应历史权重，这组云参数不控制其历史。
 
 ### HBAO
 
@@ -410,7 +437,9 @@ viewer.destroy();
 | --- | --- |
 | 启动时天空或云缺失、显示异常 | 检查 `/cesium/EffectPipelineAssets/GeospatialAssets/` 下 EXR/BIN 等资源请求、`CESIUM_BASE_URL`、目录大小写及 WebGL 能力；资源异步加载。 |
 | 拉远后云消失 | 检查 `cloud.altitudeFadeRange`，默认在相机椭球高度 90 km 时完全淡出；需要时可设为 `null`。 |
-| 穿云光很弱或看不到 | 检查 `volumetricLight.mode`、覆盖度、前两层密度/厚度及太阳与观察方向。volumetric 模式检查 `density`、`intensity`、`layerDepth` 和 `maxDistance`；legacy 模式检查 `cloud.hazeDensityScale` 及局部距离范围。 |
+| 穿云光很弱或看不到 | 检查 `volumetricLight.mode`、有效投影云层及太阳与观察方向。朝太阳或云隙观察，其他方向的散射自然较弱。volumetric 模式检查 `density`、`intensity`、`layerDepth` 和 `maxDistance`，天气孔洞不会关闭其介质；legacy 模式检查 `cloud.hazeDensityScale`、覆盖度门控和局部距离范围。 |
+| 空气大片泛白，光束轮廓不明显 | 先确认云分布形成了实际的亮区和暗带。减小 `density`、`layerDepth` 或 `maxDistance` 限制受影响空气，再单独调整 `intensity` 控制亮度。提高全局曝光/Bloom 会同时提亮其他效果，不能恢复缺失的阴影边界。 |
+| 太阳周围出现亮环或重影 | 这是镜头光晕，与云隙体积光束分别渲染；关闭体积光不会关闭镜头光晕。 |
 | 运动拖影或远景云噪点 | 小幅调整降噪权重，结合像素覆盖范围过滤/LOD，并避免持续重设云参数。 |
 | 第三层没有地面云影 | 默认阴影掩码只包含前两层。 |
 | 启动后 SMAA 没有立即生效 | 查找纹理异步加载，首个渲染帧不代表资源已经就绪。 |
