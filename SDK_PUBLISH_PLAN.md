@@ -34,8 +34,6 @@ pnpm add -E better-sky4cesium@0.1.0 cesium@1.142.0
 - 过渡期内按原条件免费；结束后，继续受影响的使用或分发须另获授权，否则停止相应用途。公告不自动产生付款义务，此前合法试用不追溯收费；仅公布价格而未履行上述通知流程不结束试用。
 - 可对未来新授权、续期、新版本、更新或支持收费，也可单独授予零费用授权。书面授权应明确主体、版本、项目/应用范围、部署与交付权限、期限和费用；已有单独授权按原约定执行，不因试用转收费而被追溯改价。历史 MIT 副本的既有权利和第三方许可不因本次变更而撤回。
 - 当前不增加激活、联网校验、远程禁用或收费代码。首版由书面授权管理使用范围，付款与授权流程在 npm 之外处理。
-- 现成的 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) 不直接允许所有商业生产用途，还带有机构豁免；[PolyForm Free Trial](https://polyformproject.org/licenses/free-trial/1.0.0) 只允许少于 32 个连续日历日的评估，且不允许分发副本；[PolyForm Countdown](https://polyformproject.org/licenses/countdown/1.0.0) 要预先指定生效日期。它们均不原样满足“所有人暂时免费试用、可生产上线、未来时间未定、提前通知后转单独授权”的完整规则，因此使用上述专有试用许可，不冒用标准许可名称或 SPDX 标识。
-- 正式发布前复核权利归属，并对商业许可文本做法律审阅。接收外部贡献前取得足够的商业再授权权利；维护仓库或合并 PR 本身不等于取得贡献者的版权。
 
 ## 包结构与依赖
 
@@ -56,8 +54,8 @@ pnpm add -E better-sky4cesium@0.1.0 cesium@1.142.0
 ```text
 package/
   package.json
-  README.md                 # 来自 START.md，npm 页面默认展示
-  README.zh-CN.md            # 来自 START.zh-CN.md
+  README.md                 # 仓库英文 README，npm 页面默认展示
+  README.zh-CN.md            # 仓库中文 README
   LICENSE
   THIRD_PARTY_NOTICES.md
   dist/
@@ -75,8 +73,9 @@ package/
 - `files` 明确列出 `dist/index.js`、`dist/index.d.ts`、`dist/assets/`、两份 README、`LICENSE` 和 `THIRD_PARTY_NOTICES.md`，不使用仓库根 `*` 或宽泛的 `dist/**` 代替产物清单。`package.json` 等 npm 默认收录文件也必须审查，不能只依赖白名单字段。
 - `exports["."]` 的 `types` 指向 `./dist/index.d.ts`、`import` 指向 `./dist/index.js`；顶层 `types` 保持一致。仅提供 ESM；保留 `EffectPipeline` 具名与默认导出，不公开内部模块入口。资源复制示例直接使用文件系统路径，不依赖未导出的 `package.json` 子路径。
 - 资源目录另设逐文件清单，包含路径、用途、来源/许可与内容哈希；根据运行依赖审查 `static/EffectPipelineAssets/`，保留所支持效果需要的文件与目录层级。当前目录有 17 个文件，但数量不是永久白名单，未确认用途或分发权的文件不得进入发布目录。
-- 明确排除 `EffectPipeline.js`、`Library/`、原始 `.glsl` / `.vert` / `.frag` 文件、未混淆 JS、内部类型、所有 `.map` / `.d.ts.map`、源码归档、demo/HTML/截图、`static/` 原目录、`public/`、`.env*`（含示例）、token、配置/锁文件、构建脚本、测试、`.git/`、`.codegraph/`、编辑器/代理数据及 `SDK_PUBLISH_PLAN.md`。
+- 明确排除 `EffectPipeline.js`、`Library/`、原始 `.glsl` / `.vert` / `.frag` 文件、未混淆 JS、内部类型、所有 `.map` / `.d.ts.map`、源码归档、demo/HTML/截图、`static/` 原目录、`public/`、`.env*`（含示例）、token、配置/锁文件、构建脚本、测试、`.git/`、`.codegraph/`、编辑器/代理数据、`SDK_PUBLISH_PLAN.md`、`EffectPipeline.README.md` 及 `EffectPipeline.README.zh-CN.md`。两份 EffectPipeline 文档是仓库内部的原理与 API 参考，不随包分发。
 - 从空的 `.sdk-package/` 组装，完成后校验实际压缩包的每一个条目；出现白名单之外的文件就中止。Cesium/three 本体通过依赖安装，不把仓库 `node_modules/` 或 Cesium 的整套构建文件复制进 SDK 包。
+- 不要把仓库中的原理说明文档发布出去，不要发布与使用该sdk插件不相关的文件
 
 ## 编译、混淆与源码保护
 
@@ -94,7 +93,7 @@ package/
 - 保留 `EffectPipeline` 具名及默认导出、现有配置和方法。
 - 直接保留现有 `buildModuleUrl('EffectPipelineAssets/...')` 资源定位，统一依赖宿主配置的 `CESIUM_BASE_URL`；效果资源放在该根目录下的 `EffectPipelineAssets/`，不新增资源基址参数或另一套路径解析逻辑。
 - 将核实后的运行所需资源从 `static/EffectPipelineAssets/` 放入 `dist/assets/`，保持资源根内的相对目录结构。JS 与资源随同一个 `.tgz`、同一个版本上传 npm；不另设未经确认的 CDN 上传步骤，不在安装时下载外部默认纹理。
-- 使用文档提供从 `node_modules/better-sky4cesium/dist/assets/` 复制全部内容到 `public/cesium/EffectPipelineAssets/` 的命令，以及可选的 `vite-plugin-static-copy` 示例。这里以宿主 `CESIUM_BASE_URL='/cesium/'` 为例；已有其他 Cesium 资源根目录时，将 `EffectPipelineAssets/` 放到那个根目录下即可。不得硬编码 `.pnpm` 存储路径或依赖提升。
+- README 提供从 `node_modules/better-sky4cesium/dist/assets/` 复制全部内容到 `public/cesium/EffectPipelineAssets/` 的路径表和 Node.js 命令。这里以宿主 `CESIUM_BASE_URL='/cesium/'` 为例；已有其他 Cesium 资源根目录时，将 `EffectPipelineAssets/` 放到那个根目录下即可。不得硬编码 `.pnpm` 存储路径或依赖提升。
 - Cesium 官方资源与插件效果资源共用宿主的 `CESIUM_BASE_URL`；SDK 不覆盖该配置，构建 SDK 时也不能把 demo 的 `/cesium/` 固化进库产物。
 - 限制同页一个活动实例，第二实例在改变场景前报错，销毁后允许重建。
 - 修复影响单实例生命周期的异步加载后销毁、SMAA 重复加载及实例拥有的阴影和纹理资源释放问题。
@@ -102,7 +101,7 @@ package/
 - 保留当前场景设置行为，说明时钟、HDR 等影响及销毁恢复范围。
 - 保留源码内的原始通知，发布包附上 [第三方代码及许可](THIRD_PARTY_NOTICES.md) 中合并的必要声明。该清单只列已确认的复用关系，不列推测来源。MIT/BSD/Apache 代码按原条款用于闭源商业产品，不要求公开整个 SDK 或业务项目源码；本项目的收费条款不改变这些第三方材料的原有许可。
 - Cesium/three 作为外部依赖时由依赖包携带各自的完整许可，不在本 SDK 重复附上整份依赖 SDK 的许可合集；本地直接复用的 Cesium 后处理代码和 three.js loader/CSM 代码仍在合并声明中保留其适用通知。若另行复制依赖的构建产物或资源，则随该次分发保留对应通知。
-- 更新中英文文档，英文默认，并列提供 npm、pnpm 安装命令；项目首页介绍能力，包内 Quick Start 说明安装、资源部署和最小 API 用法，源码使用文档继续描述当前仓库流程。
+- 中英文 README 合并项目简介、亮点、安装使用和许可，英文默认，并列提供 npm、pnpm 安装命令；原理、详细 API 和源码开发流程放在不发布的 `EffectPipeline.README.md` 及中文版。
 
 包发布并验收后，直接使用现有初始化方式：
 
@@ -129,15 +128,15 @@ effects.dispose()
 
 宿主配置 `CESIUM_BASE_URL='/cesium/'` 后，示例请求为 `/cesium/EffectPipelineAssets/snowCoverMask.png` 和 `/cesium/EffectPipelineAssets/GeospatialAssets/local_weather.png`。插件无需额外 URL 配置。不要把磁盘路径 `node_modules/...` 当作浏览器 URL。
 
-部署到 `/app/` 时，宿主将 `CESIUM_BASE_URL` 配成 `/app/cesium/`，插件资源自动位于 `/app/cesium/EffectPipelineAssets/`；接入项目的构建 `base` 和实际服务目录同步设置。完整命令和配置见 [Quick Start](START.md) / [快速开始](START.zh-CN.md)。升级 SDK 后同步替换 `EffectPipelineAssets/` 内资源并刷新缓存，不能混用不同版本的 JS 与纹理。
+部署到 `/app/` 时，宿主将 `CESIUM_BASE_URL` 配成 `/app/cesium/`，插件资源自动位于 `/app/cesium/EffectPipelineAssets/`；接入项目的构建 `base` 和实际服务目录同步设置。完整命令和配置见 [README 使用说明](README.md#usage) / [中文使用说明](README.zh-CN.md#使用)。升级 SDK 后同步替换 `EffectPipelineAssets/` 内资源并刷新缓存，不能混用不同版本的 JS 与纹理。
 
-## Quick Start 与文档交付
+## README 与文档交付
 
-- 本轮新增 [START.md](START.md) 和 [START.zh-CN.md](START.zh-CN.md)，明确标为“待实施的 npm SDK 接入说明”。内容包含环境要求、npm/pnpm 安装、从 `node_modules` 复制资源、根路径/子路径配置、初始化、更新、开关、销毁顺序和常见问题；当前不声称安装或运行已验证。
-- 后续组装发布目录时，将这两份文件分别作为包根 `README.md` / `README.zh-CN.md`，同步改写语言切换链接。完成实施和验收后再更新待实施标记；发布包不得保留错误的“已验证”或过期的草案状态。
-- npm 页面展示的是发布包根 README，因此 Quick Start 必须直接进入该文件，不能只放在源码仓库的 `START.md`。英文 README 直接提供 npm 和 pnpm 两种用法；中文版本随包交付，至少可在安装后的 `node_modules/better-sky4cesium/README.zh-CN.md` 查看。
+- 将原有 START 内容合并进 [README.md](README.md) 和 [README.zh-CN.md](README.zh-CN.md)，移除两份 START，不再维护单独的快速开始文档。README 只保留项目简介、项目亮点、如何使用与许可；使用部分包含兼容要求、npm/pnpm 安装、资源复制、`CESIUM_BASE_URL` 配置、最小接入与销毁示例。
+- 后续组装发布目录时，直接复制仓库的两份 README 到包根，不再通过 START 生成 README。完成实施和验收后再更新待实施标记；发布包不得保留错误的“已验证”或过期草案状态。
+- npm 页面直接展示发布包根 `README.md`，其中完整提供 npm 和 pnpm 两种接入用法；中文版本随包交付，安装后可在 `node_modules/better-sky4cesium/README.zh-CN.md` 查看。
 - 检查 npm 页面上的语言切换、许可和支持链接；公开页面不得指向私有仓库或不存在的源码文件。若 npm 不能正确解析包内相对链接，发布前改成已验证可访问的公开文档地址，并保持本地包内文档可读；不能为此开放源码仓库。
-- 仓库 `README.md` / `README.zh-CN.md` 仍作项目介绍；`EffectPipeline.README.md` / 中文版仍作当前源码与 API 说明。这四份文档只补目标 SDK 的状态和入口，不直接复制进发布包，避免 demo、源码链接和仓库命令误导安装者。
+- 渲染原理、实现细节、源码导览、完整 API 和仓库开发流程保留在 `EffectPipeline.README.md` / 中文版，明确不进入发布白名单。发布 README 不链接这些内部文档、源码、demo 或发布计划，避免无效私有链接和多余文件进入包。
 
 ## 验收与发布
 

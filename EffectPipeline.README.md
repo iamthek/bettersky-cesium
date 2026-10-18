@@ -1,10 +1,10 @@
-# EffectPipeline Usage Guide
+# EffectPipeline Rendering and API Reference
 
 **English** | [简体中文](EffectPipeline.README.zh-CN.md) · [Project overview](README.md)
 
-This guide covers running the demo, adding EffectPipeline to an existing Cesium scene, configuring effects and managing its lifecycle.
+This repository-only reference covers rendering principles, the demo and source integration, configuration and lifecycle management. It is not included in the npm package.
 
-For the planned npm/pnpm package, see [SDK Quick Start](START.md). This CesiumJS plugin uses the host's existing `CESIUM_BASE_URL`; copy the bundled assets from `node_modules` into `EffectPipelineAssets/` under that Cesium asset root. SDK packaging and these examples are pending release verification. This guide describes the current source/demo workflow; its repository-copy instructions do not describe the future npm package contents.
+For the planned npm/pnpm package, see [Usage](README.md#usage). This CesiumJS plugin uses the host's existing `CESIUM_BASE_URL`; copy the bundled assets from `node_modules` into `EffectPipelineAssets/` under that Cesium asset root. SDK packaging and these examples are pending release verification. The source-copy instructions below describe the current repository workflow, rather than the future npm package contents.
 
 ## Requirements
 
@@ -18,6 +18,52 @@ For the planned npm/pnpm package, see [SDK Quick Start](START.md). This CesiumJS
 | Browser / GPU | Modern browser with WebGL 2, 3D/array textures and floating-point render targets; native `Float16Array` and `structuredClone` are also required |
 
 Use one EffectPipeline instance with one Viewer and a globe in 3D perspective mode. Renderer internals are version-sensitive; verify compatibility when changing Cesium versions.
+
+SSR and SSS are outside the supported EffectPipeline feature set.
+
+## Rendering capabilities
+
+| Capability | What it adds |
+| --- | --- |
+| Volumetric clouds | Ray-marched cloud layers around the globe, procedural 3D shape/detail textures, weather-map advection, self-shadowing and sky/ground fill light. |
+| Atmosphere and celestial lighting | Precomputed scattering and transmittance lookups for sky color, atmospheric perspective, sunlight, moon rendering and procedural night stars. |
+| Volumetric light | Sunlight shafts in a thin medium below the lowest active shadow-casting cloud base. Density fades toward the lower boundary, while focused cloud-shadow visibility shapes light through cloud gaps. |
+| Ground cloud shadows | Cascaded cloud shadow maps project moving cloud cover onto scene surfaces. The first two cloud layers cast shadows by default. |
+| Bloom and lens flare | HDR bright-region extraction, a downsample/upsample chain, blur, ghosts and halos. |
+| Tone mapping | ACES, AgX, Neutral, Linear, Reinhard, Reinhard2, Uncharted2 and Cineon curves, with exposure and separate ground-light controls. |
+| HBAO | Depth-based ambient occlusion with bilateral filtering for terrain and geometry contact shading. Optional and enabled by default. |
+| SMAA | Three-pass morphological antialiasing applied after sky composition. Optional and enabled by default. |
+| Pass-level extensions | Optional surface snow cover and rain/flash overlays through the underlying pass; disabled by default. |
+
+See [Volumetric light and legacy haze](#volumetric-light-and-legacy-haze) for the default independent light path and its mutually exclusive `legacy` and `off` modes.
+
+## Rendering optimizations
+
+| Area | Implementation and purpose |
+| --- | --- |
+| Cloud sampling cost | Clouds render at `ceil(width / 4) × ceil(height / 4)`, then reconstruct at full resolution using a 16-phase Bayer sequence. This reduces the number of primary cloud pixels to approximately 1/16 of the drawing buffer. |
+| Work inside cloud layers | Rays intersect, sort and merge active spherical cloud-layer intervals. Marching skips gaps between layers, adapts step sizes and stops when transmittance becomes sufficiently low. |
+| Distant cloud detail | Screen-footprint mip selection, continuous detail fading and deterministic secondary-light sampling reduce unresolved detail and frame-to-frame changes. |
+| Cloud temporal stability | Motion reprojection, variance clipping, depth/opacity checks and camera-dependent blending balance stationary noise reduction against moving-camera ghosting. Major camera, projection, lighting and cloud-configuration changes invalidate history. |
+| Terrain silhouettes and distance precision | Cloud reconstruction consults full-resolution scene depth at terrain boundaries. Cloud depth/velocity buffers use 32-bit floats to avoid the 65,504 limit of half-float distance storage. |
+| Stable, softer cloud shadows | Shadow-footprint filtering and temporal accumulation stabilize the maps. Ground shading uses fixed-pattern PCF that averages transmitted light, plus cascade blending and a fill-light floor to soften mixed shadow edges. |
+| Independent volumetric light | A separate sampling budget, focused cloud-shadow map and temporal history handle local shafts. Full-resolution terrain and cloud-front depths guide reconstruction; see [Independent volumetric light](#independent-volumetric-light) for medium coverage, quality budgets and edge handling. |
+| High-altitude views | Clouds, their shadows and associated light fade together between 30 km and 90 km camera ellipsoid height by default. Fully faded views skip cloud and shadow draw calls. |
+| Atmosphere and bloom | Precomputed atmosphere textures supply scattering data; bloom processes a progressively smaller image pyramid before composition. |
+
+The 1/16 figure describes cloud sampling resolution, not an overall frame-rate multiplier. Actual performance depends on the GPU, drawing-buffer size, view and enabled effects. The demo's separate drawing-buffer cap is described in [Run the demo](#run-the-demo); measured volumetric-light costs are in [Performance and validation reference](#performance-and-validation-reference).
+
+## How the pipeline fits together
+
+```text
+Cesium scene color + depth
+  → HBAO (optional)
+  → atmosphere + volumetric clouds + cloud shadows + volumetric light
+  → bloom / lens flare + tone mapping
+  → SMAA (optional)
+```
+
+The SDK registers stages in `scene.postProcessStages` and updates lighting, weather motion and offscreen passes through `scene.preRender`.
 
 ## Run the demo
 
@@ -448,4 +494,11 @@ The implementation adds context helpers, uses selected Cesium renderer internals
 | Sun is frozen but clouds keep moving | Pause weather motion separately from the Viewer clock. |
 | Terrain or imagery is unavailable | Check the demo credentials; empty credentials intentionally select the local imagery/ellipsoid fallbacks. |
 
-For feature explanations and rendering mechanisms, return to the [project overview](README.md).
+## Explore the implementation
+
+- [EffectPipeline.js](EffectPipeline.js): public API, defaults, validation and updates.
+- [GeospatialPipelinePass.js](Library/GeospatialPipelinePass.js): scene integration, atmosphere and composition.
+- [CloudsMaterialPass.js](Library/geospatial/CloudsMaterialPass.js): cloud/light integration and temporal reconstruction.
+- [VolumetricLightPass.js](Library/geospatial/VolumetricLightPass.js) and [FocusedCloudShadowPass.js](Library/geospatial/FocusedCloudShadowPass.js): independent local volumetric light, temporal history and focused sunlight visibility.
+- [Volumetric-light shaders](Library/shaders/geospatial/volumetricLight.frag.glsl), [temporal resolve](Library/shaders/geospatial/volumetricLightResolve.frag.glsl) and [composition](Library/shaders/geospatial/volumetricLightComposite.glsl): medium integration, centroid reprojection and cloud/terrain edge handling.
+- [ShadowMaterialPass.js](Library/geospatial/ShadowMaterialPass.js) and [AerialPerspectiveEffect.js](Library/geospatial/AerialPerspectiveEffect.js): cloud shadow generation and application.

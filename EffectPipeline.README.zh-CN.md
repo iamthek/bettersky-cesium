@@ -1,10 +1,10 @@
-# EffectPipeline 使用说明
+# EffectPipeline 渲染原理与 API 参考
 
 [English](EffectPipeline.README.md) | **简体中文** · [项目介绍](README.zh-CN.md)
 
-本文介绍如何运行示例、接入已有 Cesium 场景、配置效果及管理生命周期。
+本文是仓库内参考文档，介绍渲染原理、示例与源码接入、参数配置及生命周期管理，不随 npm 包发布。
 
-计划中的 npm/pnpm 包接入见 [SDK 快速开始](START.zh-CN.md)。SDK 作为 CesiumJS 插件，直接使用宿主已有的 `CESIUM_BASE_URL`，将 `node_modules` 中的随包资源复制到该 Cesium 资源根目录下的 `EffectPipelineAssets/` 即可。SDK 打包与这些示例尚待发布验收。本文仍描述当前源码/示例流程，其中复制仓库源码的步骤不代表未来 npm 包的内容。
+计划中的 npm/pnpm 包接入见[使用](README.zh-CN.md#使用)。SDK 作为 CesiumJS 插件，直接使用宿主已有的 `CESIUM_BASE_URL`，将 `node_modules` 中的随包资源复制到该 Cesium 资源根目录下的 `EffectPipelineAssets/` 即可。SDK 打包与这些示例尚待发布验收。下文复制源码的步骤描述当前仓库流程，不代表未来 npm 包的内容。
 
 ## 环境要求
 
@@ -18,6 +18,52 @@
 | 浏览器 / GPU | 支持 WebGL 2、三维/数组纹理、浮点渲染目标的现代浏览器，同时需要原生 `Float16Array` 和 `structuredClone` |
 
 使用一个 EffectPipeline 实例管理一个包含地球的 Viewer，目标场景为三维透视模式。渲染器内部接口对版本敏感，更换 Cesium 版本需要验证兼容性。
+
+SSR 和 SSS 不属于 EffectPipeline 当前支持的功能。
+
+## 渲染功能
+
+| 功能 | 效果说明 |
+| --- | --- |
+| 体积云 | 沿球形云层进行光线步进，结合三维云形与细节纹理、天气图移动、云体自阴影及天空/地面补光。 |
+| 大气与天体光照 | 使用预计算散射和透射率查找表，表现天空颜色、大气透视、日光、月亮及程序生成的夜间星点。 |
+| 体积光 | 在最低有效投影云层的云底下方，用薄层介质表现太阳光束；介质密度向下边界平滑淡出，聚焦云影的日光可见性塑造穿过云隙的光照。 |
+| 地面云影 | 使用级联云影贴图，将随天气移动的云影投射到场景表面；默认由前两层云投射阴影。 |
+| 泛光与镜头光晕 | HDR 亮部提取、降采样/升采样链、模糊、镜头鬼影与光环。 |
+| 色调映射 | 支持 ACES、AgX、Neutral、Linear、Reinhard、Reinhard2、Uncharted2 和 Cineon，并提供曝光及独立地表光照调节。 |
+| HBAO | 基于深度的环境光遮蔽，结合双边滤波增强地形及几何接触处的阴影；可选，默认开启。 |
+| SMAA | 在天空合成后执行三道形态学抗锯齿处理；可选，默认开启。 |
+| 底层扩展效果 | 可通过底层 pass 开启表面积雪覆盖和雨条纹/闪光叠加，默认关闭。 |
+
+默认的独立体积光路径，以及与其互斥的 `legacy`、`off` 模式，见[体积光与旧 haze](#体积光与旧-haze)。
+
+## 渲染优化
+
+| 优化方向 | 实现机制与作用 |
+| --- | --- |
+| 云体采样成本 | 云体以 `ceil(width / 4) × ceil(height / 4)` 计算，通过 16 相位 Bayer 序列重建至全分辨率，主云体采样像素数约为绘制缓冲的 1/16。 |
+| 云层内有效采样 | 对有效球形云层的射线交段排序、合并，跳过云层间空隙；自适应调整步长，并在透射率足够低时提前结束。 |
+| 远景云细节 | 根据屏幕像素覆盖范围选择纹理 mip，连续淡出细节，并采用确定性的次级光照采样，减少无法分辨的细节与帧间跳变。 |
+| 云体时域稳定性 | 使用运动重投影、方差裁剪、深度/透明度检查及相机运动感知混合，平衡静止降噪与运动拖影；相机、投影、光照或云参数发生重要变化时清除历史。 |
+| 地形轮廓与距离精度 | 云重建在地形边缘参考全分辨率场景深度；云深度/速度缓冲使用 32 位浮点，避免半精度距离存储的 65,504 上限。 |
+| 云影稳定与柔化 | 结合阴影像素覆盖范围过滤和时域积累；地表着色采用固定采样方向的透射率 PCF、级联混合及最低补光，缓和阴影交界的过黑与跳动。 |
+| 独立体积光 | 使用独立采样预算、聚焦云影图及其时域历史表现局部光束，结合全分辨率地形深度与云前沿深度进行重建；介质范围、质量预算及边缘处理见[独立体积光](#独立体积光)。 |
+| 高空场景 | 默认在相机椭球高度 30–90 km 之间联动淡出云、云影与相关光束；完全淡出后跳过云体和云影绘制。 |
+| 大气与泛光 | 大气散射数据来自预计算纹理；泛光先处理逐级缩小的图像金字塔，再完成合成。 |
+
+1/16 指云体采样分辨率比例，不代表整体帧率提升倍数。实际性能取决于 GPU、绘制缓冲大小、观察视角及开启的效果。示例独立设置的绘制缓冲上限见[运行示例](#运行示例)，体积光的实测开销见[性能与验证参考](#性能与验证参考)。
+
+## 管线如何协作
+
+```text
+Cesium 场景颜色 + 深度
+  → HBAO（可选）
+  → 大气 + 体积云 + 云影 + 体积光
+  → 泛光 / 镜头光晕 + 色调映射
+  → SMAA（可选）
+```
+
+SDK 将渲染阶段接入 `scene.postProcessStages`，通过 `scene.preRender` 更新光照、天气移动及离屏处理。
 
 ## 运行示例
 
@@ -448,4 +494,11 @@ viewer.destroy();
 | 太阳时间暂停但云还在移动 | 天气移动需要与 Viewer 时钟分别控制。 |
 | 地形或影像不可用 | 检查示例凭据；凭据留空时会按设计使用本地底图/椭球地形。 |
 
-功能与渲染机制介绍见[项目介绍](README.zh-CN.md)。
+## 源码导览
+
+- [EffectPipeline.js](EffectPipeline.js)：公开 API、默认值、参数校验与更新。
+- [GeospatialPipelinePass.js](Library/GeospatialPipelinePass.js)：场景接入、大气与效果合成。
+- [CloudsMaterialPass.js](Library/geospatial/CloudsMaterialPass.js)：云体/光照积分与时域重建。
+- [VolumetricLightPass.js](Library/geospatial/VolumetricLightPass.js) 和 [FocusedCloudShadowPass.js](Library/geospatial/FocusedCloudShadowPass.js)：独立局部体积光、时域历史与聚焦日光可见性。
+- [体积光着色器](Library/shaders/geospatial/volumetricLight.frag.glsl)、[时域重建](Library/shaders/geospatial/volumetricLightResolve.frag.glsl)与[合成](Library/shaders/geospatial/volumetricLightComposite.glsl)：介质积分、质心重投影及云/地形边缘处理。
+- [ShadowMaterialPass.js](Library/geospatial/ShadowMaterialPass.js) 和 [AerialPerspectiveEffect.js](Library/geospatial/AerialPerspectiveEffect.js)：云影生成与应用。

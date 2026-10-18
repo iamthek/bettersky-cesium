@@ -2,86 +2,95 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**EffectPipeline** is the sky rendering pipeline in BetterSky4Cesium, a visual effects SDK used as a CesiumJS plugin. It brings layered volumetric clouds, atmospheric scattering, cloud shadows, volumetric light and image enhancement into one configurable pipeline for 3D globe scenes. Plugin assets use the host's `CESIUM_BASE_URL`, under `EffectPipelineAssets/`.
-
-[Usage guide](EffectPipeline.README.md) · [Demo source](demo-official.js)
-
-**Planned npm SDK:** [Quick Start for npm and pnpm](START.md). Packaging, obfuscation and bundled-asset deployment are not implemented or release-validated yet; the [SDK publishing plan](SDK_PUBLISH_PLAN.md) defines the intended delivery. The current source/demo workflow remains in the usage guide.
+BetterSky4Cesium is a CesiumJS visual effects plugin. Its **EffectPipeline** adds volumetric clouds, atmosphere, cloud shadows, volumetric light and image enhancement to an existing 3D globe scene.
 
 ## Highlights
 
-- **A connected sky and landscape.** Clouds, sunlight, atmospheric perspective and ground cloud shadows share the same scene, depth and lighting information.
-- **Three independently shaped cloud layers.** Combine cumulus, altocumulus and cirrus, with separate altitude, thickness, density and erosion controls.
-- **Local sunlight shafts with an independent budget.** A dedicated volumetric-light pass integrates thin air below cloud bases, with focused cloud shadows, its own temporal history and terrain-aware composition.
-- **Stability from nearby terrain to distant horizons.** Temporal reconstruction, terrain-aware cloud edges and continuous detail filtering address noise, ghosting and distant shimmer.
-- **A controllable rendering budget.** Distance LOD, bounded light integration, optional HBAO/SMAA and altitude-based fading provide practical quality controls.
-- **One configuration API.** Built-in presets, partial updates and runtime switches are available through `EffectPipeline`. The demo exposes parameters, inline explanations and a timeline.
+- Layered volumetric clouds with configurable shape, altitude, coverage and motion.
+- Atmospheric scattering, moving cloud shadows and sunlight shafts in one scene.
+- Bloom, lens flare, tone mapping and optional HBAO/SMAA.
+- Built-in presets, partial parameter updates and runtime switches through one API.
 
-## What it renders
+## Usage
 
-| Capability | What it adds |
-| --- | --- |
-| Volumetric clouds | Ray-marched cloud layers around the globe, procedural 3D shape/detail textures, weather-map advection, self-shadowing and sky/ground fill light. |
-| Atmosphere and celestial lighting | Precomputed scattering and transmittance lookups for sky color, atmospheric perspective, sunlight, moon rendering and procedural night stars. |
-| Volumetric light | Sunlight shafts in a thin medium below the lowest active shadow-casting cloud base. Density fades toward the lower boundary, while focused cloud-shadow visibility shapes light through cloud gaps. |
-| Ground cloud shadows | Cascaded cloud shadow maps project moving cloud cover onto scene surfaces. The first two cloud layers cast shadows by default. |
-| Bloom and lens flare | HDR bright-region extraction, a downsample/upsample chain, blur, ghosts and halos. |
-| Tone mapping | ACES, AgX, Neutral, Linear, Reinhard, Reinhard2, Uncharted2 and Cineon curves, with exposure and separate ground-light controls. |
-| HBAO | Depth-based ambient occlusion with bilateral filtering for terrain and geometry contact shading. Optional and enabled by default. |
-| SMAA | Three-pass morphological antialiasing applied after sky composition. Optional and enabled by default. |
-| Pass-level extensions | Optional surface snow cover and rain/flash overlays through the underlying pass; disabled by default. |
+> npm SDK packaging and release verification are pending. The package name/version below are provisional; these commands do not indicate that `0.1.0` is available yet.
 
-The independent `volumetric` light mode is enabled by default. Mutually exclusive `legacy` and `off` modes retain the existing `cloud.haze*` local/exponential medium or disable both additional volumetric-light paths. Existing haze options remain compatible through legacy mode.
+Use Cesium **1.142.0**, a browser bundler and one active EffectPipeline/Viewer per page. The browser/GPU must support WebGL 2, 3D/array textures, the required floating-point render targets, native `Float16Array` and `structuredClone`.
 
-## Rendering optimizations
+### Install
 
-| Area | Implementation and purpose |
-| --- | --- |
-| Cloud sampling cost | Clouds render at `ceil(width / 4) × ceil(height / 4)`, then reconstruct at full resolution using a 16-phase Bayer sequence. This reduces the number of primary cloud pixels to approximately 1/16 of the drawing buffer. |
-| Work inside cloud layers | Rays intersect, sort and merge active spherical cloud-layer intervals. Marching skips gaps between layers, adapts step sizes and stops when transmittance becomes sufficiently low. |
-| Distant cloud detail | Screen-footprint mip selection, continuous detail fading and deterministic secondary-light sampling reduce unresolved detail and frame-to-frame changes. |
-| Cloud temporal stability | Motion reprojection, variance clipping, depth/opacity checks and camera-dependent blending balance stationary noise reduction against moving-camera ghosting. Major camera, projection, lighting and cloud-configuration changes invalidate history. |
-| Terrain silhouettes and distance precision | Cloud reconstruction consults full-resolution scene depth at terrain boundaries. Cloud depth/velocity buffers use 32-bit floats to avoid the 65,504 limit of half-float distance storage. |
-| Stable, softer cloud shadows | Shadow-footprint filtering and temporal accumulation stabilize the maps. Ground shading uses fixed-pattern PCF that averages transmitted light, plus cascade blending and a fill-light floor to soften mixed shadow edges. |
-| Independent volumetric-light sampling | Balanced quality uses half-resolution targets and 48 integration steps; low uses quarter resolution and 24 steps, and high uses half resolution and 64 steps. It uses its own per-pixel, per-frame jitter independently of the clouds' 16-phase Bayer reconstruction. |
-| Local medium coverage | The medium follows the lowest active shadow-casting cloud base and fades toward its lower boundary. Weather holes do not gate its density. All valid spherical-layer intervals are integrated within the default 16 km view range, clipped by terrain and the planet, with a smooth fade near the range boundary. |
-| Focused light visibility | A dedicated cloud-shadow map uses 512/1024/2048 pixels per side for low/balanced/high quality. Its projection aligns to world-space texels, and filtering follows the solar penumbra. It shares cloud density with ground shadows while keeping its projection and resources independent. |
-| Volumetric-light history and edges | A separate history reprojects the scattering radiance centroid and rejects incompatible terrain, cloud and lighting samples. Fog integrals in front of and behind the cloud front are reconstructed using full-resolution terrain depth and cloud-front depth before cloud composition. |
-| High-altitude views | Clouds, their shadows and associated light fade together between 30 km and 90 km camera ellipsoid height by default. Fully faded views skip cloud and shadow draw calls. |
-| Atmosphere and bloom | Precomputed atmosphere textures supply scattering data; bloom processes a progressively smaller image pyramid before composition. |
-| Large demo windows | The demo caps the drawing buffer at approximately four million pixels through `viewer.resolutionScale`. This is a demo policy, separate from the SDK's cloud sampling strategy. |
+After release, choose npm or pnpm in the consuming application's directory:
 
-The 1/16 figure describes cloud sampling resolution, not an overall frame-rate multiplier. Actual performance depends on the GPU, drawing-buffer size, view and enabled effects.
-
-## How the pipeline fits together
-
-```text
-Cesium scene color + depth
-  → HBAO (optional)
-  → atmosphere + volumetric clouds + cloud shadows + volumetric light
-  → bloom / lens flare + tone mapping
-  → SMAA (optional)
+```bash
+npm install --save-exact better-sky4cesium@0.1.0 cesium@1.142.0
 ```
 
-The SDK registers stages in `scene.postProcessStages` and updates lighting, weather motion and offscreen passes through `scene.preRender`.
+```bash
+pnpm add -E better-sky4cesium@0.1.0 cesium@1.142.0
+```
 
-## Integration scope
+Both install the same package. Cesium is shared with the application; three is installed automatically as a runtime dependency.
 
-The current implementation targets a single Cesium Viewer with a globe and a 3D perspective camera. It uses WebGL 2 features, floating-point render targets and Cesium renderer internals. The repository locks Cesium to **1.142.0** and three to **0.160.1**; other Cesium versions need compatibility verification.
+### Copy assets
 
-SSR and SSS are outside the supported EffectPipeline feature set. For installation, static assets, all public options, scene side effects and lifecycle handling, see the [usage guide](EffectPipeline.README.md).
+The plugin uses the host's **`CESIUM_BASE_URL`**. Copy the contents of `node_modules/better-sky4cesium/dist/assets/` into **`EffectPipelineAssets/` under that Cesium asset root**. For `CESIUM_BASE_URL='/cesium/'` in a Vite application:
 
-## Explore the implementation
+| Source | Destination |
+| --- | --- |
+| `node_modules/better-sky4cesium/dist/assets/` contents | `public/cesium/EffectPipelineAssets/` |
+| SDK `LICENSE` and `THIRD_PARTY_NOTICES.md` | `public/cesium/EffectPipelineAssets/` |
+| Cesium's `Workers/`, `Assets/`, `ThirdParty/`, `Widgets/` | Keep the application's existing copies under `public/cesium/` |
 
-- [EffectPipeline.js](EffectPipeline.js): public API, defaults, validation and updates.
-- [GeospatialPipelinePass.js](Library/GeospatialPipelinePass.js): scene integration, atmosphere and composition.
-- [CloudsMaterialPass.js](Library/geospatial/CloudsMaterialPass.js): cloud/light integration and temporal reconstruction.
-- [VolumetricLightPass.js](Library/geospatial/VolumetricLightPass.js) and [FocusedCloudShadowPass.js](Library/geospatial/FocusedCloudShadowPass.js): independent local volumetric light, temporal history and focused sunlight visibility.
-- [Volumetric-light shaders](Library/shaders/geospatial/volumetricLight.frag.glsl), [temporal resolve](Library/shaders/geospatial/volumetricLightResolve.frag.glsl) and [composition](Library/shaders/geospatial/volumetricLightComposite.glsl): medium integration, centroid reprojection and cloud/terrain edge handling.
-- [ShadowMaterialPass.js](Library/geospatial/ShadowMaterialPass.js) and [AerialPerspectiveEffect.js](Library/geospatial/AerialPerspectiveEffect.js): cloud shadow generation and application.
+For example, run this from the application directory with Node.js 22 or newer:
+
+```bash
+node --input-type=module -e "import { cpSync } from 'node:fs'; cpSync('node_modules/better-sky4cesium/dist/assets', 'public/cesium/EffectPipelineAssets', { recursive: true }); for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync('node_modules/better-sky4cesium/' + file, 'public/cesium/EffectPipelineAssets/' + file);"
+```
+
+Keep `snowCoverMask.png` and `GeospatialAssets/` directly inside `EffectPipelineAssets/`; do not add an extra `assets/` level. npm and pnpm both use the paths above, without accessing `.pnpm/`. Repeat the copy before building in CI. On upgrade, replace only `EffectPipelineAssets/` and refresh cached assets so JavaScript and resources stay on the same version.
+
+Keep the application's existing Cesium asset configuration. If it is not set yet, this Vite example matches the paths above:
+
+```js
+import { defineConfig } from 'vite'
+
+export default defineConfig({
+  define: {
+    CESIUM_BASE_URL: JSON.stringify('/cesium/'),
+  },
+})
+```
+
+For a site hosted at `/app/`, use the matching application base and `CESIUM_BASE_URL='/app/cesium/'`. Plugin assets then load from `/app/cesium/EffectPipelineAssets/`. If Cesium resources are already hosted elsewhere, put `EffectPipelineAssets/` alongside their `Workers/` directory. No additional plugin asset URL is needed.
+
+### Attach to a Viewer
+
+After the application has created its Cesium `viewer` on the client:
+
+```js
+import 'cesium/Build/Cesium/Widgets/widgets.css'
+import { EffectPipeline } from 'better-sky4cesium'
+
+const effects = new EffectPipeline(viewer, {
+  time: undefined, // Preserve the application's current clock time.
+})
+
+effects.update({ coverage: 0.5 })
+effects.enabled = false
+effects.enabled = true
+```
+
+Keep rendering continuously for animated clouds. The pipeline applies scene settings such as HDR, gamma and logarithmic depth; disposal does not restore all settings. On page/component teardown, dispose of the effects before destroying the Viewer:
+
+```js
+effects.dispose()
+viewer.destroy()
+```
+
+If effects are missing, first check resource requests under `CESIUM_BASE_URL + 'EffectPipelineAssets/'`, the browser console and WebGL capabilities. Requests must return actual files rather than an HTML fallback.
 
 ## License
 
-[Proprietary trial license](LICENSE). All individuals and organizations may currently try the SDK at no charge, including in commercial projects and production deployments, without individual approval. The SDK and applications using it may remain closed source. There is no fixed charging date. The licensor may end the free trial for specified versions or uses with at least 30 calendar days' published notice; continued affected use then requires separate authorization, which may be paid. No fee is imposed retroactively on lawful trial use, and existing separate authorizations retain their agreed terms.
+[Proprietary trial license](LICENSE). All individuals and organizations may currently try the SDK at no charge, including commercial projects and production deployments, without individual approval. The SDK and applications using it may remain closed source. There is no fixed charging date. The licensor may end the free trial for specified versions or uses with at least 30 calendar days' published notice; continued affected use then requires separate authorization, which may be paid. Lawful trial use is not charged retroactively, and existing separate authorizations retain their agreed terms.
 
-Third-party materials retain their original licenses; see [third-party code and license terms](THIRD_PARTY_NOTICES.md).
+Permitted application distributions must include the license and [third-party notices](THIRD_PARTY_NOTICES.md), and inform recipients of the trial and future authorization conditions. Third-party materials retain their original terms; see the full license for distribution restrictions.
