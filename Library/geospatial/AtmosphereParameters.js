@@ -1,7 +1,4 @@
-import * as Cesium from "cesium";
-
-const Cartesian3 = Cesium.Cartesian3;
-const CesiumMath = Cesium.Math;
+import { Cartesian3, Math as CesiumMath } from "cesium";
 const paramKeys = [
   'solarIrradiance',
   'sunAngularRadius',

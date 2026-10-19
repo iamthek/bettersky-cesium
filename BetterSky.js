@@ -9,7 +9,7 @@
  *   const fx = new BetterSky(viewer, { coverage: 0.35, toneMappingExposure: 6 });
  *
  * 依赖与前置条件：
- *   1. 官方 Cesium（建议 1.140+，已验证 1.142 导出所需的渲染器内部类）。
+ *   1. 官方 Cesium（正式支持 1.142.0+，所需渲染器内部接口随版本升级验收）。
  *   2. three（资源加载器 EXRLoader / CSM 阴影使用，工程内执行 `npm i three`）。
  *   3. 设置 window.CESIUM_BASE_URL 指向包含 BetterSkyAssets/GeospatialAssets/ 的静态目录
  *      （大气 LUT *.exr、3D 噪声 *.bin、天气图 *.png）。
@@ -17,13 +17,14 @@
  * 设计：零侵入官方内核——不 patch Scene.prototype；仅用官方导出 API + 运行时配置，
  * 以及在传入的 scene.context 实例上安装两个支持自定义顶点着色器的视口命令方法。
  */
-import * as Cesium from "cesium";
+import { Cartesian2, Cartesian3, Cartesian4, JulianDate, PerspectiveFrustum, SceneMode, defined } from "cesium";
 import GeospatialPipelinePass from "./Library/GeospatialPipelinePass.js";
 import HBAOEffectPass from "./Library/HBAOEffectPass.js";
 import SMAAStage from "./Library/SMAAStage.js";
 import { installViewportCommands } from "./Library/viewportQuadCommand.js";
 
-const { Cartesian2, Cartesian4, JulianDate, defined } = Cesium;
+// Symbol.for also shares the lease with a second copy of the SDK bundle.
+const ACTIVE_INSTANCE = Symbol.for("bettersky-cesium.activeInstance");
 const CLOUD_LAYER_TYPES = ["cumulus", "altocumulus", "cirrus"];
 const HAZE_QUALITY_SAMPLES = Object.freeze({
   low: [16, 1],
@@ -330,6 +331,25 @@ function getUseLogDepth(scene) {
   return !!scene.logarithmicDepthBuffer;
 }
 
+function getSceneSupportError(scene) {
+  if (!defined(scene.globe)) return "需要具有 globe 的 Cesium 场景。";
+  if (scene.mode !== SceneMode.SCENE3D) return "仅支持 SceneMode.SCENE3D 场景。";
+  if (!(scene.camera?.frustum instanceof PerspectiveFrustum)) return "仅支持 PerspectiveFrustum 透视相机。";
+  return undefined;
+}
+
+function assertRuntimeSupport(scene) {
+  const sceneError = getSceneSupportError(scene);
+  if (sceneError) throw new Error(`[BetterSky] ${sceneError}`);
+  if (typeof globalThis.Float16Array !== "function") throw new Error("[BetterSky] 当前浏览器需要支持 Float16Array。");
+  if (typeof globalThis.structuredClone !== "function") throw new Error("[BetterSky] 当前浏览器需要支持 structuredClone。");
+  const context = scene.context;
+  if (!context.webgl2) throw new Error("[BetterSky] 需要 WebGL 2。");
+  for (const capability of ["floatingPointTexture", "halfFloatingPointTexture", "colorBufferFloat", "colorBufferHalfFloat", "textureFloatLinear", "textureHalfFloatLinear"]) {
+    if (!context[capability]) throw new Error(`[BetterSky] 当前 WebGL 环境缺少所需浮点纹理能力：${capability}。`);
+  }
+}
+
 export class BetterSky {
   /** 内置默认预设的独立副本，可用于读取默认值或生成自定义预设。 */
   static get defaultOptions() {
@@ -351,9 +371,28 @@ export class BetterSky {
     if (!defined(scene) || !defined(scene.context)) {
       throw new Error("[BetterSky] 无法获取 scene.context，请确认传入的是 Viewer/Scene。");
     }
+    if (globalThis[ACTIVE_INSTANCE]) {
+      throw new Error("[BetterSky] 同页仅允许一个活动实例，请先 dispose() 现有实例。");
+    }
+    assertRuntimeSupport(scene);
     this._viewer = defined(viewerOrScene.scene) ? viewerOrScene : undefined;
     this._scene = scene;
     this._options = deepMerge(BetterSky.defaultOptions, options);
+    this._disposed = false;
+    const clock = this._viewer?.clock;
+    const initialTime = defined(this._options.time) && defined(clock) ? JulianDate.fromIso8601(this._options.time) : undefined;
+    // Only a failed construction rolls these settings back. Normal dispose keeps
+    // the documented clock/HDR settings and restores the pass-owned sky settings.
+    const initialSettings = this._options.applySceneSettings ? [
+      [scene, "highDynamicRange", scene.highDynamicRange],
+      [scene, "logarithmicDepthBuffer", scene.logarithmicDepthBuffer],
+      [scene, "gamma", scene.gamma],
+      [scene.globe, "depthTestAgainstTerrain", scene.globe.depthTestAgainstTerrain],
+    ] : [];
+    if (defined(initialTime)) initialSettings.push([clock, "currentTime", JulianDate.clone(clock.currentTime)]);
+    globalThis[ACTIVE_INSTANCE] = this;
+
+    try {
 
     // 1) 在 context 上安装支持自定义顶点着色器的视口命令
     installViewportCommands(scene.context);
@@ -365,9 +404,7 @@ export class BetterSky {
       if (defined(this._options.gamma)) scene.gamma = this._options.gamma;
       scene.globe.depthTestAgainstTerrain = true;
     }
-    if (defined(this._options.time) && defined(this._viewer) && defined(this._viewer.clock)) {
-      this._viewer.clock.currentTime = JulianDate.fromIso8601(this._options.time);
-    }
+    if (defined(initialTime)) clock.currentTime = initialTime;
 
     // 3) HBAO 环境光遮蔽（可选，先于天空效果加入，在地表几何上叠加柔和接触阴影）
     const hbaoEnabled = !!this._options.hbao;
@@ -398,6 +435,14 @@ export class BetterSky {
 
     // 8) 每帧驱动：在渲染前计算行星半径/太阳月亮/风偏移并更新离屏 Pass
     this._removePreRender = scene.preRender.addEventListener(() => {
+      if (this._disposed || this._runtimeError) return;
+      const sceneError = getSceneSupportError(scene);
+      if (sceneError) {
+        this._runtimeError = new Error(`[BetterSky] ${sceneError} 效果已停止，请 dispose() 后在支持的场景中重建。`);
+        this.enabled = false;
+        console.error(this._runtimeError);
+        return;
+      }
       try {
         const useLog = getUseLogDepth(scene);
         if (this._hbao) this._hbao.update(scene.context, useLog);
@@ -409,7 +454,12 @@ export class BetterSky {
       }
     });
 
-    this._disposed = false;
+    } catch (error) {
+      try { this.dispose(); } catch (cleanupError) { console.error("[BetterSky] 初始化失败后的资源清理异常：", cleanupError); }
+      if (globalThis[ACTIVE_INSTANCE] === this) delete globalThis[ACTIVE_INSTANCE];
+      for (const [target, key, value] of initialSettings) target[key] = value;
+      throw error;
+    }
   }
 
   /** 应用一组预设参数到底层 Pass。 */
@@ -483,7 +533,7 @@ export class BetterSky {
         }
       }
       if (defined(c.hazeSunColor)) {
-        Cesium.Cartesian3.fromArray(c.hazeSunColor, 0, geo.cloudMaterialPass.hazeSunColor);
+        Cartesian3.fromArray(c.hazeSunColor, 0, geo.cloudMaterialPass.hazeSunColor);
         cloudHistoryChanged = true;
       }
       for (const key of ["skyIrradianceScale", "groundIrradianceScale", "hazeDensityScale", "hazeGroundDensityScale", "maxShadowLengthRayDistance", "hazeViewDistance", "hazeVolumeLength", "hazeDirectLightScale"]) {
@@ -523,6 +573,7 @@ export class BetterSky {
     return this._geo ? this._geo.enabled : false;
   }
   set enabled(v) {
+    if (this._disposed || (v && this._runtimeError)) return;
     if (this._geo) this._geo.enabled = v;
     if (this._hbao) this._hbao.enabled = !!v && !!this._options.hbao;
     if (this._smaa) this._smaa.enabled = !!v && !!this._options.smaa;
@@ -609,6 +660,7 @@ export class BetterSky {
     return this._smaa ? this._smaa.enabled : false;
   }
   set smaaEnabled(v) {
+    if (this._disposed || this._runtimeError) return;
     this._options.smaa = !!v;
     if (v && !this._smaa) {
       this._smaa = new SMAAStage(this._scene, { show: true });
@@ -619,6 +671,8 @@ export class BetterSky {
 
   /** 批量更新参数（同构造时 options，部分字段即可） */
   update(options = {}) {
+    if (this._disposed) throw new Error("[BetterSky] 实例已销毁，请重新创建。");
+    if (this._runtimeError) throw this._runtimeError;
     options = normalizeVolumetricLightOptions(options);
     validateVolumetricLightOptions(options);
     validateCloudOptions(options);
@@ -640,29 +694,33 @@ export class BetterSky {
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
-    if (defined(this._removePreRender)) {
-      this._removePreRender();
-      this._removePreRender = undefined;
-    }
+    const errors = [];
+    const cleanup = (callback) => { try { callback(); } catch (error) { errors.push(error); } };
+    if (defined(this._removePreRender)) cleanup(() => this._removePreRender());
+    this._removePreRender = undefined;
     const pps = this._scene.postProcessStages;
-    if (this._geo) this._geo.restoreScene();
+    if (this._geo) cleanup(() => this._geo.restoreScene());
     const removeStage = (pass) => {
       if (!defined(pass)) return;
       const stage = pass.stage;
-      if (defined(stage) && defined(pps) && typeof pps.contains === "function" && pps.contains(stage)) {
-        pps.remove(stage); // remove() 内部会 destroy
-      }
+      cleanup(() => {
+        if (defined(stage) && defined(pps) && typeof pps.contains === "function" && pps.contains(stage)) {
+          pps.remove(stage); // remove() 内部会 destroy
+        }
+      });
       // 集合只销毁 stage；包装器还持有 SMAA 等离屏资源。
       if (typeof pass.isDestroyed === "function" && !pass.isDestroyed()) {
-        pass.destroy();
+        cleanup(() => pass.destroy());
       }
     };
-    removeStage(this._geo);
-    removeStage(this._hbao);
-    removeStage(this._smaa);
+    cleanup(() => removeStage(this._geo));
+    cleanup(() => removeStage(this._hbao));
+    cleanup(() => removeStage(this._smaa));
     this._geo = undefined;
     this._hbao = undefined;
     this._smaa = undefined;
+    if (globalThis[ACTIVE_INSTANCE] === this) delete globalThis[ACTIVE_INSTANCE];
+    if (errors.length) throw new AggregateError(errors, "[BetterSky] 部分资源释放失败。");
   }
 }
 

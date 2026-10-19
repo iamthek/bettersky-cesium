@@ -1,12 +1,23 @@
 {
   "name": "bettersky-cesium",
+  "version": "0.1.0",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
+  "author": {
+    "name": "sean kong",
+    "email": "iamthek@qq.com"
+  },
+  "homepage": "https://www.npmjs.com/package/bettersky-cesium",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "test": "node --experimental-vm-modules --test",
     "build": "vite build",
+    "build:demo": "vite build",
+    "build:sdk": "node scripts/sdk/build.mjs",
+    "pack:sdk": "node scripts/sdk/pack.mjs",
+    "verify:sdk": "node scripts/sdk/verify.mjs",
+    "publish:sdk": "node scripts/sdk/publish.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -14,6 +25,8 @@
     "three": ">=0.160.1"
   },
   "devDependencies": {
+    "acorn": "8.19.0",
+    "javascript-obfuscator": "4.1.1",
     "vite": "^6.3.0",
     "vite-plugin-static-copy": "^2.2.0"
   },

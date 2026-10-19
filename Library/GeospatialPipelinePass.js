@@ -49,7 +49,6 @@ import {
     ShaderSource,
     JulianDate
  } from "cesium";
-import * as Cesium from "cesium";
 const defaultValue = (a, b) => a ?? b; // 官方 Cesium 不导出 defaultValue
 defaultValue.EMPTY_OBJECT = Object.freeze({});
 import Texture3D from "./Texture3D.js";
@@ -303,6 +302,7 @@ export default class GeospatialPipelinePass {
         this._destroyed = false;
         // Track only textures allocated by this pass; uniforms may also reference host textures.
         this._ownedTextures = new Set();
+        try {
         this.id = createGuid();
         this._showTAA = false;
         this._show = options.show ?? true;
@@ -547,6 +547,12 @@ export default class GeospatialPipelinePass {
             this.volumetricLightOptions.mode === "volumetric" && this.cloudVisibility > 0 &&
             this.volumetricLightPass.ready;
         this.init();
+        } catch (error) {
+            // A throwing constructor never reaches the public wrapper assignment.
+            // Release its partial allocations here so the wrapper can retry safely.
+            this.destroy();
+            throw error;
+        }
     }
 
     setVolumetricLightOptions(options) {
@@ -1045,7 +1051,7 @@ export default class GeospatialPipelinePass {
             Cartesian2.add(
                 this.localWeatherOffset,
                 Cartesian2.multiplyByScalar(
-                    Cesium.Cartesian2.clone(this.localWeatherVelocity, vector2Scratch),
+                    Cartesian2.clone(this.localWeatherVelocity, vector2Scratch),
                     deltaTime,
                     vector2Scratch
                 ),
@@ -1478,9 +1484,9 @@ export default class GeospatialPipelinePass {
             })
             cloud.add({ animate: true }, "animate").name("animate").onChange(function (value) {
                 if (value) {
-                    viewer.postProcessStages.geospatialPipeline.localWeatherVelocity = new Cesium.Cartesian2(0.001, 0);
+                    viewer.postProcessStages.geospatialPipeline.localWeatherVelocity = new Cartesian2(0.001, 0);
                 } else {
-                    viewer.postProcessStages.geospatialPipeline.localWeatherVelocity = new Cesium.Cartesian2(0.0, 0);
+                    viewer.postProcessStages.geospatialPipeline.localWeatherVelocity = new Cartesian2(0.0, 0);
                 }
             })
 

@@ -49,10 +49,9 @@ import {
     destroyObject,
     BoundingRectangle,
     CullFace,
-    JulianDate
+    JulianDate,
+    Math as CesiumMath
  } from "cesium";
-import * as Cesium from "cesium";
-const CesiumMath = Cesium.Math;
 const defaultValue = (a, b) => a ?? b;
 defaultValue.EMPTY_OBJECT = Object.freeze({});
 import Texture3D from "../Texture3D.js";
@@ -190,7 +189,12 @@ export default class ShadowMaterialPass {
             minTransmittance: () => { return this.minTransmittance },
             opticalDepthTailScale: () => { return this.opticalDepthTailScale },
         }
-        this.init();
+        try {
+            this.init();
+        } catch (error) {
+            this.destroy();
+            throw error;
+        }
     }
 
     init(isUpdate = false) {

@@ -10,7 +10,6 @@ import {
     PixelDatatype,
     Sampler
  } from "cesium";
-import * as Cesium from "cesium";
 const defaultValue = (a, b) => a ?? b;
 defaultValue.EMPTY_OBJECT = Object.freeze({});
 

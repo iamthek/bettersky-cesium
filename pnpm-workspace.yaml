@@ -1,2 +1,4 @@
 allowBuilds:
   esbuild: true
+  # Optional fundraising message only; the SDK uses the local Node API.
+  javascript-obfuscator: false

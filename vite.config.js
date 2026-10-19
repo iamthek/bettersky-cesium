@@ -2,12 +2,16 @@ import { defineConfig } from 'vite';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 
 export default defineConfig({
+  build: {
+    outDir: 'dist-demo',
+    sourcemap: false,
+  },
   define: {
     // 官方资源与 BetterSkyAssets 均通过 buildModuleUrl 从此根目录加载。
     CESIUM_BASE_URL: JSON.stringify('/cesium/'),
   },
   plugins: [
-    // 保留官方资源的目录层级；开发时提供 /cesium/，构建时复制到 dist/cesium/。
+    // 保留官方资源的目录层级；开发时提供 /cesium/，demo 构建时复制到 dist-demo/cesium/。
     viteStaticCopy({
       targets: [
         {

@@ -10,7 +10,7 @@ import * as Three from "three";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // Execute the real pass classes with counted GPU handles and controllable asset loads.
-async function createHarness({ realPrecomputed = false } = {}) {
+async function createHarness({ realPrecomputed = false, failTextureAt, failFramebufferAt, failCommandAt } = {}) {
     const liveTextures = new Set();
     const liveFramebuffers = new Set();
     const requests = [];
@@ -18,10 +18,14 @@ async function createHarness({ realPrecomputed = false } = {}) {
     const errors = [];
     let allocations = 0;
     let shaderReferences = 0;
+    let textureAttempts = 0;
+    let framebufferAttempts = 0;
+    let commandAttempts = 0;
     const context = vm.createContext({ console: { error: error => errors.push(error), log() {} } });
 
     class Texture {
         constructor(options = {}) {
+            if (++textureAttempts === failTextureAt) throw new Error("injected texture allocation failure");
             this.options = options;
             this.destroyed = false;
             allocations++;
@@ -50,6 +54,7 @@ async function createHarness({ realPrecomputed = false } = {}) {
     }
     class Framebuffer {
         constructor(options) {
+            if (++framebufferAttempts === failFramebufferAt) throw new Error("injected framebuffer allocation failure");
             this.options = options;
             this.destroyed = false;
             liveFramebuffers.add(this);
@@ -149,6 +154,7 @@ async function createHarness({ realPrecomputed = false } = {}) {
             defaultTexture: hostTexture,
             defaultTexture3D: hostTexture,
             createViewportQuadCommand() {
+                if (++commandAttempts === failCommandAt) throw new Error("injected shader creation failure");
                 shaderReferences++;
                 return { shaderProgram: sharedShader, vertexArray: sharedVertexArray, execute() {} };
             },
@@ -256,6 +262,29 @@ test("failed image, binary, and atmosphere loads are handled after disposal", as
     assert.equal(harness.liveTextures.size, 0);
     assert.equal(harness.liveFramebuffers.size, 0);
     assert.equal(harness.shaderReferences, 0);
+});
+
+test("failed nested initialization releases partial GPU allocations before a retry", async () => {
+    const baseline = await createHarness();
+    const pipeline = new baseline.Pipeline(baseline.scene, {});
+    const textures = baseline.allocations;
+    const framebuffers = baseline.liveFramebuffers.size;
+    const commands = baseline.shaderReferences;
+    pipeline.destroy();
+    for (const [option, count] of [["failTextureAt", textures], ["failFramebufferAt", framebuffers], ["failCommandAt", commands]]) {
+        for (let position = 1; position <= count; position++) {
+            const harness = await createHarness({ [option]: position });
+            assert.throws(() => new harness.Pipeline(harness.scene, {}), /injected/);
+            assert.equal(harness.liveTextures.size, 0, `${option} ${position}: leaked texture`);
+            assert.equal(harness.liveFramebuffers.size, 0, `${option} ${position}: leaked framebuffer`);
+            assert.equal(harness.shaderReferences, 0, `${option} ${position}: leaked shader`);
+            const retry = new harness.Pipeline(harness.scene, {});
+            retry.destroy();
+            assert.equal(harness.liveTextures.size, 0);
+            assert.equal(harness.liveFramebuffers.size, 0);
+            assert.equal(harness.shaderReferences, 0);
+        }
+    }
 });
 
 test("failed asset loads leave usable fallbacks and never reject an unhandled promise", async () => {

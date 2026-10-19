@@ -50,9 +50,9 @@ import {
     Cartesian2,
     destroyObject,
     BoundingRectangle,
+    ShaderSource,
+    Math as CesiumMath,
  } from "cesium";
-import * as Cesium from "cesium";
-const CesiumMath = Cesium.Math;
 const defaultValue = (a, b) => a ?? b;
 defaultValue.EMPTY_OBJECT = Object.freeze({});
 import RenderPass from "../PostProcessStage.js";
@@ -325,7 +325,12 @@ export default class CloudMaterialPass {
             shapeTexelsPerMeterPerPixel: () => this.shapeTexelsPerMeterPerPixel,
         }
 
-        this.init();
+        try {
+            this.init();
+        } catch (error) {
+            this.destroy();
+            throw error;
+        }
     }
 
     init(isUpdate = false) {
@@ -443,7 +448,7 @@ export default class CloudMaterialPass {
         }
 
         if (!this._cloudDrawComomand) {
-            const cloudsMaterialShader = new Cesium.ShaderSource({
+            const cloudsMaterialShader = new ShaderSource({
                 defines: ["LOG_DEPTH"],
                 sources: [cloudsMaterialFS]
             });
@@ -452,7 +457,7 @@ export default class CloudMaterialPass {
                 uniformMap: this._cloudsUniform,
                 primitiveType: PrimitiveType.TRIANGLES
             }, cloudsMaterialVS);
-            const cloudsResolveMaterialShader = new Cesium.ShaderSource({
+            const cloudsResolveMaterialShader = new ShaderSource({
                 defines: ["LOG_DEPTH"],
                 sources: [cloudsResolveMaterialFS]
             });

@@ -136,7 +136,6 @@ pnpm add "cesium@>=1.142.0" "three@>=0.160.1"
   ThirdParty/
   Widgets/
   BetterSkyAssets/
-    snowCoverMask.png
     ...其他效果资源
     GeospatialAssets/
       *.exr

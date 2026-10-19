@@ -149,3 +149,7 @@ vite.config.ts.timestamp-*
 .turbo
 
 .codegraph
+
+# SDK assembly and isolated demo output
+.sdk-package/
+dist-demo/

@@ -1,6 +1,6 @@
 # BetterSky for Cesium
 
-[English](README.md) | **简体中文**
+[English](https://cdn.jsdelivr.net/npm/bettersky-cesium@0.1.0/README.md) | **简体中文**
 
 BetterSky for Cesium 是 CesiumJS 视觉效果插件，通过 **BetterSky** 为已有三维地球场景增加体积云、大气、云影、体积光和画面增强。
 
@@ -13,13 +13,11 @@ BetterSky for Cesium 是 CesiumJS 视觉效果插件，通过 **BetterSky** 为�
 
 ## 使用
 
-> npm SDK 打包与发布验收尚未完成。下方版本暂定，安装命令不代表 `0.1.0` 已可使用。
-
 使用 Cesium **1.142.0 或更高版本**、three **0.160.1 或更高版本**和浏览器构建工具，同页保留一个活动的 BetterSky/Viewer。这些版本是支持下限，不代表已经测试所有未来版本；插件使用渲染器内部接口，升级依赖时应检查渲染与生命周期行为。浏览器/GPU 需支持 WebGL 2、三维/数组纹理、所需浮点渲染目标，并具有原生 `Float16Array` 和 `structuredClone`。
 
 ### 安装
 
-正式发布后，在使用项目目录中任选 npm 或 pnpm：
+在使用项目目录中任选 npm 或 pnpm：
 
 ```bash
 npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
@@ -31,6 +29,8 @@ pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 
 两种命令安装同一个包。Cesium 与应用共享，three（`>=0.160.1`）作为运行依赖自动安装；应用可以在上述范围内锁定已经验证的版本。
 
+Cesium 通过自身依赖安装匹配的 engine 与 widgets，无需配置 Cesium 内部组件的 overrides。请保留应用锁文件，并在升级后验证完整依赖组合。
+
 ### 复制资源
 
 插件直接使用宿主的 **`CESIUM_BASE_URL`**。将 `node_modules/bettersky-cesium/dist/assets/` 的全部内容复制到 **Cesium 资源根目录下的 `BetterSkyAssets/`**。以 Vite 项目配置 `CESIUM_BASE_URL='/cesium/'` 为例：
@@ -38,26 +38,53 @@ pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 | 来源 | 目标 |
 | --- | --- |
 | `node_modules/bettersky-cesium/dist/assets/` 内的全部内容 | `public/cesium/BetterSkyAssets/` |
-| SDK 的 `LICENSE` 和 `THIRD_PARTY_NOTICES.md` | `public/cesium/BetterSkyAssets/` |
 | Cesium 的 `Workers/`、`Assets/`、`ThirdParty/`、`Widgets/` | 沿用项目在 `public/cesium/` 下已有的副本 |
 
-例如，在使用项目目录中通过 Node.js 22 或更高版本执行：
+> **提示**：依据许可规则，对外分发 SDK 或其运行产物时，请保留 `LICENSE` 与 `THIRD_PARTY_NOTICES.md` 随副本一并分发。
+
+推荐用 `vite-plugin-static-copy` 在开发和构建时自动复制，无需手动维护 `public/` 下的副本：
 
 ```bash
-node --input-type=module -e "import { cpSync } from 'node:fs'; cpSync('node_modules/bettersky-cesium/dist/assets', 'public/cesium/BetterSkyAssets', { recursive: true }); for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) cpSync('node_modules/bettersky-cesium/' + file, 'public/cesium/BetterSkyAssets/' + file);"
+npm install -D vite-plugin-static-copy@4.1.1
 ```
-
-`snowCoverMask.png` 和 `GeospatialAssets/` 应直接位于 `BetterSkyAssets/` 内，不要多嵌套一层 `assets/`。npm 和 pnpm 均使用上述路径，无需访问 `.pnpm/`。CI 构建前也应复制资源；升级时只替换 `BetterSkyAssets/` 并刷新缓存，确保 JavaScript 和资源属于同一版本。
-
-沿用项目已有的 Cesium 资源配置。尚未配置时，以下 Vite 示例与上述复制路径对应：
 
 ```js
 import { defineConfig } from 'vite'
+import { viteStaticCopy } from 'vite-plugin-static-copy'
 
 export default defineConfig({
   define: {
     CESIUM_BASE_URL: JSON.stringify('/cesium/'),
   },
+  plugins: [
+    viteStaticCopy({
+      targets: [
+        {
+          // 复制 assets 内的条目，保留 GeospatialAssets/ 子目录。
+          src: 'node_modules/bettersky-cesium/dist/assets/**/*',
+          dest: 'cesium/BetterSkyAssets',
+          rename: { stripBase: 4 },
+        },
+      ],
+    }),
+  ],
+})
+```
+
+`assets/**/*` 包含子目录资源；`rename: { stripBase: 4 }` 去掉 `node_modules/bettersky-cesium/dist/assets/` 前缀，同时保留 `GeospatialAssets/` 及其文件。npm 和 pnpm 均使用上述路径，无需访问 `.pnpm/`。CI 构建时也会自动复制；升级时只替换 `BetterSkyAssets/` 并刷新缓存，确保 JavaScript 和资源属于同一版本。
+
+沿用项目已有的 Cesium 资源配置。若项目尚未配置 Cesium 资源，可在同一插件中一并复制：
+
+```js
+viteStaticCopy({
+  targets: [
+    {
+      src: 'node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}',
+      dest: 'cesium',
+      rename: { stripBase: 4 },
+    },
+    // 上面的 BetterSky 资源目标
+  ],
 })
 ```
 
@@ -93,13 +120,13 @@ viewer.destroy()
 
 ## 许可
 
-[专有试用许可](LICENSE)。目前所有个人和组织均可零费用试用，包括商业项目和生产上线，无须逐一申请。SDK 和接入项目均可闭源。暂未设定收费日期；权利人可提前至少 30 个日历日公布通知，结束指定版本或用途的免费试用，此后继续相应用途须另获授权，授权可以收费。此前合法试用不追溯收费，已有单独授权继续按原约定执行。
+[专有试用许可](https://cdn.jsdelivr.net/npm/bettersky-cesium@0.1.0/LICENSE)。目前所有个人和组织均可零费用试用，包括商业项目和生产上线，无须逐一申请。SDK 和接入项目均可闭源。暂未设定收费日期；权利人可提前至少 30 个日历日公布通知，结束指定版本或用途的免费试用，此后继续相应用途须另获授权，授权可以收费。此前合法试用不追溯收费，已有单独授权继续按原约定执行。
 
-允许的应用交付需附带许可和[第三方声明](THIRD_PARTY_NOTICES.md)，并告知接收者试用与未来授权条件。第三方材料继续适用各自原条款，分发限制以完整许可正文为准。
+允许的应用交付需附带许可和[第三方声明](https://cdn.jsdelivr.net/npm/bettersky-cesium@0.1.0/THIRD_PARTY_NOTICES.md)，并告知接收者试用与未来授权条件。第三方材料继续适用各自原条款，分发限制以完整许可正文为准。许可问题请联系 [iamthek@qq.com](mailto:iamthek@qq.com)。
 
 ## 赞助支持
 
-如果这个项目帮到了你，可以请我喝杯咖啡🙏☕ 牛马打工不易，你的支持是项目持续维护和改进的动力。
+如果这个项目帮到了你，可以请我喝杯咖啡🙏☕ ，你的支持是项目持续维护和改进的动力。
 
 <p align="center">
   <img src="https://iamthek.github.io/buy_me_a_coffee_alipay.jpg" alt="支付宝" width="200" height="300">

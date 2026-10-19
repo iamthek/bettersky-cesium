@@ -35,7 +35,6 @@ import {
   DrawCommand,
   ShaderProgram
  } from "cesium";
-import * as Cesium from "cesium";
 import viewportTriangleVertexShader from "./shaders/postprocess/viewportTriangle.vert.glsl?raw";
 import selectedFeaturesShader from "./shaders/postprocess/selectedFeatures.glsl?raw";
 const defaultValue = (a, b) => a ?? b;

@@ -1,0 +1,101 @@
+{
+  "assets": [
+    {
+      "path": "GeospatialAssets/local_weather.png",
+      "purpose": "Cloud local-weather coverage texture",
+      "source": "https://media.githubusercontent.com/media/takram-design-engineering/three-geospatial/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/clouds/assets/local_weather.png",
+      "license": "MIT; packages/clouds/LICENSE at 45a1c6c1bb9fd38b3680fd120795ff4c32df68ff",
+      "sha256": "b84daef855dc5eebcc9b174fe832ba75a98e44b846dde201bce354417cc08031"
+    },
+    {
+      "path": "GeospatialAssets/shape.bin",
+      "purpose": "Cloud volume base-shape density texture",
+      "source": "https://media.githubusercontent.com/media/takram-design-engineering/three-geospatial/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/clouds/assets/shape.bin",
+      "license": "MIT; packages/clouds/LICENSE at 45a1c6c1bb9fd38b3680fd120795ff4c32df68ff",
+      "sha256": "ef65cf6156894720c00bf572c49e3e254f8899c4b5158246e5a35a1922e2519c"
+    },
+    {
+      "path": "GeospatialAssets/shape_detail.bin",
+      "purpose": "Cloud volume detail density texture",
+      "source": "https://media.githubusercontent.com/media/takram-design-engineering/three-geospatial/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/clouds/assets/shape_detail.bin",
+      "license": "MIT; packages/clouds/LICENSE at 45a1c6c1bb9fd38b3680fd120795ff4c32df68ff",
+      "sha256": "c09112199c6e0281b74ff5283c11c2943ae082650b9b67978cf5d59ed2956e4f"
+    },
+    {
+      "path": "GeospatialAssets/turbulence.png",
+      "purpose": "Cloud turbulence displacement texture",
+      "source": "https://media.githubusercontent.com/media/takram-design-engineering/three-geospatial/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/clouds/assets/turbulence.png",
+      "license": "MIT; packages/clouds/LICENSE at 45a1c6c1bb9fd38b3680fd120795ff4c32df68ff",
+      "sha256": "ec2b1b0af4a6a6104102b21e58beb300b0a3d334c0281d84fde8c91d322910f9"
+    },
+    {
+      "path": "GeospatialAssets/stbn.bin",
+      "purpose": "Spatiotemporal blue-noise sampling texture",
+      "source": "https://media.githubusercontent.com/media/takram-design-engineering/three-geospatial/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/core/assets/stbn.bin",
+      "license": "MIT; packages/core/LICENSE at 45a1c6c1bb9fd38b3680fd120795ff4c32df68ff",
+      "sha256": "51f52f21e5578384585050390821a0a486dcb81e11a716fa7b92fbb6515ba852"
+    },
+    {
+      "path": "GeospatialAssets/irradiance.exr",
+      "purpose": "Precomputed atmospheric irradiance lookup texture",
+      "source": "https://media.githubusercontent.com/media/takram-design-engineering/three-geospatial/82e00c5222d6cbc222af69abdf6d3f4fc9f63030/packages/atmosphere/assets/irradiance.exr",
+      "license": "MIT; packages/atmosphere/LICENSE at 82e00c5222d6cbc222af69abdf6d3f4fc9f63030",
+      "sha256": "4181d9c36cd5f4ea790ebf61d1331a123f9bc1c04c862309dd443d0fa06a33d8"
+    },
+    {
+      "path": "GeospatialAssets/scattering.exr",
+      "purpose": "Precomputed atmospheric scattering lookup texture",
+      "source": "https://media.githubusercontent.com/media/takram-design-engineering/three-geospatial/82e00c5222d6cbc222af69abdf6d3f4fc9f63030/packages/atmosphere/assets/scattering.exr",
+      "license": "MIT; packages/atmosphere/LICENSE at 82e00c5222d6cbc222af69abdf6d3f4fc9f63030",
+      "sha256": "fd818649a3cc3607d4ad2b953be1bbb30177378addbd2e6a3bea05adec78c229"
+    },
+    {
+      "path": "GeospatialAssets/transmittance.exr",
+      "purpose": "Precomputed atmospheric transmittance lookup texture",
+      "source": "https://media.githubusercontent.com/media/takram-design-engineering/three-geospatial/82e00c5222d6cbc222af69abdf6d3f4fc9f63030/packages/atmosphere/assets/transmittance.exr",
+      "license": "MIT; packages/atmosphere/LICENSE at 82e00c5222d6cbc222af69abdf6d3f4fc9f63030",
+      "sha256": "12740a1194746029199796d9ef6546913e88d8e709724f8266c86994d1af55ad"
+    },
+    {
+      "path": "snowCoverMask.png",
+      "purpose": "Snow surface cover mask texture",
+      "source": "Project-authored; owner-confirmed 2026-10-19",
+      "license": "Proprietary trial license in LICENSE",
+      "sha256": "6467dcfb0b71fda9df8e32813ce4f418988200bca245901111113699fc896f2d"
+    }
+  ],
+  "excluded": [
+    {
+      "path": "bluenoise2.png",
+      "reason": "No runtime reference found; excluded from distribution. Source and redistribution rights are not verified."
+    },
+    {
+      "path": "noise.png",
+      "reason": "No runtime reference found; excluded from distribution. Source and redistribution rights are not verified."
+    },
+    {
+      "path": "NoiseAndGrain.png",
+      "reason": "No runtime reference found; excluded from distribution. Source and redistribution rights are not verified."
+    },
+    {
+      "path": "normal004.jpg",
+      "reason": "No runtime reference found; excluded from distribution. Source and redistribution rights are not verified."
+    },
+    {
+      "path": "texture4.png",
+      "reason": "No runtime reference found; excluded from distribution. Source and redistribution rights are not verified."
+    },
+    {
+      "path": "waternormals.jpg",
+      "reason": "No runtime reference found; excluded from distribution. Source and redistribution rights are not verified."
+    },
+    {
+      "path": "GeospatialAssets/higher_order_scattering.exr",
+      "reason": "Only referenced by commented-out loader code; not used by the current runtime. Source and redistribution rights are unverified."
+    },
+    {
+      "path": "GeospatialAssets/single_mie_scattering.exr",
+      "reason": "Only referenced by commented-out loader code; not used by the current runtime. Source and redistribution rights are unverified."
+    }
+  ]
+}

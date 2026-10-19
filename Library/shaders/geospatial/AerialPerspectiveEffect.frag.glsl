@@ -1745,8 +1745,10 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   vec3 positionECEF = rotation * worldPosition * METER_TO_LENGTH_UNIT - vGeometryEllipsoidCenter;
   vec3 normalECEF = rotation * worldNormal;
   #ifdef ENABLE_SNOWEFFECT
-    mat3 normalMatrix = transpose(inverse(mat3(czm_cameraEastNorthUp)));
-    inputColor.rgb = renderSnowEffect(worldPosition.xz, normalize(normalMatrix * worldNormal) , inputColor.rgb);
+    // Official Cesium has no camera-ENU automatic uniform. Snow only needs
+    // the normal's up component in the local ellipsoid frame.
+    vec3 snowNormal = vec3(0.0, 0.0, dot(normalize(worldNormal), normalize(globeNormal)));
+    inputColor.rgb = renderSnowEffect(worldPosition.xz, snowNormal, inputColor.rgb);
   #endif
   #ifdef ENABLE_THUNDERCLOUDS
       innerLight = innerLightPositionAndIntensity();

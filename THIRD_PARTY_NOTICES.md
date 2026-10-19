@@ -1,8 +1,8 @@
 # Third-party notices
 
-This file lists confirmed third-party code incorporated into BetterSky for Cesium
-and its external runtime dependencies. The project remains proprietary; its
-trial license does not replace the licenses of these third-party portions.
+This file lists confirmed third-party code and runtime assets incorporated into
+BetterSky for Cesium, plus its external runtime dependencies. The project remains
+proprietary; its trial license does not replace the licenses of these portions.
 
 ## Incorporated code
 
@@ -35,6 +35,19 @@ here. The texts below cover code actually incorporated into this SDK. If a
 separate distribution copies a dependency's builds or resources, that
 distribution must retain the licenses applicable to those copied materials.
 
+## Runtime assets
+
+The SDK runtime asset allowlist is recorded in `scripts/sdk/assets-manifest.json`.
+The eight upstream runtime files listed below were compared byte-for-byte with
+their pinned copies. Each package-level MIT license below applies to its listed
+upstream assets; retain the MIT copyright and permission notice in this file
+when redistributing them.
+| Local asset | Upstream source | License and attribution |
+| --- | --- | --- |
+| `GeospatialAssets/local_weather.png`, `shape.bin`, `shape_detail.bin`, `turbulence.png` | `packages/clouds/assets/` at `45a1c6c1bb9fd38b3680fd120795ff4c32df68ff` | MIT, Copyright (c) 2024 Shota Matsuda. See the complete notice below. |
+| `GeospatialAssets/stbn.bin` | `packages/core/assets/stbn.bin` at `45a1c6c1bb9fd38b3680fd120795ff4c32df68ff` | MIT, Copyright (c) 2024 Shota Matsuda. See the complete notice below. |
+| `GeospatialAssets/irradiance.exr`, `scattering.exr`, `transmittance.exr` | `packages/atmosphere/assets/` at `82e00c5222d6cbc222af69abdf6d3f4fc9f63030` | MIT, Copyright (c) 2024 Shota Matsuda. See the complete notice below. |
+
 ## Source references
 
 - [CesiumJS PostProcessStage](https://github.com/CesiumGS/cesium/blob/1.142/packages/engine/Source/Scene/PostProcessStage.js)
@@ -46,6 +59,12 @@ distribution must retain the licenses applicable to those copied materials.
 - [Takram FrustumCorners](https://github.com/takram-design-engineering/three-geospatial/blob/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/clouds/src/helpers/FrustumCorners.ts)
 - [Google Turbo colormap](https://gist.github.com/mikhailov-work/0d177465a8151eb6ede1768d51d476c7)
 - [drei soft shadows](https://github.com/pmndrs/drei/blob/master/src/core/softShadows.tsx)
+- [Takram clouds package license at pinned asset revision](https://github.com/takram-design-engineering/three-geospatial/blob/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/clouds/LICENSE)
+- [Takram core package license at pinned asset revision](https://github.com/takram-design-engineering/three-geospatial/blob/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/core/LICENSE)
+- [Takram atmosphere package license at pinned asset revision](https://github.com/takram-design-engineering/three-geospatial/blob/82e00c5222d6cbc222af69abdf6d3f4fc9f63030/packages/atmosphere/LICENSE)
+- [Takram cloud runtime assets at pinned revision](https://github.com/takram-design-engineering/three-geospatial/tree/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/clouds/assets)
+- [Takram STBN runtime asset at pinned revision](https://github.com/takram-design-engineering/three-geospatial/blob/45a1c6c1bb9fd38b3680fd120795ff4c32df68ff/packages/core/assets/stbn.bin)
+- [Takram atmosphere runtime assets at pinned revision](https://github.com/takram-design-engineering/three-geospatial/tree/82e00c5222d6cbc222af69abdf6d3f4fc9f63030/packages/atmosphere/assets)
 
 ## Complete notices and license texts
 
@@ -259,7 +278,7 @@ SOFTWARE.
 * SOFTWARE.
 */
 
-### Takram three-geospatial (MIT)
+### Takram three-geospatial code and runtime assets (MIT)
 
 The MIT License (MIT)
 

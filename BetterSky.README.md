@@ -136,7 +136,6 @@ Set `CESIUM_BASE_URL` to the deployed Cesium asset root. The repository uses `/c
   ThirdParty/
   Widgets/
   BetterSkyAssets/
-    snowCoverMask.png
     ...other effect assets
     GeospatialAssets/
       *.exr
