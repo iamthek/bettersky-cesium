@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { build } from 'vite';
 import { compactShader, validateShaderAssembly } from '../scripts/sdk/build.mjs';
 import { emitPublicDeclarations } from '../scripts/sdk/declarations.mjs';
-import { inspectJavaScript, inspectPublicDeclarations, readTarEntries, validatePackageEntries } from '../scripts/sdk/shared.mjs';
+import { copyrightLine, inspectJavaScript, inspectPublicDeclarations, readAssetManifest, readJson, readTarEntries, repoRoot, validatePackageEntries } from '../scripts/sdk/shared.mjs';
 
 function tarEntry(name, { type = '0', data = Buffer.from('ok') } = {}) {
   const header = Buffer.alloc(512);
@@ -29,6 +31,47 @@ test('tar reader retains bytes without extracting and rejects traversal, links a
   const corrupt = tarEntry('package/index.js');
   corrupt[0] ^= 1;
   assert.throws(() => readTarEntries(corrupt), /checksum/);
+});
+
+test('release gate accepts Apache-2.0 metadata and NOTICE and rejects changed publication contracts', async () => {
+  const root = await readJson(join(repoRoot, 'package.json'));
+  const assets = await readAssetManifest();
+  const manifest = {
+    name: root.name, version: root.version, type: 'module', license: 'Apache-2.0', author: root.author,
+    repository: { type: 'git', url: 'git+https://github.com/iamthek/bettersky-cesium.git' },
+    bugs: { url: 'https://github.com/iamthek/bettersky-cesium/issues' },
+    homepage: 'https://iamthek.github.io/bettersky-cesium/',
+    files: ['dist/index.js', 'dist/index.d.ts', 'dist/assets/', 'README.md', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'],
+    exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' } }, types: './dist/index.d.ts',
+    peerDependencies: { cesium: '>=1.142.0' }, dependencies: { three: '>=0.160.1' },
+  };
+  const bundle = `/*! BetterSky for Cesium ${root.version}. ${copyrightLine(root.author)}. SPDX-License-Identifier: Apache-2.0. */\nimport {Cartesian2} from 'cesium';class BetterSky{};export {BetterSky};export default BetterSky;`;
+  const entries = [
+    { path: 'package.json', data: Buffer.from(JSON.stringify(manifest)) },
+    { path: 'dist/index.js', data: Buffer.from(bundle) },
+    { path: 'dist/index.d.ts', data: await emitPublicDeclarations() },
+    ...await Promise.all(['README.md', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'].map(async path => ({ path, data: await readFile(join(repoRoot, path)) }))),
+    ...await Promise.all(assets.assets.map(async asset => ({ path: `dist/assets/${asset.path}`, data: await readFile(join(repoRoot, 'static/BetterSkyAssets', asset.path)) }))),
+  ];
+  assert.equal((await validatePackageEntries(entries)).license, 'Apache-2.0');
+  const replaceEntry = (path, data) => entries.map(entry => entry.path === path ? { path, data } : entry);
+  for (const changed of [
+    { license: 'SEE LICENSE IN LICENSE' },
+    { repository: { type: 'git', url: 'git+https://github.com/other/project.git' } },
+    { bugs: { url: 'https://github.com/other/project/issues' } },
+    { homepage: 'https://www.npmjs.com/package/bettersky-cesium' },
+    { author: { ...manifest.author, name: 'Other author' } },
+    { files: [...manifest.files, 'README.zh-CN.md'] },
+    { private: true },
+  ]) {
+    await assert.rejects(validatePackageEntries(replaceEntry('package.json', Buffer.from(JSON.stringify({ ...manifest, ...changed })))), /Invalid release package metadata|Release contact metadata|Invalid ESM\/type\/file exports/);
+  }
+  await assert.rejects(validatePackageEntries(entries.filter(entry => entry.path !== 'NOTICE')), /Missing package file: NOTICE/);
+  await assert.rejects(validatePackageEntries(replaceEntry('NOTICE', Buffer.from('Changed copyright notice'))), /Packaged document differs.*NOTICE/);
+  await assert.rejects(validatePackageEntries(replaceEntry('dist/index.js', Buffer.from(bundle.replace('SPDX-License-Identifier: Apache-2.0.', '')))), /Bundle banner/);
+  for (const path of ['README.zh-CN.md', 'src/index.ts', 'dist/index.js.map', '.env.local', 'screenshots/demo.png']) {
+    await assert.rejects(validatePackageEntries([...entries, { path, data: Buffer.from('not public package content') }]), /Unexpected or duplicate package file/);
+  }
 });
 
 test('generated public declarations document every member and parameter and retain UTF-8 archive bytes', async () => {

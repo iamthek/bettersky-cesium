@@ -1,51 +1,53 @@
 # BetterSky for Cesium
 
-**English** | [简体中文](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/README.zh-CN.md)
+**English** | [简体中文](https://github.com/iamthek/bettersky-cesium/blob/main/README.zh-CN.md)
 
-An atmosphere, volumetric cloud and lighting SDK for CesiumJS. Add layered clouds, moving cloud shadows, sunlight shafts and image effects to an existing 3D globe through a single `BetterSky` instance.
+Bring your Cesium globe to life with layered clouds, moving cloud shadows and sunlight streaming through the sky. BetterSky plugs into an existing, official CesiumJS Viewer and brings atmosphere, lighting and image effects together in one SDK.
 
-[User guide & API](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/BetterSky.README.md) · [npm](https://www.npmjs.com/package/bettersky-cesium)
+[Live demo](https://iamthek.github.io/bettersky-cesium/) · [User guide & API](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md) · [npm](https://www.npmjs.com/package/bettersky-cesium)
+
+![BetterSky clouds, atmosphere and lighting in the Cesium demo](https://raw.githubusercontent.com/iamthek/bettersky-cesium/main/docs/images/demo.png)
 
 ## Highlights
 
-- **Layered skies** — Three cloud layers with configurable cloud types, altitude, thickness, density and weather motion.
-- **Atmosphere and lighting** — Atmospheric perspective, day/night skies, cloud shadows and volumetric sunlight.
-- **Image quality** — Bloom, lens flare, tone mapping, HBAO ambient occlusion and SMAA antialiasing.
-- **Performance-conscious rendering** — Low-resolution cloud sampling and temporal reconstruction, distance-based detail reduction and high-altitude fading reduce rendering work. Actual performance depends on the GPU, resolution, view and enabled effects.
-- **Application integration** — Built-in defaults, partial updates, runtime switches and TypeScript declarations for an existing Cesium Viewer.
+- **Build your sky** — Three cloud layers with adjustable cloud types, height, thickness, density and weather motion.
+- **Add depth and light** — Atmospheric perspective, day/night skies, moving cloud shadows and volumetric sunlight.
+- **Polish the image** — Bloom, lens flare, tone mapping, HBAO ambient occlusion and SMAA antialiasing.
+- **Keep rendering practical** — Low-resolution cloud sampling, temporal reconstruction, distance-based detail and high-altitude fading reduce rendering work.
+- **Fit your application** — Attach to an existing Viewer, start with the built-in preset, then change options or toggle effects at runtime. TypeScript declarations include parameter help.
 
 ## Quick start
 
-Use an ESM browser application with Cesium `>=1.142.0`, WebGL 2, the required floating-point texture/render-target support, `Float16Array` and `structuredClone`. The scene must contain a globe and use a 3D perspective camera. See the guide for full requirements and upgrade considerations.
+Use a browser application with Cesium `>=1.142.0`, WebGL 2, the required floating-point texture support, `Float16Array` and `structuredClone`. BetterSky supports a 3D globe with a perspective camera and one active instance per page. See the [guide](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md#requirements) for the full requirements.
 
 ### 1. Install
 
-Run either command in your application:
+Choose npm or pnpm. This example uses the verified Cesium `1.146.0` combination:
 
 ```bash
-npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
+npm install bettersky-cesium@0.2.0 cesium@1.146.0
 ```
 
 ```bash
-pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
+pnpm add bettersky-cesium@0.2.0 cesium@1.146.0
 ```
 
-Cesium is shared with the application; three (`>=0.160.1`) is installed as a runtime dependency. Keep your application's verified lockfile.
+Already using a compatible Cesium version? Install only `bettersky-cesium@0.2.0` and keep your verified lockfile. Cesium is shared with the application; three (`>=0.160.1`) is installed automatically. The [compatibility notes](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md#compatibility-and-deployment) explain a known Cesium dependency combination to avoid.
 
 ### 2. Prepare assets
 
-BetterSky uses the application's `CESIUM_BASE_URL`. For `/cesium/` in a Vite application, copy these directories into `public/`:
+BetterSky uses your application's `CESIUM_BASE_URL`. If that URL is `/cesium/`, prepare these files in a Vite application's `public/` directory:
 
 | Source | Destination |
 | --- | --- |
 | `node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}` | `public/cesium/` — keep all four directories |
-| Contents of `node_modules/bettersky-cesium/dist/assets/` | `public/cesium/BetterSkyAssets/` — preserve nested directories |
+| Contents of `node_modules/bettersky-cesium/dist/assets/` | `public/cesium/BetterSkyAssets/` — keep the nested directories |
 
-Keep your existing Cesium asset setup if already configured. Set the base URL before creating the Viewer, as in the next step. [Automatic copying and subpath deployment](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/BetterSky.README.md) are covered in the guide.
+If Cesium assets are already configured, add only `BetterSkyAssets/` under the same root. The guide includes [automatic copying and subpath deployment](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md#assets-and-deployment).
 
 ### 3. Attach to your Viewer
 
-In the client entry, before creating your application's `viewer`:
+Set the asset URL before creating your Viewer, then attach BetterSky:
 
 ```js
 import 'cesium/Build/Cesium/Widgets/widgets.css'
@@ -53,34 +55,23 @@ import { BetterSky } from 'bettersky-cesium'
 
 window.CESIUM_BASE_URL = '/cesium/'
 
-// Create your application's Cesium Viewer here, then attach BetterSky.
+// Create your application's Cesium Viewer here.
 const effects = new BetterSky(viewer, { time: undefined })
+
+// Change only the options you need.
+effects.update({ coverage: 0.5 })
+
+// When leaving the scene, dispose of BetterSky before destroying the Viewer.
+// effects.dispose()
 ```
 
-`time: undefined` preserves the application's clock. Keep the Viewer rendering continuously for animated clouds. When leaving the scene, call `effects.dispose()` before destroying the Viewer. Continue with the guide for configuration, resource loading and lifecycle details.
-
-### Run the repository demo
-
-Use Node.js 24 and pnpm 12.8.1. From a clone of this repository:
-
-```bash
-pnpm install --frozen-lockfile
-pnpm dev
-```
-
-Open the URL printed by Vite, usually [http://localhost:3000/](http://localhost:3000/). Service keys are optional; without them, the demo uses local imagery and ellipsoid terrain.
-
-## Documentation
-
-- [User guide & API reference](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/BetterSky.README.md): complete setup, options, methods and usage notes, with differences between the current source and npm `0.1.0` identified.
-- [Demo setup and deployment](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/demo/README.md): optional service keys and GitHub Pages configuration.
-- [Changelog](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/CHANGELOG.md).
+`time: undefined` keeps your application's clock. Keep the Viewer rendering continuously for animated clouds. Continue with the [user guide](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md) for options, asset loading, retries and cleanup, or browse the [changelog](https://github.com/iamthek/bettersky-cesium/blob/main/CHANGELOG.md).
 
 ## License
 
-[Proprietary trial license](https://cdn.jsdelivr.net/npm/bettersky-cesium@0.1.0/LICENSE). All individuals and organizations may currently try the SDK at no charge, including commercial projects and production deployments, without individual approval. The SDK and applications using it may remain closed source. There is no fixed charging date. The licensor may end the free trial for specified versions or uses with at least 30 calendar days' published notice; continued affected use then requires separate authorization, which may be paid. Lawful trial use is not charged retroactively, and existing separate authorizations retain their agreed terms.
+Version `0.2.0` uses the [Apache License 2.0](https://github.com/iamthek/bettersky-cesium/blob/main/LICENSE), allowing personal and commercial use, modification and redistribution under its terms. Preserve the license, [NOTICE](https://github.com/iamthek/bettersky-cesium/blob/main/NOTICE) and applicable [third-party notices](https://github.com/iamthek/bettersky-cesium/blob/main/THIRD_PARTY_NOTICES.md) when distributing the SDK. Third-party materials retain their own licenses.
 
-Permitted application distributions must include the license and [third-party notices](https://cdn.jsdelivr.net/npm/bettersky-cesium@0.1.0/THIRD_PARTY_NOTICES.md), and inform recipients of the trial and future authorization conditions. Third-party materials retain their original terms; see the full license for distribution restrictions. For licensing questions, contact [iamthek@qq.com](mailto:iamthek@qq.com).
+Questions: [iamthek@qq.com](mailto:iamthek@qq.com).
 
 ## Support the Project
 

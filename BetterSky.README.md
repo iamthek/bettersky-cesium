@@ -8,19 +8,9 @@ This guide covers SDK integration, configuration, and usage notes.
 
 ## Usage
 
-### Version scope
+### Version
 
-The installation examples use the published npm release `0.1.0`; the parameter tables describe the current repository's public entry point. The current source has not been republished. A repository `package.json` that still says `0.1.0` does not mean the npm package contains all current changes.
-
-| Capability | npm `0.1.0` | Current repository |
-| --- | --- | --- |
-| Initialization, partial updates, effect toggles, disposal, and the configuration groups below | Basic integration is available | Retained, with the current parameter validation rules |
-| `getOptions()` configuration snapshot | Unavailable | Available |
-| `assetStatus`, `assetErrors`, `assetsReady`, `retryAssets()`, `subscribeAssets()` | Unavailable | Available |
-| Tone mapping modes `2` / `4` and Pass rain/snow controls | Available at runtime; older declarations are incomplete | Declarations now cover them |
-| `hbao.denoise` and the update-specific type | Older declarations omit this field and `BetterSkyUpdateOptions` | Explicitly declared as a constructor-only option; excluded from the update type |
-
-Use examples marked "current repository" in this checkout, or wait for a release that includes those capabilities. Do not call the new methods on `0.1.0`.
+This guide describes BetterSky `0.2.0`. Start with the installation and asset setup below, then use the parameter tables when you need to customize the result. See the [changelog](CHANGELOG.md) for release history.
 
 ### Requirements
 
@@ -38,17 +28,17 @@ Only one BetterSky instance may be active per page. Dispose of the old instance 
 
 ### Installation
 
-Run either command in your application:
+Run either command in your application. New-project examples use the verified Cesium 1.146.0 combination; an existing application can keep another compatible, verified version:
 
 ```bash
-npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
+npm install bettersky-cesium@0.2.0 cesium@1.146.0
 ```
 
 ```bash
-pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
+pnpm add bettersky-cesium@0.2.0 cesium@1.146.0
 ```
 
-The package provides named and default exports and `dist/index.d.ts`; no separate type package is needed. The current repository's declarations also include Chinese field documentation for editor hints covering meanings, units, defaults, and constraints.
+The package provides named and default exports and `dist/index.d.ts`; no separate type package is needed. The bundled declarations include Chinese field documentation for editor hints covering meanings, units, defaults, and constraints.
 
 ### Assets and deployment
 
@@ -131,11 +121,9 @@ effects.enabled = true
 
 `new BetterSky(viewerOrScene, options?)` accepts a Viewer or Scene. Passing a Scene does not set a Viewer clock. The instance registers its render stages and per-frame updates automatically; do not add `effects.stage` again or manually call lower-level updates.
 
-Constructor options merge with the defaults; `update()` merges with the accepted configuration. Nested objects merge by field, and arrays are replaced as a whole. Omitted fields keep their values. In the current repository, explicit `undefined` is treated as omission except for `time`; use `null` only for fields that explicitly support it. Invalid fields or values are rejected during parameter validation.
+Constructor options merge with the defaults; `update()` merges with the accepted configuration. Nested objects merge by field, and arrays are replaced as a whole. Omitted fields keep their values. Explicit `undefined` is treated as omission except for `time`; use `null` only for fields that explicitly support it. Invalid fields or values are rejected during parameter validation.
 
-In this repository, use `import { BetterSky } from './src/index.ts'` relative to the repository root to try unreleased capabilities. The repository demo already uses this entry point.
-
-### Configuration snapshots and asset loading (current repository)
+### Configuration snapshots and asset loading
 
 `BetterSky.defaultOptions` returns an independent copy of the default preset. `effects.getOptions()` returns an independent snapshot of the accepted configuration; changing the snapshot does not change the instance. Vectors are normalized to arrays in snapshots. Direct changes through the advanced Pass API are not reflected in the snapshot.
 
@@ -160,7 +148,7 @@ if (effects.assetStatus !== 'disposed') {
 unsubscribe()
 ```
 
-Reading `assetsReady` starts and waits for the six required sky asset tasks, even with `enabled: false`. It resolves after success, failure, or disposal. Loading failures do not reject the Promise; inspect `assetErrors`. It does not wait for the optional snow texture or SMAA lookup textures; SMAA textures are not tracked by these asset states.
+Reading `assetsReady` starts and waits for the six required sky asset tasks, even with `enabled: false`. It resolves after success, failure, or disposal. Loading failures do not reject the Promise; inspect `assetErrors`. It does not wait for the optional snow texture or SMAA lookup textures. Optional snow may still be loading after the Promise resolves; SMAA textures are not tracked by these asset states. This Promise is separate from Cesium's stage readiness.
 
 `assetStatus` is one of `idle`, `loading`, `ready`, `error`, or `disposed`. An optional asset failure may also produce `error`. Each error contains `id`, `url`, `required`, and the original `error`. `retryAssets()` explicitly retries failed assets without reloading successful ones; failures are not retried automatically each frame. `subscribeAssets(listener)` returns an unsubscribe function. Its callback receives no arguments; read the state inside the callback.
 
@@ -170,10 +158,10 @@ Reading `assetsReady` starts and waits for the six required sky asset tasks, eve
 | --- | --- |
 | `BetterSky.defaultOptions` | Static getter returning a fresh copy of the default options. |
 | `effects.update(options)` | Shares validation and application logic with convenience setters; rejects unknown fields or invalid values before committing changes. |
-| `effects.getOptions()` (current repository) | Returns an independent snapshot of accepted options; retains HBAO's internal values while disabled so they can be restored. |
-| `effects.assetStatus` / `effects.assetErrors` (current repository) | Sky asset state and a read-only error snapshot. |
-| `effects.assetsReady` (current repository) | Reading it starts the six required asset tasks as needed and waits for them; also resolves on failure or disposal. Excludes SMAA and the optional snow task. |
-| `effects.retryAssets()` / `effects.subscribeAssets(listener)` (current repository) | Explicitly retry failed assets; subscribe to changes and receive an unsubscribe function. |
+| `effects.getOptions()` | Returns an independent snapshot of accepted options; retains HBAO's internal values while disabled so they can be restored. |
+| `effects.assetStatus` / `effects.assetErrors` | Sky asset state and a read-only error snapshot. |
+| `effects.assetsReady` | Reading it starts the six required asset tasks as needed and waits for them; also resolves on failure or disposal. Excludes SMAA and the optional snow task. |
+| `effects.retryAssets()` / `effects.subscribeAssets(listener)` | Explicitly retry failed assets; subscribe to changes and receive an unsubscribe function. |
 | `effects.enabled` | Read/write master pipeline switch. |
 | `effects.coverage` | Read/write weather coverage. |
 | `effects.toneMappingExposure` | Read/write exposure multiplier. |
@@ -253,11 +241,11 @@ effects.dispose()
 viewer.destroy() // Only if the application also needs to destroy the Viewer.
 ```
 
-Dispose of the effects before destroying the host Viewer. Calling `dispose()` repeatedly is safe. The current repository also supports disposal while assets are loading: requests are not actively aborted, and late callbacks skip GPU creation. Asset state and configuration snapshots remain readable after disposal; parameter updates and loading retries are prohibited.
+Dispose of the effects before destroying the host Viewer. Calling `dispose()` repeatedly is safe. You can also dispose of an instance while assets are loading: requests are not actively aborted, and late callbacks skip GPU creation. Asset state and configuration snapshots remain readable after disposal; parameter updates and loading retries are prohibited.
 
 ## Parameters
 
-The defaults below match `BetterSky.defaultOptions` in the current repository. All numeric values must be finite; `NaN` and infinity are invalid. All options below support `update()` except the constructor-only `hbao.denoise`. Scene and time options follow their own application rules.
+The defaults below match `BetterSky.defaultOptions` in version 0.2.0. All numeric values must be finite; `NaN` and infinity are invalid. All options below support `update()` except the constructor-only `hbao.denoise`. Scene and time options follow their own application rules.
 
 ### General options
 
@@ -372,11 +360,11 @@ Enabled by default with the values below and `denoise: true`. During constructio
 | `hbao.gamma` | number | `2.5` | Positive AO curve exponent, separate from scene `gamma`. |
 | `hbao.denoise` | boolean | `true` | Bilateral filtering switch, configurable only during construction; dispose and recreate to change it. |
 
-The current `BetterSkyUpdateOptions` type excludes `hbao.denoise`. JavaScript runtime validation also rejects changing it; supplying its current value does not throw.
+The `BetterSkyUpdateOptions` type excludes `hbao.denoise`. JavaScript runtime validation also rejects changing it; supplying its current value does not throw.
 
 ### TypeScript types
 
-Use `BetterSkyOptions` for constructor options and the current repository's `BetterSkyUpdateOptions` for partial updates. Other public types include `BetterSkyVector2`, `BetterSkyVector4`, `BetterSkyQuality`, `BetterSkyCloudType`, `BetterSkyToneMappingMode`, the Options interfaces for clouds, denoising, volumetric light, and HBAO, and `BetterSkyPass`. The current repository also provides `BetterSkyAssetStatus`, `BetterSkyAssetError`, and `BetterSkyConstructor`. Refer to the declarations bundled with the version you installed.
+Use `BetterSkyOptions` for constructor options and `BetterSkyUpdateOptions` for partial updates. Other public types include `BetterSkyVector2`, `BetterSkyVector4`, `BetterSkyQuality`, `BetterSkyCloudType`, `BetterSkyToneMappingMode`, the Options interfaces for clouds, denoising, volumetric light, and HBAO, and `BetterSkyPass`. The package also provides `BetterSkyAssetStatus`, `BetterSkyAssetError`, and `BetterSkyConstructor`. Refer to the declarations bundled with the version you installed.
 
 ```ts
 import { BetterSky, type BetterSkyOptions } from 'bettersky-cesium'
@@ -402,7 +390,7 @@ const sky = new BetterSky(viewer, options)
 
 `applySceneSettings: false` does not prevent sky takeover or time changes. Setting it to `false` during construction does not automatically constrain later updates; pass it explicitly in each relevant update to preserve application scene settings.
 
-Clock, HDR, gamma, logarithmic depth, and terrain depth testing are not automatically restored on disable / disposal. Save and restore their original values in the application if needed. The current repository releases rendering resources owned by the instance but leaves installed context helper methods in place. Do not continue using cached Pass or stage references.
+Clock, HDR, gamma, logarithmic depth, and terrain depth testing are not automatically restored on disable / disposal. Save and restore their original values in the application if needed. Disposal releases rendering resources owned by the instance but leaves installed context helper methods in place. Do not continue using cached Pass or stage references.
 
 ### Continuous rendering and performance
 
@@ -414,11 +402,21 @@ Exposure and cloud fill lighting adjust brightness; density, layer thickness, an
 
 ### Compatibility and deployment
 
-Dependency ranges specify minimum supported versions, not verification of every later release. The SDK uses Cesium renderer internals. After upgrading Cesium, its engine / widgets, or three, verify initialization, parameter updates, resizing, and disposal/recreation. Retain the complete lockfile. For dependency errors such as missing exports, check the complete dependency combination first; this SDK does not require manually installing Cesium's internal components.
+Dependency ranges give the supported minimum, rather than a guarantee that every newer dependency combination has been tested. These Cesium combinations have been checked:
+
+| Cesium | engine / widgets | Result |
+| --- | --- | --- |
+| `1.142.0` | `26.0.0` / `16.0.0` | Working locked baseline. |
+| `1.142.0` | `26.4.0` / `16.3.0` | Upstream missing exports; a clean install can fail even when importing only `Cartesian2`. |
+| `1.146.0` | `26.4.0` / `16.3.0` | Working clean-install combination, used in these examples. |
+
+Keep and commit the complete lockfile. Installing the same top-level Cesium version without a lockfile can resolve different internal packages. Do not manually add engine/widgets or use overrides just to hide the incompatible combination above. This issue does not raise BetterSky's minimum Cesium version.
+
+BetterSky uses Cesium renderer internals. After upgrading Cesium or three, verify initialization, option changes, resizing and disposal/recreation. The examples use a verified version, not a claim about the latest available release.
 
 Use only supported 3D perspective scenes. Dispose of the effects before switching to 2D / Columbus View. On SSR pages, initialize after client mounting. Screen-space reflections and subsurface scattering are not currently supported. Keep `systemLight: true`; `false` makes only some effects use a custom sun direction supplied through `scene.context.uniformState.sunDirectionWC2`, while clouds and cloud shadows still follow Cesium's sun. This is not a unified custom-light API.
 
-Asset requests must return the actual files, not the application's HTML fallback. Upgrade JS and `BetterSkyAssets/` together and invalidate old caches. Include [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) when distributing SDK runtime builds, and follow the complete license terms.
+Asset requests must return the actual files, not the application's HTML fallback. Version 0.2.0 uses the Apache License 2.0; third-party materials retain their own terms. Upgrade JS and `BetterSkyAssets/` together and invalidate old caches. Include [LICENSE](LICENSE), [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) when distributing SDK runtime builds, and follow the complete license terms.
 
 ### Troubleshooting
 
@@ -433,5 +431,5 @@ Asset requests must return the actual files, not the application's HTML fallback
 | The third layer does not cast cloud shadows | Only the first two layers cast shadows by default; changing cloud types does not change this. |
 | SMAA is not active immediately after enabling | Lookup textures load asynchronously. Neither the first frame nor `assetsReady` indicates SMAA readiness. |
 | Clouds still move after pausing time | Set `localWeatherVelocity: [0, 0]` separately; handle other lower-level motion controls independently. |
-| Asset state or snapshot API calls fail | Check whether the installed package is the older npm `0.1.0`; these APIs were added in the current repository. |
+| Asset state or snapshot API calls fail | Confirm the installed SDK version. Read snapshots and asset state after disposal if needed, but do not update options or retry loading on a disposed instance. |
 | Demo basemap or terrain differs from expectations | Without service credentials, the demo uses the local NaturalEarthII basemap and ellipsoid terrain. See the [demo guide](demo/README.md). |

@@ -45,6 +45,86 @@ async function latest(name) {
   if (!response.ok) throw new Error("Registry metadata failed for " + name + ": " + response.status);
   return (await response.json()).version;
 }
+// Cesium 1.142's barrel also imports symbols removed by newer compatible-range
+// component releases. Verify its known compatible consumer lock separately from
+// the clean-install probe below; never override Cesium's component dependencies.
+const compatibleCesiumComponents = {
+  "1.142.0": { "@cesium/engine": "26.0.0", "@cesium/widgets": "16.0.0" },
+};
+async function versionFromEntry(entry, name) {
+  let directory = dirname(entry);
+  while (true) {
+    try { const data = await readJson(join(directory, "package.json")); if (data.name === name) return data.version; } catch (error) { if (error.code !== "ENOENT") throw error; }
+    const parent = dirname(directory);
+    if (parent === directory) throw new Error("Cannot locate manifest for " + name);
+    directory = parent;
+  }
+}
+async function cesiumComponents(entry) {
+  const require = createRequire(entry);
+  const components = {};
+  for (const name of ["@cesium/engine", "@cesium/widgets"]) components[name] = await versionFromEntry(require.resolve(name), name);
+  return components;
+}
+async function installFixture(manager, project, environment, report, reportFile, id, mode = "clean") {
+  const command = manager === "npm" && mode === "frozen" ? "ci" : "install";
+  const flags = mode === "lockfile" ? [manager === "npm" ? "--package-lock-only" : "--lockfile-only"] : mode === "frozen" && manager === "pnpm" ? ["--frozen-lockfile"] : [];
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await runPackageManager(manager, [command, ...flags, "--ignore-scripts", "--registry=" + officialRegistry, ...(manager === "npm" ? ["--no-audit", "--no-fund", "--prefer-offline", "--maxsockets=1", "--fetch-retries=4", "--fetch-retry-mintimeout=1000", "--fetch-retry-maxtimeout=15000", "--fetch-timeout=60000"] : [])], { cwd: project, env: environment });
+      return;
+    } catch (error) {
+      // Keep a credential-free summary before the isolated cache is removed.
+      const logDirectory = join(environment.npm_config_cache, "_logs");
+      const logs = await readdir(logDirectory).catch(() => []);
+      const logFile = logs.filter(name => name.endsWith("debug-0.log")).sort().at(-1);
+      const logText = logFile ? await readFile(join(logDirectory, logFile), "utf8").catch(() => "") : "";
+      const registryRequests = [...logText.matchAll(/(?:GET|POST|PUT)\s+(?:\d{3}\s+)?(https:\/\/registry\.npmjs\.org\/[^\s]+)/g)].slice(-12).map(match => match[1]);
+      const transportCode = error.message.match(/(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|ERR_SSL_CIPHER_OPERATION_FAILED)/)?.[0];
+      (report.installFailures ??= []).push({ id, mode, attempt, code: transportCode || "INSTALL_ERROR", registryRequests });
+      await writeJson(reportFile, report);
+      if (attempt >= 5 || (!transportCode && !/network aborted/.test(error.message))) throw error;
+      console.log("Transient registry failure, retry " + attempt + "/5: " + id);
+      await new Promise(resolveWait => setTimeout(resolveWait, attempt * 1000));
+    }
+  }
+}
+async function probeCleanCesium(work, cesiumVersion, viteVersion, environment, report, reportFile) {
+  const id = "upstream-clean-cesium" + cesiumVersion;
+  const project = join(work, id);
+  await mkdir(project, { recursive: true });
+  await writeJson(join(project, "package.json"), { name: id, private: true, type: "module", dependencies: { cesium: cesiumVersion }, devDependencies: { vite: viteVersion } });
+  await writeFile(join(project, ".npmrc"), "@cesium:registry=" + officialRegistry + "/\n");
+  const probe = { id, cesiumVersion, manager: "npm", strategy: "clean-install", cesiumComponentOverrides: false, zeroOverrides: true, status: "pending", purpose: "Observe upstream Cesium barrel compatibility without the SDK or component pins" };
+  report.automatic.upstreamProbes.push(probe);
+  await writeJson(reportFile, report);
+  await installFixture("npm", project, environment, report, reportFile, id);
+  const require = createRequire(join(project, "package.json"));
+  probe.components = await cesiumComponents(require.resolve("cesium"));
+  await writeFile(join(project, "index.html"), '<!doctype html><script type="module" src="/main.js"></script>');
+  await writeFile(join(project, "main.js"), 'import { Cartesian2 } from "cesium";\nconsole.log(new Cartesian2(1, 2));\n');
+  await writeFile(join(project, "vite.config.js"), 'export default { build: { target: "es2022" } };\n');
+  const vite = join(dirname(require.resolve("vite/package.json")), "bin/vite.js");
+  try {
+    await execute(process.execPath, [vite, "build"], { cwd: project, env: environment });
+    probe.status = "passed";
+    probe.hostBuild = "passed";
+  } catch (error) {
+    // A failing build is observational only when it names the upstream barrel
+    // and component exports. Other failures still block SDK acceptance.
+    probe.hostBuild = "failed";
+    probe.failure = String(error).slice(-12000);
+    if (!/cesium[\\/]Source[\\/]Cesium\.js/.test(probe.failure) || !/(?:is not exported|No matching export)/i.test(probe.failure) || !/@cesium[\\/](?:engine|widgets)/.test(probe.failure)) {
+      probe.status = "error";
+      await writeJson(reportFile, report);
+      throw error;
+    }
+    probe.status = "failed";
+    probe.classification = "upstream-barrel-component-export-mismatch";
+  }
+  console.log("Observed " + id + ": " + probe.status + " " + JSON.stringify(probe.components));
+  await writeJson(reportFile, report);
+}
 function fixtureHtml(id) {
   return '<!doctype html><html><head><meta charset="UTF-8"><title>BetterSky SDK acceptance ' + id +
     '</title><style>html,body{margin:0;background:#10151d;color:#eee;font:14px monospace}#viewer{width:640px;height:360px}pre{white-space:pre-wrap;max-width:1000px}button{font-size:16px;padding:8px}</style></head><body><h1>' +
@@ -239,7 +319,7 @@ async function verify(options) {
   const report = {
     schemaVersion: 1, status: "pending", startedAt: new Date().toISOString(),
     artifact: { path: tarball, name: inspected.manifest.name, version: inspected.manifest.version, sha256: inspected.sha256 },
-    automatic: { status: "pending", matrix: [] }, browser: { status: "pending", results: {} },
+    automatic: { status: "pending", matrix: [], upstreamProbes: [] }, browser: { status: "pending", results: {} },
     fixtures: [], expectedAssets: assets.assets.map(asset => asset.path), workspace: work, cleanup: "pending",
   };
   const servers = [];
@@ -249,15 +329,15 @@ async function verify(options) {
     const rootManifest = await readJson(join(repoRoot, "package.json"));
     const require = createRequire(join(repoRoot, "package.json"));
     const viteVersion = require("vite/package.json").version;
-    const currentCesium = await latest("cesium");
-    const currentThree = await latest("three");
+    const [currentCesium, currentThree] = await Promise.all([latest("cesium"), latest("three")]);
     const staticCopyVersion = rootManifest.devDependencies["vite-plugin-static-copy"];
     const minimumCesium = rootManifest.dependencies.cesium.match(/^>=\s*(\d+\.\d+\.\d+)$/)?.[1];
     const minimumThree = rootManifest.dependencies.three.match(/^>=\s*(\d+\.\d+\.\d+)$/)?.[1];
     assert.ok(minimumCesium && minimumThree, "Explicit minimum runtime dependency versions are required");
     const versions = options["registry-smoke"] ? { cesium: [currentCesium], three: [currentThree] } : { cesium: [minimumCesium, currentCesium], three: [minimumThree, currentThree] };
     const typescriptVersion = rootManifest.devDependencies.typescript;
-    report.versions = { ...versions, vite: viteVersion, staticCopy: staticCopyVersion, typescript: typescriptVersion, node: process.version, packageManager: rootManifest.packageManager };
+    report.versions = { ...versions, registry: officialRegistry, registryCheckedAt: new Date().toISOString(), vite: viteVersion, staticCopy: staticCopyVersion, typescript: typescriptVersion, node: process.version, packageManager: rootManifest.packageManager };
+    if (!options["registry-smoke"] && compatibleCesiumComponents[minimumCesium]) await probeCleanCesium(work, minimumCesium, viteVersion, environment, report, reportFile);
     for (const manager of ["npm", "pnpm"]) {
       for (const cesiumVersion of [...new Set(versions.cesium)]) {
         for (const threeVersion of [...new Set(versions.three)]) {
@@ -266,6 +346,8 @@ async function verify(options) {
           await mkdir(project, { recursive: true });
           const controlsThreeVersion = threeVersion !== currentThree;
           const dependencies = { "bettersky-cesium": options["registry-smoke"] ? inspected.manifest.version : "file:" + tarball.replaceAll("\\", "/"), cesium: cesiumVersion };
+          const componentPins = compatibleCesiumComponents[cesiumVersion];
+          if (componentPins) Object.assign(dependencies, componentPins);
           if (controlsThreeVersion) dependencies.three = threeVersion;
           const manifest = { name: "bettersky-acceptance-fixture", private: true, type: "module", dependencies, devDependencies: { vite: viteVersion, typescript: typescriptVersion, "vite-plugin-static-copy": staticCopyVersion } };
           // Only the lower-three compatibility case needs test-only version control.
@@ -278,24 +360,16 @@ async function verify(options) {
               "storeDir: " + JSON.stringify(join(work, "pnpm-store").replaceAll("\\", "/")) + "\n");
           }
           console.log("Install " + id);
-          for (let attempt = 1; ; attempt++) {
-            try {
-              await runPackageManager(manager, ["install", "--ignore-scripts", "--registry=" + officialRegistry, ...(manager === "npm" ? ["--no-audit", "--no-fund", "--prefer-offline", "--maxsockets=1", "--fetch-retries=4", "--fetch-retry-mintimeout=1000", "--fetch-retry-maxtimeout=15000", "--fetch-timeout=60000"] : [])], { cwd: project, env: environment });
-              break;
-            } catch (error) {
-              // Keep a credential-free summary before the isolated cache is removed.
-              const logDirectory = join(work, "npm-cache/_logs");
-              const logs = await readdir(logDirectory).catch(() => []);
-              const logFile = logs.filter(name => name.endsWith("debug-0.log")).sort().at(-1);
-              const logText = logFile ? await readFile(join(logDirectory, logFile), "utf8").catch(() => "") : "";
-              const registryRequests = [...logText.matchAll(/(?:GET|POST|PUT)\s+(?:\d{3}\s+)?(https:\/\/registry\.npmjs\.org\/[^\s]+)/g)].slice(-12).map(match => match[1]);
-              const transportCode = error.message.match(/(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|ERR_SSL_CIPHER_OPERATION_FAILED)/)?.[0];
-              (report.installFailures ??= []).push({ id, attempt, code: transportCode || "INSTALL_ERROR", registryRequests });
-              await writeJson(reportFile, report);
-              if (attempt >= 5 || (!transportCode && !/network aborted/.test(error.message))) throw error;
-              console.log("Transient registry failure, retry " + attempt + "/5: " + id);
-              await new Promise(resolveWait => setTimeout(resolveWait, attempt * 1000));
-            }
+          const installStrategy = { mode: componentPins ? "locked-compatible-components" : "clean-install", cesiumComponentPins: componentPins || {}, threeOverride: controlsThreeVersion ? threeVersion : null };
+          if (componentPins) {
+            await installFixture(manager, project, environment, report, reportFile, id, "lockfile");
+            const lockfile = manager === "npm" ? "package-lock.json" : "pnpm-lock.yaml";
+            const lockHash = sha256(await readFile(join(project, lockfile)));
+            await installFixture(manager, project, environment, report, reportFile, id, "frozen");
+            assert.equal(sha256(await readFile(join(project, lockfile))), lockHash, "Frozen install changed the compatible fixture lock");
+            installStrategy.lockfile = { file: lockfile, sha256: lockHash, verifiedBy: manager === "npm" ? "npm ci" : "pnpm install --frozen-lockfile" };
+          } else {
+            await installFixture(manager, project, environment, report, reportFile, id);
           }
           const projectRequire = createRequire(join(project, "package.json"));
           const sdkRoot = await realpath(join(project, "node_modules/bettersky-cesium"));
@@ -303,29 +377,22 @@ async function verify(options) {
           for (const entry of inspected.entries) assert.ok((await readFile(join(sdkRoot, entry.path))).equals(entry.data), "Installed package differs from accepted bytes: " + entry.path);
           const sdkRequire = createRequire(sdkEntry);
           const resolved = { sdk: sdkEntry, cesium: sdkRequire.resolve("cesium"), three: sdkRequire.resolve("three") };
-          // Resolve version through package roots rather than unexported package.json subpaths.
-          async function versionFromEntry(entry, name) {
-            let directory = dirname(entry);
-            while (true) {
-              try { const data = await readJson(join(directory, "package.json")); if (data.name === name) return data.version; } catch (error) { if (error.code !== "ENOENT") throw error; }
-              const parent = dirname(directory);
-              if (parent === directory) throw new Error("Cannot locate manifest for " + name);
-              directory = parent;
-            }
-          }
           assert.equal(await versionFromEntry(resolved.cesium, "cesium"), cesiumVersion);
           assert.equal(await versionFromEntry(resolved.three, "three"), threeVersion);
           assert.equal(await realpath(resolved.cesium), await realpath(projectRequire.resolve("cesium")), "Cesium must be shared");
-          const cesiumRequire = createRequire(resolved.cesium);
-          const components = {};
-          for (const name of ["@cesium/engine", "@cesium/widgets"]) components[name] = await versionFromEntry(cesiumRequire.resolve(name), name);
+          const components = await cesiumComponents(resolved.cesium);
+          if (componentPins) assert.deepEqual(components, componentPins, "Compatible Cesium component pins did not resolve through the real Cesium entry");
           await writeFile(join(project, "acceptance.ts"), [
             'import BetterSky, { BetterSky as Named, type BetterSkyOptions } from "bettersky-cesium";',
             'import type { Viewer } from "cesium";',
             'declare const viewer: Viewer;',
             'const options: BetterSkyOptions = { time: undefined, coverage: 0.5, cloud: { altitudes: [4000,6000,10000,0] }, volumetricLight: { quality: "low" } };',
             'const effects: Named = new BetterSky(viewer, options);',
-            'effects.update({ cloud: { densityScales: [0.1,0.1,0.01,0] } }); effects.enabled = false; effects.dispose();',
+            'effects.update({ cloud: { densityScales: [0.1,0.1,0.01,0] } });',
+            'const snapshot: BetterSkyOptions = effects.getOptions();',
+            'const unsubscribe: () => void = effects.subscribeAssets(() => { const status = effects.assetStatus; const errors = effects.assetErrors; void status; void errors; });',
+            'const ready: Promise<void> = effects.assetsReady; const retried: Promise<void> = effects.retryAssets();',
+            'void snapshot; void ready; void retried; unsubscribe(); effects.enabled = false; effects.dispose();',
           ].join("\n"));
           const typescriptRoot = await realpath(join(project, "node_modules/typescript"));
           const typescriptManifest = await readJson(join(typescriptRoot, "package.json"));
@@ -334,7 +401,7 @@ async function verify(options) {
           await mkdir(join(project, "licenses"), { recursive: true });
           // License texts are not served as runtime assets; the integration fixture keeps
           // them outside the public asset root, matching the documented recommendation.
-          for (const file of ["LICENSE", "THIRD_PARTY_NOTICES.md"]) await cp(join(sdkRoot, file), join(project, "licenses", file));
+          for (const file of ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]) await cp(join(sdkRoot, file), join(project, "licenses", file));
           const cases = [{ suffix: "root", base: "/", assetsBase: "/cesium/" }];
           if (!options["registry-smoke"] && manager === "npm" && cesiumVersion === versions.cesium[0] && threeVersion === versions.three[0]) {
             cases.push({ suffix: "subpath", base: "/app/", assetsBase: "/app/cesium/" }, { suffix: "custom-assets", base: "/", assetsBase: "/vendor/cesium/" }, { suffix: "source-baseline", base: "/", assetsBase: "/cesium/" });
@@ -358,7 +425,7 @@ async function verify(options) {
               console.log("BROWSER " + item.id + " " + hosted.url);
             }
           }
-          report.automatic.matrix.push({ id, manager, cesiumVersion, threeVersion, components, resolved, cesiumComponentOverrides: false, zeroOverrides: !controlsThreeVersion, typecheck: "passed", hostBuild: "passed" });
+          report.automatic.matrix.push({ id, manager, cesiumVersion, threeVersion, components, resolved, installStrategy, cesiumComponentOverrides: false, zeroOverrides: !controlsThreeVersion, typecheck: "passed", hostBuild: "passed" });
           await writeJson(reportFile, report);
           console.log("Passed install/types/build " + id);
         }

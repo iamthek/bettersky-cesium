@@ -1,8 +1,8 @@
 # Third-party notices
 
-This file lists confirmed third-party code and runtime assets incorporated into
-BetterSky for Cesium, plus its external runtime dependencies. The project remains
-proprietary; its trial license does not replace the licenses of these portions.
+This file explains which parts of BetterSky for Cesium come from other projects.
+BetterSky's own code is licensed under Apache-2.0. Third-party code and assets
+keep their original licenses, reproduced below.
 
 ## Incorporated code
 
@@ -17,10 +17,8 @@ proprietary; its trial license does not replace the licenses of these portions.
 | `Library/shaders/hbao/turboColorMap.glsl` | Google LLC; Anton Mikhailov; Ruofei Du | Apache-2.0. Keep attribution and the license; identify local modifications. |
 | `Library/shaders/hbao/highPassRandom.glsl` | react-spring / pmndrs drei | MIT. Keep the complete notice. |
 
-All code listed above permits proprietary commercial integration subject to
-its original conditions. Those conditions do not require opening the SDK or
-its user's application source. Apache-2.0 also contains patent provisions and
-does not grant trademark endorsement rights. The complete terms below control.
+Keep the applicable copyright, license and attribution notices when distributing
+these parts. The complete license texts below describe the conditions.
 
 ## External runtime packages
 
@@ -29,7 +27,7 @@ does not grant trademark endorsement rights. The complete terms below control.
 | `cesium` | 1.142.0 | Apache-2.0 and bundled third-party terms in `node_modules/cesium/LICENSE.md`. |
 | `three` | 0.160.1 | MIT in `node_modules/three/LICENSE`. |
 
-These packages remain external to the planned SDK build and are installed via
+These packages remain external to the SDK build and are installed via
 the package manager. Their complete package license files are not duplicated
 here. The texts below cover code actually incorporated into this SDK. If a
 separate distribution copies a dependency's builds or resources, that
@@ -47,6 +45,20 @@ when redistributing them.
 | `GeospatialAssets/local_weather.png`, `shape.bin`, `shape_detail.bin`, `turbulence.png` | `packages/clouds/assets/` at `45a1c6c1bb9fd38b3680fd120795ff4c32df68ff` | MIT, Copyright (c) 2024 Shota Matsuda. See the complete notice below. |
 | `GeospatialAssets/stbn.bin` | `packages/core/assets/stbn.bin` at `45a1c6c1bb9fd38b3680fd120795ff4c32df68ff` | MIT, Copyright (c) 2024 Shota Matsuda. See the complete notice below. |
 | `GeospatialAssets/irradiance.exr`, `scattering.exr`, `transmittance.exr` | `packages/atmosphere/assets/` at `82e00c5222d6cbc222af69abdf6d3f4fc9f63030` | MIT, Copyright (c) 2024 Shota Matsuda. See the complete notice below. |
+
+`snowCoverMask.png` is a project-authored asset licensed under Apache-2.0.
+
+## Assets kept for future development
+
+The repository also keeps eight assets that are not used by the current SDK.
+They are excluded from the npm package. Their presence in the repository does
+not change their original license or establish that they are Apache-2.0 assets.
+
+| Asset | Source and license record |
+| --- | --- |
+| `waternormals.jpg` | Byte-for-byte match with [three.js r160](https://github.com/mrdoob/three.js/blob/r160/examples/textures/waternormals.jpg), MIT; see the three.js notice below. |
+| `bluenoise2.png`, `noise.png`, `NoiseAndGrain.png`, `normal004.jpg`, `texture4.png` | Original source and redistribution terms have not yet been verified. |
+| `GeospatialAssets/higher_order_scattering.exr`, `GeospatialAssets/single_mie_scattering.exr` | Original source and redistribution terms have not yet been verified. |
 
 ## Source references
 

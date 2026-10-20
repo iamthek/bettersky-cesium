@@ -27,6 +27,10 @@ export default defineConfig({
     },
     viteStaticCopy({
       targets: [
+        { src: fromRepo('./LICENSE'), dest: '.', rename: { stripBase: true } },
+        { src: fromRepo('./NOTICE'), dest: '.', rename: { stripBase: true } },
+        { src: fromRepo('./THIRD_PARTY_NOTICES.md'), dest: '.', rename: { stripBase: true } },
+        { src: fromRepo('./node_modules/cesium/LICENSE.md'), dest: 'cesium', rename: { stripBase: true } },
         {
           src: fromRepo('./node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}/**/*'),
           dest: 'cesium',

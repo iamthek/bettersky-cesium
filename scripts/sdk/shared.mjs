@@ -14,7 +14,7 @@ export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..'
 export const packageDirectory = join(repoRoot, '.sdk-package');
 export const distDirectory = join(repoRoot, 'dist');
 export const officialRegistry = 'https://registry.npmjs.org';
-// Copyright year for the generated banner; LICENSE must carry the same line.
+// Copyright year for the generated banner; NOTICE must carry the same line.
 export const copyrightYear = 2026;
 export const sha256 = data => createHash('sha256').update(data).digest('hex');
 export const readJson = async path => JSON.parse(await readFile(path, 'utf8'));
@@ -162,7 +162,7 @@ export function inspectJavaScript(source) {
 }
 
 function scanText(path, data) {
-  if (!/\.(?:js|ts|json|md)$/.test(path) && path !== 'LICENSE') return;
+  if (!/\.(?:js|ts|json|md)$/.test(path) && !['LICENSE', 'NOTICE'].includes(path)) return;
   const source = data.toString('utf8');
   if (path === 'dist/index.d.ts') inspectPublicDeclarations(source, path);
   const forbidden = [
@@ -180,7 +180,7 @@ export async function validatePackageEntries(entries) {
   const root = await readJson(join(repoRoot, 'package.json'));
   const assets = await readAssetManifest();
   const expected = new Map([
-    ['package.json', null], ['README.md', null], ['README.zh-CN.md', null], ['LICENSE', null], ['THIRD_PARTY_NOTICES.md', null],
+    ['package.json', null], ['README.md', null], ['LICENSE', null], ['NOTICE', null], ['THIRD_PARTY_NOTICES.md', null],
     ['dist/index.js', null], ['dist/index.d.ts', null],
     ...assets.assets.map(asset => [`dist/assets/${asset.path}`, asset.sha256]),
   ]);
@@ -194,20 +194,20 @@ export async function validatePackageEntries(entries) {
     actual.set(entry.path, entry.data);
   }
   for (const path of expected.keys()) if (!actual.has(path)) throw new Error(`Missing package file: ${path}`);
-  for (const path of ['README.md', 'README.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+  for (const path of ['README.md', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md']) {
     if (sha256(actual.get(path)) !== sha256(await readFile(join(repoRoot, path)))) throw new Error(`Packaged document differs from the reviewed repository file: ${path}`);
   }
-  if (!actual.get('LICENSE').toString('utf8').includes(copyrightLine(root.author))) throw new Error('LICENSE must contain the copyright line derived from package.json author.');
+  if (!actual.get('NOTICE').toString('utf8').includes(copyrightLine(root.author))) throw new Error('NOTICE must contain the copyright line derived from package.json author.');
   validateDeclarationContract(actual.get('dist/index.d.ts').toString('utf8'), await readFile(join(repoRoot, 'src/index.ts'), 'utf8'));
   const manifest = JSON.parse(actual.get('package.json').toString('utf8'));
-  const expectedFiles = ['dist/index.js', 'dist/index.d.ts', 'dist/assets/', 'README.md', 'README.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'];
-  const allowedMetadata = ['name', 'version', 'description', 'type', 'license', 'author', 'homepage', 'keywords', 'files', 'exports', 'types', 'peerDependencies', 'dependencies', 'engines', 'sideEffects'];
-  if (Object.keys(manifest).some(key => !allowedMetadata.includes(key)) || manifest.name !== root.name || manifest.version !== root.version || manifest.type !== 'module' || manifest.license !== 'SEE LICENSE IN LICENSE') throw new Error('Invalid release package metadata.');
+  const expectedFiles = ['dist/index.js', 'dist/index.d.ts', 'dist/assets/', 'README.md', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'];
+  const allowedMetadata = ['name', 'version', 'description', 'type', 'license', 'author', 'repository', 'bugs', 'homepage', 'keywords', 'files', 'exports', 'types', 'peerDependencies', 'dependencies', 'engines', 'sideEffects'];
+  if (Object.keys(manifest).some(key => !allowedMetadata.includes(key)) || manifest.name !== root.name || manifest.version !== root.version || manifest.type !== 'module' || manifest.license !== 'Apache-2.0' || root.license !== 'Apache-2.0') throw new Error('Invalid release package metadata.');
   if (JSON.stringify(manifest.files) !== JSON.stringify(expectedFiles) || JSON.stringify(manifest.exports) !== JSON.stringify({ '.': { types: './dist/index.d.ts', import: './dist/index.js' } }) || manifest.types !== './dist/index.d.ts') throw new Error('Invalid ESM/type/file exports.');
   if (JSON.stringify(manifest.peerDependencies) !== JSON.stringify({ cesium: root.dependencies.cesium }) || JSON.stringify(manifest.dependencies) !== JSON.stringify({ three: root.dependencies.three })) throw new Error('Invalid runtime dependency contract.');
-  if (!manifest.author?.name || manifest.author.email !== root.author?.email || manifest.author.email !== 'iamthek@qq.com' || manifest.author.url || manifest.homepage !== 'https://www.npmjs.com/package/' + root.name) throw new Error('Release contact metadata must use the approved email and npm package page.');
+  if (JSON.stringify(manifest.author) !== JSON.stringify(root.author) || manifest.author?.email !== 'iamthek@qq.com' || manifest.author.url || manifest.homepage !== root.homepage || manifest.homepage !== 'https://iamthek.github.io/bettersky-cesium/' || JSON.stringify(manifest.repository) !== JSON.stringify(root.repository) || manifest.repository?.type !== 'git' || manifest.repository.url !== 'git+https://github.com/iamthek/bettersky-cesium.git' || JSON.stringify(manifest.bugs) !== JSON.stringify(root.bugs) || manifest.bugs?.url !== 'https://github.com/iamthek/bettersky-cesium/issues') throw new Error('Release contact metadata must use the approved author, repository, issue tracker and documentation page.');
   inspectJavaScript(actual.get('dist/index.js').toString('utf8'));
-  if (!actual.get('dist/index.js').toString('utf8').startsWith(`/*! BetterSky for Cesium ${manifest.version}. ${copyrightLine(root.author)}.`)) throw new Error('Bundle banner must contain the copyright line derived from package.json author.');
+  if (!actual.get('dist/index.js').toString('utf8').startsWith(`/*! BetterSky for Cesium ${manifest.version}. ${copyrightLine(root.author)}. SPDX-License-Identifier: Apache-2.0.`)) throw new Error('Bundle banner must contain the copyright line derived from package.json author and the Apache-2.0 license identifier.');
   return manifest;
 }
 

@@ -46,13 +46,20 @@ export function browserAcceptance() {
       return effects;
     }
     async function ready() {
-      // Exercise the real rendering path; no SDK all-assets-ready API is assumed.
+      // The public promise covers required sky assets, not SMAA or optional snow.
+      // Keep rendering to exercise GPU upload and stage execution as well.
+      let settled = false;
+      let rejected = false;
+      let rejection;
+      effects.assetsReady.then(() => { settled = true; }, error => { rejected = true; rejection = error; settled = true; });
       const deadline = performance.now() + 90000;
       while (performance.now() < deadline) {
         await frames(4);
+        if (rejected) throw new Error("assetsReady rejected: " + rejection);
         if (errors.length) throw new Error(errors.join("\n"));
+        if (settled && effects.assetStatus === "error") throw new Error("Required sky assets failed: " + JSON.stringify(effects.assetErrors));
         const pass = effects.pass;
-        if (pass && pass._u_scattering_texture !== pass._defaultTexture3D &&
+        if (settled && effects.assetStatus === "ready" && pass && pass._u_scattering_texture !== pass._defaultTexture3D &&
           pass._u_irradiance_texture !== viewer.scene.context.defaultTexture &&
           pass._u_transmittance_texture !== viewer.scene.context.defaultTexture &&
           pass.shapeTexture !== pass._defaultTexture3D &&
@@ -92,10 +99,28 @@ export function browserAcceptance() {
       attach();
       check("business clock preserved", Cesium.JulianDate.equals(initialTime, viewer.clock.currentTime));
       const stageCount = viewer.scene.postProcessStages.length;
+      const snapshot = effects.getOptions();
+      const acceptedOptions = JSON.stringify(snapshot);
+      snapshot.coverage = 0.123;
+      snapshot.cloud.altitudes[0] += 123;
+      snapshot.volumetricLight.intensity = 7;
+      check("getOptions returns independent nested snapshots", JSON.stringify(effects.getOptions()) === acceptedOptions && effects.getOptions() !== effects.getOptions());
+      check("asset status starts idle", effects.assetStatus === "idle" && effects.assetErrors.length === 0);
+      const assetStates = [];
+      const unsubscribeAssets = effects.subscribeAssets(() => assetStates.push(effects.assetStatus));
+      check("subscribeAssets returns an unsubscribe function", typeof unsubscribeAssets === "function");
       let rejected = false;
       try { new BetterSky(viewer, options); } catch (error) { rejected = /active|instance|实例/i.test(error.message); }
       check("second instance rejected without changing stages", rejected && viewer.scene.postProcessStages.length === stageCount);
       await ready();
+      check("assetsReady settles with successful required sky assets", effects.assetStatus === "ready" && effects.assetErrors.length === 0);
+      check("asset subscription observes loading and ready", assetStates.includes("loading") && assetStates.includes("ready"));
+      const retryResult = await effects.retryAssets();
+      check("retryAssets settles successfully with no failed assets", retryResult === undefined && effects.assetStatus === "ready" && effects.assetErrors.length === 0);
+      unsubscribeAssets();
+      const notificationsBeforeUnsubscribedRetry = assetStates.length;
+      await effects.retryAssets();
+      check("asset subscription can be removed", assetStates.length === notificationsBeforeUnsubscribedRetry);
       await frames(12);
       startupMs = performance.now() - start;
       check("real GPU stages ready", !!effects.stage && effects.stage.ready);
@@ -127,12 +152,19 @@ export function browserAcceptance() {
       effects.dispose();
       effects.dispose();
       check("idempotent disposal removes stages", viewer.scene.postProcessStages.length === stagesBefore);
+      await effects.assetsReady;
+      check("disposed resource getters settle safely", effects.assetStatus === "disposed" && effects.assetErrors.length === 0);
+      rejected = false;
+      try { effects.retryAssets(); } catch { rejected = true; }
+      check("retryAssets rejects disposed mutations", rejected);
       attach();
       const pendingPass = effects.pass;
-      pendingPass.precomputed();
+      const pendingAssets = effects.assetsReady;
       effects.dispose();
       effects.dispose();
+      await pendingAssets;
       check("disposal during asset loading", viewer.scene.postProcessStages.length === stagesBefore);
+      check("assetsReady settles without rejection after disposal", effects.assetStatus === "disposed");
       await frames(8);
       attach();
       await ready();

@@ -1,5 +1,4 @@
 import { build, normalizePath } from 'vite';
-import JavaScriptObfuscator from 'javascript-obfuscator';
 import { parse } from 'acorn';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -10,19 +9,6 @@ import {
   copyrightLine, distDirectory, inspectJavaScript, inspectPublicDeclarations, listDirectoryEntries, packageDirectory, readAssetManifest,
   readJson, removeOwnedDirectory, repoRoot, sha256, validatePackageEntries,
 } from './shared.mjs';
-
-export const obfuscatorOptions = Object.freeze({
-  target: 'browser-no-eval', seed: 20261019, compact: true, sourceMap: false,
-  renameGlobals: false, renameProperties: false, identifierNamesGenerator: 'hexadecimal',
-  controlFlowFlattening: false, deadCodeInjection: false, debugProtection: false,
-  debugProtectionInterval: 0, selfDefending: false, disableConsoleOutput: false,
-  numbersToExpressions: false, simplify: false, splitStrings: false, unicodeEscapeSequence: false,
-  transformObjectKeys: false, stringArray: true, stringArrayThreshold: 0.15,
-  stringArrayEncoding: [], stringArrayCallsTransform: false, stringArrayRotate: false,
-  stringArrayShuffle: false, stringArrayIndexShift: false, stringArrayWrappersCount: 0,
-  // Keep shader interfaces, paths and multiline GLSL out of the string array.
-  reservedStrings: ['\\n', 'BetterSkyAssets/', 'cesium', 'three', '__[A-Z_]+__'],
-});
 
 function count(source, value) { return source.split(value).length - 1; }
 function requireCount(source, value, expected = 1) {
@@ -130,16 +116,12 @@ export async function buildSdk() {
   const shaderChecks = await validateShaderAssembly(shaders);
   const chunks = (Array.isArray(generated) ? generated.flatMap(item => item.output) : generated.output);
   if (chunks.length !== 1 || chunks[0].type !== 'chunk' || chunks[0].fileName !== 'index.js') throw new Error('SDK must produce exactly one ESM JavaScript chunk.');
-  const originalBundle = chunks[0].code;
-  inspectJavaScript(originalBundle);
-  const obfuscationStartedAt = performance.now();
-  const obfuscated = JavaScriptObfuscator.obfuscate(originalBundle, obfuscatorOptions).getObfuscatedCode();
-  const obfuscationMilliseconds = performance.now() - obfuscationStartedAt;
-  const banner = `/*! BetterSky for Cesium ${root.version}. ${copyrightLine(root.author)}. All rights reserved. See LICENSE and THIRD_PARTY_NOTICES.md. */\n`;
+  const minifiedBundle = chunks[0].code;
+  inspectJavaScript(minifiedBundle);
+  const banner = `/*! BetterSky for Cesium ${root.version}. ${copyrightLine(root.author)}. SPDX-License-Identifier: Apache-2.0. See LICENSE, NOTICE and THIRD_PARTY_NOTICES.md. */\n`;
   const retainedNotices = [...notices].map(notice => `/*${notice}*/\n`).join('');
-  const finalBundle = banner + retainedNotices + obfuscated + '\n';
+  const finalBundle = banner + retainedNotices + minifiedBundle + '\n';
   inspectJavaScript(finalBundle);
-  // No unprotected intermediate bundle is ever written to disk.
   await removeOwnedDirectory(distDirectory);
   await removeOwnedDirectory(packageDirectory);
   await mkdir(join(distDirectory, 'assets'), { recursive: true });
@@ -156,22 +138,22 @@ export async function buildSdk() {
   }
   const manifest = {
     name: root.name, version: root.version, description: 'Atmosphere, volumetric clouds and lighting effects for CesiumJS.',
-    type: 'module', license: 'SEE LICENSE IN LICENSE', author: root.author, homepage: root.homepage,
+    type: 'module', license: root.license, author: root.author, repository: root.repository, bugs: root.bugs, homepage: root.homepage,
     keywords: ['cesium', 'atmosphere', 'clouds', 'volumetric-light'], sideEffects: true,
-    files: ['dist/index.js', 'dist/index.d.ts', 'dist/assets/', 'README.md', 'README.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
+    files: ['dist/index.js', 'dist/index.d.ts', 'dist/assets/', 'README.md', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'],
     exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' } }, types: './dist/index.d.ts',
     peerDependencies: { cesium: root.dependencies.cesium }, dependencies: { three: root.dependencies.three }, engines: { node: '>=22.0.0' },
   };
   await mkdir(packageDirectory, { recursive: true });
   await writeFile(join(packageDirectory, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-  for (const file of ['README.md', 'README.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md']) await copyFile(join(repoRoot, file), join(packageDirectory, file));
+  for (const file of ['README.md', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md']) await copyFile(join(repoRoot, file), join(packageDirectory, file));
   for (const entry of await listDirectoryEntries(distDirectory)) {
     const target = join(packageDirectory, 'dist', entry.path);
     await mkdir(resolve(target, '..'), { recursive: true });
     await writeFile(target, entry.data);
   }
   await validatePackageEntries(await listDirectoryEntries(packageDirectory));
-  console.log(JSON.stringify({ name: root.name, version: root.version, output: packageDirectory, assets: assetManifest.assets.length, shaders: shaders.size, shaderChecks, obfuscator: { version: root.devDependencies['javascript-obfuscator'], seed: obfuscatorOptions.seed, target: obfuscatorOptions.target }, obfuscatedBytes: Buffer.byteLength(finalBundle), minifiedBytes: Buffer.byteLength(originalBundle), buildMilliseconds: Math.round(performance.now() - startedAt), obfuscationMilliseconds: Math.round(obfuscationMilliseconds) }, null, 2));
+  console.log(JSON.stringify({ name: root.name, version: root.version, output: packageDirectory, assets: assetManifest.assets.length, shaders: shaders.size, shaderChecks, minifier: 'oxc', bundleBytes: Buffer.byteLength(finalBundle), minifiedBytes: Buffer.byteLength(minifiedBundle), buildMilliseconds: Math.round(performance.now() - startedAt) }, null, 2));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) buildSdk().catch(error => { console.error(error.message); process.exitCode = 1; });

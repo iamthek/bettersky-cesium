@@ -60,7 +60,7 @@
       "path": "snowCoverMask.png",
       "purpose": "Snow surface cover mask texture",
       "source": "Project-authored; owner-confirmed 2026-10-19",
-      "license": "Proprietary trial license in LICENSE",
+      "license": "Apache-2.0; project-authored asset, see LICENSE and NOTICE",
       "sha256": "6467dcfb0b71fda9df8e32813ce4f418988200bca245901111113699fc896f2d"
     }
   ],
@@ -87,7 +87,7 @@
     },
     {
       "path": "waternormals.jpg",
-      "reason": "No runtime reference found; excluded from distribution. Source and redistribution rights are not verified."
+      "reason": "No runtime reference found; retained in the repository, excluded from the npm package. Matches three.js r160 examples/textures/waternormals.jpg, MIT."
     },
     {
       "path": "GeospatialAssets/higher_order_scattering.exr",
