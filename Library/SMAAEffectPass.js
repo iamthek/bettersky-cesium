@@ -26,6 +26,7 @@ import SMAABlendingWeightCalculationVS from "./shaders/smaa/blendingWeightCalcul
 import SMAABlendingWeightCalculationFS from "./shaders/smaa/blendingWeightCalculation.frag.glsl?raw";
 import SMAANeighborhoodBlendingVS from "./shaders/smaa/neighborhoodBlending.vert.glsl?raw";
 import SMAANeighborhoodBlendingFS from "./shaders/smaa/neighborhoodBlending.frag.glsl?raw";
+import AssetManager from "./internal/AssetManager.js";
 
 /**
  * -----------------------------------------------------------------------------------
@@ -44,6 +45,7 @@ import SMAANeighborhoodBlendingFS from "./shaders/smaa/neighborhoodBlending.frag
 export default function SMAAEffectPass(scene, options = {}) {
     this._scene = scene;
     this._disposed = false;
+    this._assets = new AssetManager();
     this._id = createGuid();
     this._edgeDetectionCommand = undefined;
     this._weightCalculationCommand = undefined;
@@ -84,29 +86,44 @@ function createSampler2() {
 // 每张查找表只发起一次加载；销毁后即使旧回调到达，也不再分配 GPU 纹理。
 function loadLookupTexture(pass, context, textureKey, imageKey, source, pixelFormat, samplerFactory) {
     if (defined(pass[textureKey]) || defined(pass[imageKey])) return;
-    const image = new Image();
-    pass[imageKey] = image;
-    const clearHandlers = () => {
-        image.onload = null;
-        image.onerror = null;
-    };
-    image.onload = () => {
-        clearHandlers();
-        if (pass._disposed) return;
-        pass[textureKey] = new Texture({
-            context,
-            source: image,
-            pixelFormat,
-            pixelDatatype: WebGLConstants.UNSIGNED_BYTE,
-            flipY: false,
-            sampler: samplerFactory(),
-        });
-        pass[imageKey] = undefined;
-    };
-    // 保留失败的加载标记，避免每帧反复创建 Image。
-    image.onerror = clearHandlers;
-    image.src = source;
+    const id = textureKey === "_searchTexture" ? "smaa-search" : "smaa-area";
+    pass._assets.add({ id, url: "embedded:" + id, load: () => new Promise((resolve, reject) => {
+        const image = new Image();
+        pass[imageKey] = image;
+        const clearHandlers = () => {
+            image.onload = null;
+            image.onerror = null;
+        };
+        image.onload = () => {
+            clearHandlers();
+            if (pass._disposed) { resolve(); return; }
+            try {
+                pass[textureKey] = new Texture({
+                    context,
+                    source: image,
+                    pixelFormat,
+                    pixelDatatype: WebGLConstants.UNSIGNED_BYTE,
+                    flipY: false,
+                    sampler: samplerFactory(),
+                });
+                pass[imageKey] = undefined;
+                resolve();
+            } catch (error) { reject(error); }
+        };
+        // Retain the failed image marker until explicit retry; never retry each frame.
+        image.onerror = () => { clearHandlers(); reject(new Error("Failed to load " + id + " lookup texture")); };
+        image.src = source;
+    }) });
+    pass._assets.start([id]);
 }
+
+Object.defineProperties(SMAAEffectPass.prototype, {
+    assetStatus: { get() { return this._assets.status; } },
+    assetErrors: { get() { return this._assets.errors; } },
+    assetsReady: { get() { return this._assets.ready; } },
+});
+SMAAEffectPass.prototype.retryAssets = function () { return this._assets.retry(); };
+SMAAEffectPass.prototype.subscribeAssets = function (listener) { return this._assets.subscribe(listener); };
 
 SMAAEffectPass.prototype._isSupported = function () {
     return true;
@@ -287,6 +304,7 @@ SMAAEffectPass.prototype.destroyFBO = function () {
 
 SMAAEffectPass.prototype.destroy = function () {
     this._disposed = true;
+    this._assets.dispose();
     for (const key of ["_searchImage", "_areaImage"]) {
         const image = this[key];
         if (image) {

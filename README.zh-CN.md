@@ -29,7 +29,9 @@ pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 
 两种命令安装同一个包。Cesium 与应用共享，three（`>=0.160.1`）作为运行依赖自动安装；应用可以在上述范围内锁定已经验证的版本。
 
-Cesium 通过自身依赖安装匹配的 engine 与 widgets，无需配置 Cesium 内部组件的 overrides。请保留应用锁文件，并在升级后验证完整依赖组合。
+engine 与 widgets 由 Cesium 自身声明并自动安装，SDK 不要求手动安装或通过 overrides 调整它们。请保留应用锁文件，并在升级后验证完整依赖组合。
+
+> **兼容性提示**：SDK 支持 `cesium@1.142.0`，已验证其与 engine `26.0.0` / widgets `16.0.0` 的组合。Cesium 1.142 使用 `^` 声明内部依赖，重新安装时可能解析到更新的组件；其中 engine `26.4.0` / widgets `16.3.0` 组合在 Vite 8 下存在上游 `MISSING_EXPORT` 问题，不引入本 SDK 也能复现。遇到该错误时，可保留或恢复已验证的完整锁文件，或升级 Cesium（本轮干净安装验证通过 `1.146.0`）。这是特定上游依赖组合的提示，不改变 SDK 的 `>=1.142.0` 支持下限，也不要求使用 overrides。
 
 ### 复制资源
 
@@ -147,6 +149,27 @@ effects.update({ cloud: { heights: [1300, 1800, 650, 0] } }) // 局部更新；�
 | `toneMappingMode` | `2` Reinhard2、`4` Uncharted2、`7` AgX、`8` Neutral、`9` ACES、`10` Linear、`11` Reinhard、`12` Cineon；默认 `9`。历史模式 `3` 当前不支持。 |
 | `hbao.denoise` | HBAO 双边滤波，默认 `true`；只在构造时可配置，`update()` 不改变此设置。 |
 | `effects.pass.showSnow` / `showRain` | 底层 Pass 的设置入口，默认均为 `false`，显式赋值才开启；设置会重建相关阶段，不作为构造或 `update()` 参数，也不能通过这些访问器读取状态。 |
+
+### 配置快照与资源状态
+
+便捷属性与 `update()` 共用归一化、校验和应用通路。`effects.getOptions()` 返回当前已接受配置的独立副本；修改副本不会改变效果。未知字段、不合法数值以及销毁后修改参数会明确抛错。构造期选项 `hbao.denoise` 在运行期改变时也会抛错，需销毁后重建。
+
+```ts
+const options = effects.getOptions()
+effects.coverage = 0.5
+
+const unsubscribe = effects.subscribeAssets(() => {
+  if (effects.assetStatus === 'error') console.error(effects.assetErrors)
+})
+
+await effects.assetsReady // 读取会按需启动并等待六项必需的天空资源，效果关闭时也可以等待。
+const requiredErrors = effects.assetErrors.filter(error => error.required)
+// 如需在业务的“重试”操作中恢复，可调用 await effects.retryAssets()。
+
+unsubscribe()
+```
+
+`assetsReady` 在加载成功、失败或实例销毁时均会结算，需通过 `assetErrors` 判断结果。它不等待按需的雪纹理或 SMAA 查找纹理；可选资源仍可能处于加载或错误状态。失败资源不会逐帧自动重试，已成功资源也不会因显式重试而重复加载。
 
 ## 许可
 

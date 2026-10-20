@@ -1,10 +1,11 @@
-import { build } from 'vite';
+import { build, normalizePath } from 'vite';
 import JavaScriptObfuscator from 'javascript-obfuscator';
 import { parse } from 'acorn';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { emitPublicDeclarations } from './declarations.mjs';
 import {
   copyrightLine, distDirectory, inspectJavaScript, inspectPublicDeclarations, listDirectoryEntries, packageDirectory, readAssetManifest,
   readJson, removeOwnedDirectory, repoRoot, sha256, validatePackageEntries,
@@ -84,7 +85,7 @@ export async function buildSdk() {
   const startedAt = performance.now();
   const root = await readJson(join(repoRoot, 'package.json'));
   if (root.private !== true || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(root.version || '')) throw new Error('Root package must remain private with an explicit SDK version.');
-  const publicDeclarations = await readFile(join(repoRoot, 'scripts/sdk/public-api.d.ts'));
+  const publicDeclarations = await emitPublicDeclarations();
   inspectPublicDeclarations(publicDeclarations.toString('utf8'));
   const assetManifest = await readAssetManifest();
   const notices = new Set();
@@ -102,10 +103,10 @@ export async function buildSdk() {
         const compacted = compactShader(source);
         rawShaders.set(path, source);
         shaders.set(path, compacted);
-        return `export default ${JSON.stringify(compacted)};`;
+        return { code: `export default ${JSON.stringify(compacted)};`, moduleType: 'js' };
       },
       transform(source, id) {
-        if (!id.endsWith('.js') || !id.startsWith(repoRoot) || id.includes('node_modules')) return null;
+        if (!id.endsWith('.js') || !normalizePath(id).startsWith(`${normalizePath(repoRoot)}/`) || id.includes('node_modules')) return null;
         const comments = [];
         const ast = parse(source, { sourceType: 'module', ecmaVersion: 'latest', onComment: comments });
         for (const comment of comments) if (/copyright|SPDX|@license|@preserve|permission is hereby granted|redistribution and use/i.test(comment.value)) notices.add(comment.value);
@@ -120,9 +121,9 @@ export async function buildSdk() {
     }],
     build: {
       write: false, emptyOutDir: false, copyPublicDir: false, sourcemap: false,
-      target: 'es2022', minify: 'esbuild', cssCodeSplit: false,
-      lib: { entry: join(repoRoot, 'BetterSky.js'), formats: ['es'], fileName: () => 'index.js' },
-      rollupOptions: { external: id => /^(cesium|three)(\/|$)/.test(id), output: { inlineDynamicImports: true, preserveModules: false, sourcemap: false } },
+      target: 'es2022', minify: 'oxc', cssCodeSplit: false,
+      lib: { entry: join(repoRoot, 'src/index.ts'), formats: ['es'], fileName: () => 'index.js' },
+      rolldownOptions: { external: id => /^(cesium|three)(\/|$)/.test(id), output: { codeSplitting: false, preserveModules: false, sourcemap: false } },
     },
   });
   for (const [path, original] of rawShaders) for (const fragment of stringMatchers) if (fragment.trim().length >= 8 && original.includes(fragment) && count(original, fragment) !== count(shaders.get(path), fragment)) throw new Error(`GLSL exact-match fragment changed: ${fragment}`);
@@ -143,7 +144,7 @@ export async function buildSdk() {
   await removeOwnedDirectory(packageDirectory);
   await mkdir(join(distDirectory, 'assets'), { recursive: true });
   await writeFile(join(distDirectory, 'index.js'), finalBundle);
-  // Retain the reviewed UTF-8 JSDoc bytes for editor hover and parameter hints.
+  // Retain the generated UTF-8 JSDoc bytes for editor hover and parameter hints.
   await writeFile(join(distDirectory, 'index.d.ts'), publicDeclarations);
   for (const asset of assetManifest.assets) {
     const sourcePath = join(repoRoot, 'static/BetterSkyAssets', asset.path);
@@ -170,7 +171,7 @@ export async function buildSdk() {
     await writeFile(target, entry.data);
   }
   await validatePackageEntries(await listDirectoryEntries(packageDirectory));
-  console.log(JSON.stringify({ name: root.name, version: root.version, output: packageDirectory, assets: assetManifest.assets.length, shaders: shaders.size, shaderChecks, obfuscator: { version: '4.1.1', seed: obfuscatorOptions.seed, target: obfuscatorOptions.target }, obfuscatedBytes: Buffer.byteLength(finalBundle), minifiedBytes: Buffer.byteLength(originalBundle), buildMilliseconds: Math.round(performance.now() - startedAt), obfuscationMilliseconds: Math.round(obfuscationMilliseconds) }, null, 2));
+  console.log(JSON.stringify({ name: root.name, version: root.version, output: packageDirectory, assets: assetManifest.assets.length, shaders: shaders.size, shaderChecks, obfuscator: { version: root.devDependencies['javascript-obfuscator'], seed: obfuscatorOptions.seed, target: obfuscatorOptions.target }, obfuscatedBytes: Buffer.byteLength(finalBundle), minifiedBytes: Buffer.byteLength(originalBundle), buildMilliseconds: Math.round(performance.now() - startedAt), obfuscationMilliseconds: Math.round(obfuscationMilliseconds) }, null, 2));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) buildSdk().catch(error => { console.error(error.message); process.exitCode = 1; });

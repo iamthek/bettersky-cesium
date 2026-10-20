@@ -5,11 +5,11 @@
  * 通过一行 `new BetterSky(viewer)` 叠加 体积云 / 大气散射 / 体积光 / 镜头光晕。
  *
  * 运行：pnpm dev，打开 Vite 输出的根地址。
- * Vite 提供 npm 模块，官方静态资源位于 /cesium/，天空效果资源位于 /cesium/BetterSkyAssets/GeospatialAssets/。
+ * Vite 提供 npm 模块，官方与天空效果资源均相对于 Vite base 从 cesium/ 加载。
  */
 import * as Cesium from "cesium";
 import "cesium/Build/Cesium/Widgets/widgets.css";
-import { BetterSky } from "./BetterSky.js";
+import { BetterSky } from "../src/index.ts";
 
 // 控件只转换参数形状，默认值统一由管线内置预设提供。
 const DEFAULT_OPTIONS = BetterSky.defaultOptions;

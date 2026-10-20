@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { build } from 'vite';
 import { compactShader, validateShaderAssembly } from '../scripts/sdk/build.mjs';
-import { inspectJavaScript, inspectPublicDeclarations, readTarEntries, repoRoot, validatePackageEntries } from '../scripts/sdk/shared.mjs';
+import { emitPublicDeclarations } from '../scripts/sdk/declarations.mjs';
+import { inspectJavaScript, inspectPublicDeclarations, readTarEntries, validatePackageEntries } from '../scripts/sdk/shared.mjs';
 
 function tarEntry(name, { type = '0', data = Buffer.from('ok') } = {}) {
   const header = Buffer.alloc(512);
@@ -32,21 +31,21 @@ test('tar reader retains bytes without extracting and rejects traversal, links a
   assert.throws(() => readTarEntries(corrupt), /checksum/);
 });
 
-test('reviewed public declarations document every member and parameter and retain UTF-8 archive bytes', async () => {
-  const bytes = await readFile(join(repoRoot, 'scripts/sdk/public-api.d.ts'));
+test('generated public declarations document every member and parameter and retain UTF-8 archive bytes', async () => {
+  const bytes = await emitPublicDeclarations();
   assert.ok(inspectPublicDeclarations(bytes.toString('utf8')).declarations > 0);
   const [entry] = readTarEntries(tarEntry('package/dist/index.d.ts', { data: bytes }));
   assert.deepEqual(entry.data, bytes);
 });
 
 test('declaration checks reject removed or empty JSDoc and parameter descriptions before packing', async () => {
-  const source = await readFile(join(repoRoot, 'scripts/sdk/public-api.d.ts'), 'utf8');
+  const source = (await emitPublicDeclarations()).toString('utf8');
   const mutations = [
     [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '$1'), /Missing JSDoc.*BetterSkyOptions.enabled/],
     [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '/** @default true */\n  $1'), /Empty JSDoc description.*BetterSkyOptions.enabled/],
     [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '/** */\n  $1'), /Empty JSDoc description.*BetterSkyOptions.enabled/],
-    [source.replace(/^[\t ]*\* @param viewerOrScene[^\r\n]*(?:\r?\n|$)/m, ''), /Missing @param.*BetterSky.constructor.viewerOrScene/],
-    [source.replace(/(@param viewerOrScene)[^\r\n]*/, '$1'), /Missing @param.*BetterSky.constructor.viewerOrScene/],
+    [source.replace(/^[\t ]*\* @param viewerOrScene[^\r\n]*(?:\r?\n|$)/m, ''), /Missing @param.*BetterSkyConstructor.constructor.viewerOrScene/],
+    [source.replace(/(@param viewerOrScene)[^\r\n]*/, '$1'), /Missing @param.*BetterSkyConstructor.constructor.viewerOrScene/],
     [source.replace(/\/\*\*[\s\S]*?\*\//g, ''), /Missing JSDoc/],
   ];
   for (const [modified, expected] of mutations) {
@@ -69,7 +68,8 @@ export interface Options {
 `;
   assert.doesNotThrow(() => inspectPublicDeclarations(source));
   assert.throws(() => inspectPublicDeclarations(source.replace(' @param amount Update amount.', '')), /Missing @param.*Options.update.amount/);
-  assert.throws(() => inspectPublicDeclarations(source.replace('callback?: (value: [number, number]) => void;', 'callback?: (value: [number, number]) => void; undocumented: number;')), /must use its own line/);
+  assert.doesNotThrow(() => inspectPublicDeclarations(source.replace('callback?: (value: [number, number]) => void;', 'callback?: (value: [number, number]) => void; /** Documented field. */ documented: number;')));
+  assert.throws(() => inspectPublicDeclarations(source.replace('callback?: (value: [number, number]) => void;', 'callback?: (value: [number, number]) => void; undocumented: number;')), /Missing JSDoc.*Options.undocumented/);
 });
 
 test('ESM validation requires external dependencies and blocks dynamic code execution', () => {
@@ -99,17 +99,17 @@ test('ESM validation accepts named Cesium imports and rejects whole-module impor
   ]) assert.throws(() => inspectJavaScript(statement + publicApi), /Cesium namespace\/default re-exports are forbidden/);
 });
 
-test('named Cesium imports avoid resolving unrelated missing engine re-exports in consumer bundles', async () => {
-  const buildConsumer = source => {
+test('named Cesium imports omit unused engine exports and reject invalid dependency re-exports', async () => {
+  const buildConsumer = (source, engineSource = 'export class Cartesian2 {} export class UnusedExport {}') => {
     const modules = new Map([
       ['fixture:sdk', source],
-      ['cesium', "export {Cartesian2, MissingExport} from 'fixture:engine';"],
-      ['fixture:engine', 'export class Cartesian2 {}'],
+      ['cesium', "export {Cartesian2, UnusedExport} from 'fixture:engine';"],
+      ['fixture:engine', engineSource],
     ]);
     return build({
       configFile: false, publicDir: false, logLevel: 'silent',
       plugins: [{
-        name: 'cesium-missing-export-fixture',
+        name: 'cesium-unused-export-fixture',
         enforce: 'pre',
         resolveId: id => modules.has(id) ? `\0${id}` : null,
         load: id => modules.get(id.slice(1)) ?? null,
@@ -117,15 +117,22 @@ test('named Cesium imports avoid resolving unrelated missing engine re-exports i
       build: {
         write: false, emptyOutDir: false, copyPublicDir: false, minify: false,
         lib: { entry: 'fixture:sdk', formats: ['es'], fileName: () => 'index.js' },
-        rollupOptions: { input: 'fixture:sdk' },
+        rolldownOptions: { input: 'fixture:sdk' },
       },
     });
   };
   const publicApi = 'export {BetterSky};export default BetterSky;';
   const named = "import {Cartesian2} from 'cesium';class BetterSky {static position = Cartesian2;}" + publicApi;
   const namespace = "import * as Cesium from 'cesium';class BetterSky {static cesium = Cesium;}" + publicApi;
-  await assert.doesNotReject(buildConsumer(named));
-  await assert.rejects(buildConsumer(namespace), /MissingExport.*not exported/);
+  const namedResult = await buildConsumer(named);
+  const namespaceResult = await buildConsumer(namespace);
+  const codeOf = result => (Array.isArray(result) ? result.flatMap(item => item.output) : result.output).map(item => item.code || '').join('\n');
+  assert.ok(!codeOf(namedResult).includes('UnusedExport'));
+  assert.ok(codeOf(namespaceResult).includes('UnusedExport'));
+  // Rolldown validates all re-exports before tree shaking, even when the SDK only
+  // imports named exports. Preserve this guard for mismatched Cesium components.
+  await assert.rejects(buildConsumer(named, 'export class Cartesian2 {}'), /MISSING_EXPORT/);
+  await assert.rejects(buildConsumer(namespace, 'export class Cartesian2 {}'), /MISSING_EXPORT/);
 });
 
 test('shader compaction preserves directives, protected markers and exact shadow fragments', async () => {

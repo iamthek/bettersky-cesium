@@ -77,11 +77,11 @@ async function createHarness({ realPrecomputed = false, failTextureAt, failFrame
             this.destroyed = true;
         }
     }
-    function pendingRequest() {
-        return new Promise((resolve, reject) => requests.push({ resolve, reject }));
+    function pendingRequest(url) {
+        return new Promise((resolve, reject) => requests.push({ url, resolve, reject }));
     }
     class PrecomputedTexturesLoader {
-        load(url, resolve, onProgress, reject) { precomputedRequests.push({ resolve, reject }); }
+        load(url, resolve, onProgress, reject) { precomputedRequests.push({ url, resolve, reject }); }
     }
     const replacements = {
         cesium: {
@@ -92,7 +92,7 @@ async function createHarness({ realPrecomputed = false, failTextureAt, failFrame
                 constructor(options) { Object.assign(this, options); }
                 static fromCache(options) { return options; }
             },
-            Resource: { createIfNeeded: () => ({ fetchImage: pendingRequest }) },
+            Resource: { createIfNeeded: url => ({ fetchImage: () => pendingRequest(url) }) },
             buildModuleUrl: value => value,
         },
         three: Three,
@@ -100,7 +100,7 @@ async function createHarness({ realPrecomputed = false, failTextureAt, failFrame
         "Library/PostProcessStage.js": { default: RenderPass, viewportTriangleVertexShaderText: "" },
         "Library/geospatial/PrecomputedTexturesLoader.js": { default: PrecomputedTexturesLoader },
         "Library/geospatial/PrecomputedDataLoader.js": {
-            createData3DTextureLoaderClass: () => class { loadAsync() { return pendingRequest(); } },
+            createData3DTextureLoaderClass: () => class { loadAsync(url) { return pendingRequest(url); } },
             createData3DTextureLoader: () => assert.fail("binary precomputed loader is outside this EXR test"),
             createDataTextureLoader: () => assert.fail("binary precomputed loader is outside this EXR test"),
         },
@@ -181,6 +181,7 @@ async function createHarness({ realPrecomputed = false, failTextureAt, failFrame
         errors,
         liveTextures,
         liveFramebuffers,
+        failNextTexture(offset = 1) { failTextureAt = textureAttempts + offset; },
         get allocations() { return allocations; },
         get shaderReferences() { return shaderReferences; },
     };
@@ -332,4 +333,174 @@ test("precomputed conversion and consumer callback failures notify onError once"
     const rejected = assert.rejects(loading, /download failed/);
     harness.precomputedRequests[0].reject(new Error("download failed"));
     await rejected;
+});
+
+test("resource failures are observable and explicit retry reloads only failed assets", async () => {
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    assert.equal(pipeline.assetStatus, "idle");
+    const notifications = [];
+    const unsubscribe = pipeline.subscribeAssets(() => notifications.push(pipeline.assetStatus));
+    pipeline.precomputed();
+    assert.equal(pipeline.assetStatus, "loading");
+    const weather = harness.requests.shift();
+    assert.match(weather.url, /local_weather\.png$/);
+    weather.reject(new Error("weather download failed"));
+    await flushLoads(harness);
+    await pipeline.assetsReady;
+    assert.equal(pipeline.assetStatus, "error");
+    assert.equal(pipeline.assetErrors.length, 1);
+    assert.equal(pipeline.assetErrors[0].id, "weather");
+    assert.equal(pipeline.assetErrors[0].required, true);
+    assert.match(pipeline.assetErrors[0].error.message, /weather download failed/);
+    assert(Object.isFrozen(pipeline.assetErrors));
+    assert(Object.isFrozen(pipeline.assetErrors[0]));
+    const successfulShape = pipeline.shapeTexture;
+    const retry = pipeline.retryAssets();
+    assert.equal(harness.requests.length, 1, "successful images and binary tasks are not repeated");
+    assert.equal(harness.precomputedRequests.length, 0, "the successful LUT set is not repeated");
+    assert.equal(pipeline.assetStatus, "loading");
+    await flushLoads(harness);
+    await retry;
+    assert.equal(pipeline.assetStatus, "ready");
+    assert.equal(pipeline.assetErrors.length, 0);
+    assert.equal(pipeline.shapeTexture, successfulShape);
+    assert(notifications.includes("error"));
+    unsubscribe();
+    pipeline.destroy();
+    assert.equal(pipeline.assetStatus, "disposed");
+});
+
+test("reading readiness before the first frame starts and waits for required assets even when disabled", async () => {
+    for (const show of [true, false]) {
+        const harness = await createHarness();
+        const pipeline = new harness.Pipeline(harness.scene, { show });
+        assert.equal(harness.requests.length, 0, "construction preserves lazy resource loading");
+        assert.equal(harness.precomputedRequests.length, 0);
+        let settled = false;
+        const ready = pipeline.assetsReady.then(() => { settled = true; });
+        assert.equal(harness.requests.length, 5);
+        assert.equal(harness.precomputedRequests.length, 1);
+        assert.equal(pipeline.assetStatus, "loading");
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(settled, false, "readiness must wait for actual resource outcomes");
+        // Repeated reads observe the current load, without issuing duplicate requests.
+        void pipeline.assetsReady;
+        assert.equal(harness.requests.length, 5);
+        assert.equal(harness.precomputedRequests.length, 1);
+        await flushLoads(harness);
+        await ready;
+        assert.equal(settled, true);
+        assert.equal(pipeline.assetStatus, "ready");
+        assert.equal(pipeline.enabled, show);
+        pipeline.destroy();
+    }
+});
+
+test("disposal settles readiness requested immediately after disabled construction", async () => {
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, { show: false });
+    const ready = pipeline.assetsReady;
+    const allocated = harness.allocations;
+    pipeline.destroy();
+    await ready;
+    await pipeline.assetsReady;
+    assert.equal(pipeline.assetStatus, "disposed");
+    await flushLoads(harness);
+    assert.equal(harness.allocations, allocated, "late callbacks do not allocate GPU resources");
+    assert.equal(harness.liveTextures.size, 0);
+    assert.equal(harness.liveFramebuffers.size, 0);
+    assert.equal(harness.shaderReferences, 0);
+});
+
+test("optional snow does not block required readiness and disposal settles pending readiness", async () => {
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, { showSnow: true });
+    const snow = harness.requests.shift();
+    assert.match(snow.url, /snowCoverMask\.png$/);
+    pipeline.precomputed();
+    await flushLoads(harness);
+    await pipeline.assetsReady;
+    snow.reject(new Error("optional snow unavailable"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pipeline.assetErrors[0].id, "snow");
+    assert.equal(pipeline.assetErrors[0].required, false);
+    pipeline.destroy();
+
+    const pending = new harness.Pipeline(harness.scene, {});
+    pending.precomputed();
+    const ready = pending.assetsReady;
+    pending.destroy();
+    await ready;
+    await pending.assetsReady;
+    assert.equal(pending.assetStatus, "disposed");
+    await flushLoads(harness);
+    assert.equal(harness.liveTextures.size, 0);
+});
+
+test("a partial atmosphere GPU upload rolls back atomically and can retry without repeating other assets", async () => {
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    pipeline.precomputed();
+    // The LUT callback uploads synchronously; defer other task completions until after this failure.
+    harness.failNextTexture(2);
+    const lut = harness.precomputedRequests.shift();
+    const texture = { image: { width: 1, height: 1, depth: 1, data: new Float32Array(4) } };
+    lut.resolve({ scatteringTexture: texture, irradianceTexture: texture, transmittanceTexture: texture });
+    await flushLoads(harness);
+    await pipeline.assetsReady;
+    assert.equal(pipeline.assetStatus, "error");
+    assert.equal(pipeline.assetErrors.length, 1);
+    assert.equal(pipeline.assetErrors[0].id, "atmosphere");
+    assert.equal(pipeline._u_scattering_texture, pipeline._defaultTexture3D);
+    assert.equal(pipeline._u_irradiance_texture, harness.scene.context.defaultTexture);
+    const allocated = harness.liveTextures.size;
+    const retry = pipeline.retryAssets();
+    assert.equal(harness.requests.length, 0);
+    assert.equal(harness.precomputedRequests.length, 1);
+    await flushLoads(harness);
+    await retry;
+    assert.equal(pipeline.assetStatus, "ready");
+    assert.equal(harness.liveTextures.size, allocated + 3);
+    pipeline.destroy();
+    assert.equal(harness.liveTextures.size, 0);
+});
+
+test("pipeline cleanup attempts every independent release and aggregates failures once", async () => {
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    harness.scene.postProcessStages.add(pipeline.stage);
+    pipeline.precomputed();
+    await flushLoads(harness);
+    const injectAfterRelease = (resource, label) => {
+        const release = resource.destroy.bind(resource);
+        resource.destroy = () => { release(); throw new Error(label); };
+    };
+    pipeline._sceneLease = { restore() { throw new Error("host restore failed"); } };
+    injectAfterRelease(pipeline.stage, "stage cleanup failed");
+    injectAfterRelease(pipeline.volumetricLightPass, "light cleanup failed");
+    injectAfterRelease(pipeline._aerialPerspectiveOutputColor, "render target cleanup failed");
+    injectAfterRelease(pipeline.localWeatherTexture, "asset cleanup failed");
+    assert.throws(() => pipeline.destroy(), error => {
+        assert.equal(error.name, "AggregateError");
+        assert.equal(error.errors.length, 5);
+        return true;
+    });
+    pipeline.destroy();
+    assert.equal(pipeline.isDestroyed(), true);
+    assert.equal(pipeline.assetStatus, "disposed");
+    assert.equal(harness.liveTextures.size, 0);
+    assert.equal(harness.liveFramebuffers.size, 0);
+    assert.equal(harness.shaderReferences, 0);
+});
+
+test("loading the real pipeline leaves every Cesium math prototype untouched", async () => {
+    const types = [Cesium.Cartesian2, Cesium.Cartesian3, Cesium.Cartesian4, Cesium.Matrix4];
+    const before = types.map(Type => Object.getOwnPropertyDescriptors(Type.prototype));
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    pipeline.destroy();
+    for (let index = 0; index < types.length; index++) {
+        assert.deepEqual(Object.getOwnPropertyDescriptors(types[index].prototype), before[index]);
+    }
 });

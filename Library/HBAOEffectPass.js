@@ -1,3 +1,4 @@
+import { usesLogDepthOptimization } from "./internal/CesiumAdapter.js";
 import PostProcessStage from "./PostProcessStage.js";
 import ambientOcclusionGenerate from "./hbao/ambientOcclusionGenerate.js";
 import ambientOcclusionModulate from "./hbao/ambientOcclusionModulate.js";
@@ -13,7 +14,6 @@ import {
 import { 
   PostProcessStageComposite,
   PostProcessStageSampleMode,
-  destroyObject,
   createGuid,
   Cartesian2,
   Cartesian3,
@@ -36,9 +36,6 @@ defaultValue.EMPTY_OBJECT = Object.freeze({});
  * @param {Number} [whitePoint] 白色区域阈值
  * @returns {HBAOEffectPass}
  */
-let hbaoEffect;
-const lastViewPosition = new Cartesian3();
-let cameraFov = 0;
 const prefix = "czm_hbao";
 export default class HBAOEffectPass {
 
@@ -47,6 +44,10 @@ export default class HBAOEffectPass {
     this.id = createGuid();
 
     this._scene = scene;
+    this._hbaoEffect = undefined;
+    this._lastViewPosition = new Cartesian3();
+    this._cameraFov = 0;
+    this._destroyed = false;
 
     this._show = defaultValue(options.show, true);
 
@@ -76,17 +77,17 @@ export default class HBAOEffectPass {
 
   get stage() {
 
-    return hbaoEffect;
+    return this._hbaoEffect;
   }
 
   get ready() {
 
-    return hbaoEffect.ready;
+    return this._hbaoEffect.ready;
   }
 
   get name() {
 
-    return hbaoEffect.name;
+    return this._hbaoEffect.name;
   }
 
   get enabled() {
@@ -96,7 +97,7 @@ export default class HBAOEffectPass {
 
   set enabled(val) {
     this._show = val;
-    if (hbaoEffect) hbaoEffect.enabled = val;
+    if (this._hbaoEffect) this._hbaoEffect.enabled = val;
   }
 
   init() {
@@ -168,7 +169,7 @@ export default class HBAOEffectPass {
 
       modulate.uniforms.ambientOcclusionTexture = filter.name
 
-      hbaoEffect = new PostProcessStageComposite({
+      this._hbaoEffect = new PostProcessStageComposite({
         name: `${prefix}_ambient_occlusion`,
         stages: [filter, modulate],
         inputPreviousStageTexture: false,
@@ -177,14 +178,14 @@ export default class HBAOEffectPass {
 
       modulate.uniforms.ambientOcclusionTexture = generate.name
 
-      hbaoEffect = new PostProcessStageComposite({
+      this._hbaoEffect = new PostProcessStageComposite({
         name: `${prefix}_ambient_occlusion`,
         stages: [generate, modulate],
         inputPreviousStageTexture: false
       });
     }
 
-    hbaoEffect.enabled = this._show;
+    this._hbaoEffect.enabled = this._show;
   }
 
   update(context, useLogDepth) {
@@ -192,9 +193,9 @@ export default class HBAOEffectPass {
     const scene = this._scene;
     const frustum = scene.camera.frustum;
     const cameraPosition = scene.camera.position;
-    if (hbaoEffect && hbaoEffect.enabled) {
+    if (this._hbaoEffect && this._hbaoEffect.enabled) {
 
-      hbaoEffect.update(context, useLogDepth);
+      this._hbaoEffect.update(context, useLogDepth);
 
       const cotFovy = 1 / Math.tan(frustum.fovy / 2)
       this._focalLength.x = cotFovy * frustum.aspectRatio
@@ -203,14 +204,14 @@ export default class HBAOEffectPass {
 
     // 深度缓冲区精度优化
     if (
-      scene.postProcessStages._logDepthOptimization &&
-      (!lastViewPosition.equals(cameraPosition)
-        || cameraFov !== frustum.fov
-        || hbaoEffect.enabled
+      usesLogDepthOptimization(scene) &&
+      (!this._lastViewPosition.equals(cameraPosition)
+        || this._cameraFov !== frustum.fov
+        || this._hbaoEffect.enabled
       )
     ) {
-      cameraPosition.clone(lastViewPosition);
-      cameraFov = frustum.fov;
+      cameraPosition.clone(this._lastViewPosition);
+      this._cameraFov = frustum.fov;
       // Increase the precision of the depth buffer which HBAO looks up to
       // reconstruct normals.
       const { globeHeight } = scene;
@@ -228,24 +229,26 @@ export default class HBAOEffectPass {
 
   _isSupported(context) {
 
-    return hbaoEffect._isSupported(context);
+    return this._hbaoEffect._isSupported(context);
   }
 
   isDestroyed() {
 
-    return false;
+    return this._destroyed;
   }
 
   destroy() {
+    if (this._destroyed) return;
+    this._destroyed = true;
 
-    if (hbaoEffect) {
+    if (this._hbaoEffect) {
 
-      if (!hbaoEffect.isDestroyed()) hbaoEffect.destroy();
+      if (!this._hbaoEffect.isDestroyed()) this._hbaoEffect.destroy();
 
-      hbaoEffect = undefined;
+      this._hbaoEffect = undefined;
     }
 
-    return destroyObject(this);
+    return undefined;
   };
 }
 function createBilateralFilterStage(that, generate) {
@@ -312,7 +315,7 @@ Object.defineProperties(HBAOEffectPass.prototype, {
 
       this._show = val;
 
-      if (hbaoEffect) { hbaoEffect.enabled = this._show; }
+      if (this._hbaoEffect) { this._hbaoEffect.enabled = this._show; }
     }
   }
 });

@@ -146,3 +146,36 @@ test('SMAA wrapper destruction is idempotent with or without prior collection re
     assert(allocations.every(resource => resource.destroyCount === 1));
   }
 });
+
+test('SMAA lookup errors are observable and retry preserves the successful lookup texture', async () => {
+  const { Pass, images, context } = await createHarness();
+  const pass = new Pass({ context });
+  pass.enabled = true;
+  pass.update(context);
+  images[0].onload();
+  images[1].onerror();
+  await pass.assetsReady;
+  assert.equal(pass.assetStatus, 'error');
+  assert.equal(pass.assetErrors.length, 1);
+  assert.equal(pass.assetErrors[0].id, 'smaa-area');
+  const search = pass._searchTexture;
+  const retry = pass.retryAssets();
+  assert.equal(images.length, 3);
+  assert.equal(pass._searchTexture, search);
+  images[2].onload();
+  await retry;
+  assert.equal(pass.assetStatus, 'ready');
+  assert.equal(pass.assetErrors.length, 0);
+  pass.destroy();
+});
+
+test('SMAA disposal settles lookup readiness even when image events never arrive', async () => {
+  const { Stage, context } = await createHarness();
+  const wrapper = new Stage({ context });
+  wrapper.update(context);
+  const ready = wrapper.assetsReady;
+  wrapper.destroy();
+  await ready;
+  await wrapper.assetsReady;
+  assert.equal(wrapper.assetStatus, 'disposed');
+});

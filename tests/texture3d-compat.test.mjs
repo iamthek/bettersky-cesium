@@ -13,6 +13,7 @@ const cesiumUrl = process.env.CESIUM_COMPAT_MODULE
 const Cesium = await import(cesiumUrl);
 const { PixelDatatype, PixelFormat, WebGLConstants: GL } = Cesium;
 const textureSource = await readFile(new URL("../Library/Texture3D.js", import.meta.url), "utf8");
+const adapterSource = await readFile(new URL("../Library/internal/CesiumAdapter.js", import.meta.url), "utf8");
 
 async function loadTexture3D(pixelDatatype = PixelDatatype) {
     const cesiumModule = new SyntheticModule(Object.keys(Cesium), function () {
@@ -21,9 +22,15 @@ async function loadTexture3D(pixelDatatype = PixelDatatype) {
         }
     });
     const textureModule = new SourceTextModule(textureSource);
-    await textureModule.link((specifier) => {
+    const adapterModule = new SourceTextModule(adapterSource);
+    await adapterModule.link(specifier => {
         assert.equal(specifier, "cesium");
         return cesiumModule;
+    });
+    await textureModule.link((specifier) => {
+        if (specifier === "cesium") return cesiumModule;
+        assert.equal(specifier, "./internal/CesiumAdapter.js");
+        return adapterModule;
     });
     await textureModule.evaluate();
     return textureModule.namespace.default;

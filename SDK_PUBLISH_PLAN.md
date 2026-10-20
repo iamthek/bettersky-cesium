@@ -1,5 +1,7 @@
 # BetterSky for Cesium SDK：兼容 npm 与 pnpm
 
+> 本地 SDK 架构整理（2026-10-20，尚未发布）：公开入口与类型统一为 `src/index.ts`，TypeScript CLI 生成带注释声明；配置入口、资源状态、场景记录和 Cesium 适配已分离。旧 GUI 已删除，demo 集中到 `demo/`，独立输出 `dist-demo/` 并提供 Pages 工作流。开发工具更新到 Vite 8.3.4 / Rolldown / Oxc，现有 SDK 默认值与运行依赖锁定基线保持不变。详见 [架构与开发边界](SDK_ARCHITECTURE.md)。最低 Cesium 的无锁浮动组件组合存在已复现的上游缺失导出，不能将历史验收结果直接作为本轮新包的发布依据。
+
 > 执行状态（2026-10-19）：用户已完成 npm 认证与正式发布，官方 registry 的 `bettersky-cesium@0.1.0` 及 `latest` 已可用，线上包 SHA-256 与验收包完全一致。npm 异步处理期间，旧脚本约 18 秒的确认窗口曾误报失败；现已修正为有界等待、处理中回执与防重复上传，并通过 9 项离线回归测试。SDK 包内容未改变、未重复上传。发布后的官方 npm/pnpm 安装、类型、构建及两个浏览器冒烟场景全部通过，18 项资源响应正常，测试服务与独立临时目录均已清理；npm 网页已由用户手动确认正常。
 
 - 本轮已发布包：`D:/CodexDocuments/SDK-Releases/bettersky-cesium/0.1.0/release/bettersky-cesium-0.1.0.tgz`。此前其他目录中的候选包与验收记录均已过期，禁止继续上传或尝试覆盖 `0.1.0`。
@@ -47,7 +49,7 @@ pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 
 ## 包结构与依赖
 
-- 使用现有 Vite 6 库模式，通过 `build:sdk` 构建 SDK 至 `dist/`；`build` / `build:demo` 将 demo 输出至 `dist-demo/`，两个输出已隔离。
+- 使用 Vite 8.3.4 / Rolldown 库模式，通过 `build:sdk` 构建 SDK 至 `dist/`；`build` / `build:demo` 将 demo 输出至 `dist-demo/`，两个输出已隔离。
 - 编译、组装、打包、验收与发布均固化为仓库脚本，通过根 `package.json` 的固定命令调用，具体职责见下表；开发、demo 构建和预览使用独立入口。SDK 构建禁用默认 `public/` 整目录复制，只收集入口的依赖闭包与已核实的静态资源。
 - 仓库根 `package.json` 保持 `private: true`。`build:sdk` 生成独立的 `.sdk-package/` 发布目录，只在该目录生成可发布的精简 `package.json`，包含版本号、`type: module`、`exports`、`types`、文件白名单和公开可用的联系方式。禁止直接发布仓库根目录；在根目录调用固定发布脚本时，也只能上传明确指定的已验收 `.tgz`。`private` 字段不等于 npm 私有包的访问权限。
 - `package.json` 使用 `"license": "SEE LICENSE IN LICENSE"`，包内仅附上自有 `LICENSE` 和合并后的 `THIRD_PARTY_NOTICES.md`；后者列出确认复用的代码、权利人、使用条件及必要许可全文，不维护单独的 `licenses/` 副本目录。许可文本留在包根，不放入 `dist/assets/`。源码仓库保持私有，npm 仅分发运行产物；当前免费使用范围和未来转收费条件以许可正文为准。
@@ -63,7 +65,7 @@ pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 
 | 固定命令 | 脚本入口与职责 |
 | --- | --- |
-| `build:sdk` | `scripts/sdk/build.mjs`：先检查公开类型及参数 JSDoc，再完成 SDK 编译、GLSL 处理、压缩混淆、带注释声明原字节复制、资源与许可收集、`.sdk-package/` 组装及目录校验；任一步失败即以非零状态退出。 |
+| `build:sdk` | `scripts/sdk/build.mjs`：先检查公开类型及参数 JSDoc，再完成 SDK 编译、GLSL 处理、压缩混淆、TypeScript 公开声明生成与 JSDoc 校验、资源与许可收集、`.sdk-package/` 组装及目录校验；任一步失败即以非零状态退出。 |
 | `pack:sdk` | `scripts/sdk/pack.mjs`：校验已经组装的发布目录，执行 dry-run 和实际打包，检查真实 `.tgz` 条目及内容，并输出包路径、版本和 SHA-256；支持 `--output-dir` 指定正式交付目录，不重新构建。 |
 | `verify:sdk` | `scripts/sdk/verify.mjs`：通过 `--tarball` 接收准确的压缩包，在仓库外的隔离目录执行安装、类型、宿主构建及可自动化的运行验收，记录依赖解析与性能结果；支持 `--work-dir` 和 `--report-dir`，默认使用独立临时目录，并按清理规则收尾。需要人工浏览器检查的项目保留待确认状态，补齐实际证据后才能标记验收通过。 |
 | `publish:sdk` | `scripts/sdk/publish.mjs`：通过 `--tarball` 和 `--report` 指定已验收包及报告，校验包名、版本、文件哈希与通过状态，核对 registry 中版本是否已存在、账号权限及认证，然后向固定的官方 registry 上传该包一次；支持 `--dry-run` 包级预检和 `--verify-only` 只读补核查。npm 已接收但尚不可见时保存 `processing` 回执，后续调用只核查、不再上传；真实失败仍以非零状态退出。发布阶段不构建、不打包、不自动升级版本。 |
@@ -112,22 +114,22 @@ package/
 - `files` 明确列出 `dist/index.js`、`dist/index.d.ts`、`dist/assets/`、两份 README、`LICENSE` 和 `THIRD_PARTY_NOTICES.md`，不使用仓库根 `*` 或宽泛的 `dist/**` 代替产物清单。`dist/assets/` 只放运行时资源，不含许可文本。`package.json` 等 npm 默认收录文件也必须审查，不能只依赖白名单字段。
 - `exports["."]` 的 `types` 指向 `./dist/index.d.ts`、`import` 指向 `./dist/index.js`；顶层 `types` 保持一致。仅提供 ESM；保留 `BetterSky` 具名与默认导出，不公开内部模块入口。资源复制示例直接使用文件系统路径，不依赖未导出的 `package.json` 子路径。
 - 资源目录另设逐文件清单，包含路径、用途、来源/许可与内容哈希；根据运行依赖审查 `static/BetterSkyAssets/`，保留所支持效果需要的文件与目录层级。当前目录有 17 个文件，但数量不是永久白名单，未确认用途或分发权的文件不得进入发布目录。
-- 明确排除 `BetterSky.js`、`Library/`、原始 `.glsl` / `.vert` / `.frag` 文件、未混淆 JS、内部类型、所有 `.map` / `.d.ts.map`、源码归档、demo/HTML/截图、`static/` 原目录、`public/`、`.env*`（含示例）、token、配置/锁文件、构建脚本、测试、`.git/`、`.codegraph/`、编辑器/代理数据、`SDK_PUBLISH_PLAN.md`、`BetterSky.README.md` 及 `BetterSky.README.zh-CN.md`。两份 BetterSky 文档是仓库内部的原理与 API 参考，不随包分发。
+- 明确排除 `BetterSky.js`、`src/`、`demo/`、`Library/`、原始 `.glsl` / `.vert` / `.frag` 文件、未混淆 JS、内部类型、所有 `.map` / `.d.ts.map`、源码归档、demo/HTML/截图、`static/` 原目录、`public/`、`.env*`（含示例）、token、配置/锁文件、构建脚本、测试、`.git/`、`.codegraph/`、编辑器/代理数据、`SDK_PUBLISH_PLAN.md`、`BetterSky.README.md` 及 `BetterSky.README.zh-CN.md`。两份 BetterSky 文档是仓库内部的原理与 API 参考，不随包分发。
 - 从空的 `.sdk-package/` 组装，完成后校验实际压缩包的每一个条目；出现白名单之外的文件就中止。Cesium/three 本体通过依赖安装，不把仓库 `node_modules/` 或 Cesium 的整套构建文件复制进 SDK 包。
 - 不要把仓库中的原理说明文档发布出去，不要发布与使用该sdk插件不相关的文件
 
 ### 公开声明与参数注释
 
-- 唯一维护入口为 [`scripts/sdk/public-api.d.ts`](scripts/sdk/public-api.d.ts)。使用标准 `/** ... */` JSDoc，使 JavaScript/TypeScript 使用方在支持 TypeScript 语言服务的编辑器中，悬停配置项或调用方法时能直接查看说明。
+- 唯一公开类型维护入口为 [`src/index.ts`](src/index.ts)，由 `scripts/sdk/declarations.mjs` 调用 TypeScript CLI 生成声明。使用标准 `/** ... */` JSDoc，使 JavaScript/TypeScript 使用方在支持 TypeScript 语言服务的编辑器中，悬停配置项或调用方法时能直接查看说明。
 - 每个公开类型、接口、类及成员都必须有非空说明；配置项写清用途、已核实的单位、范围、默认值、数组分量顺序及 `null` / `undefined` 语义。有运行时硬校验的范围与建议取值要明确区分，不把建议范围表述为所有入口都会校验。
 - 构造器、方法及 setter 的每个具名参数都必须有非空 `@param`，说明参数含义和必要限制；有特殊行为时注明深合并、数组整体替换、模式联动、管线重建、销毁顺序等使用约束。默认值随实现一起维护，不记录未经验证的单位或承诺。
-- 构建在打包前校验声明文档完整性，再将同一份 UTF-8 字节写入 `dist/index.d.ts` 并组装到 `.sdk-package/dist/index.d.ts`；声明不经过 JS 混淆或去注释处理。当前公开声明模板保持每项声明单行，JSDoc 可跨行，结构变化时同步调整校验器。
-- 目录与实际 `.tgz` 校验继续检查声明与维护源的 SHA-256 一致，并检查注释完整性；删除字段 JSDoc 或任一参数说明即失败。使用 `node --test tests/sdk-package.test.mjs` 回归该门禁。重新生成的包必须重新验收；已发布版本的声明不会随本地文件修改而更新。
+- 构建先严格编译公开类型，保留 JSDoc，再将生成的同一份 UTF-8 字节写入 `dist/index.d.ts` 并组装到 `.sdk-package/dist/index.d.ts`；声明不经过 JS 混淆或去注释处理。Oxc TypeScript AST 检查注释，支持多行、嵌套和泛型类型。
+- 目录与实际 `.tgz` 校验比较生成声明与 TypeScript 维护源的公开 AST 和全部 JSDoc，不在打包或发布时重新编译；构建产物复制及压缩包字节仍按哈希验收。删除字段 JSDoc 或任一参数说明即失败。使用 `node --test tests/sdk-package.test.mjs tests/sdk-declarations.test.mjs` 回归该门禁。重新生成的包必须重新验收；已发布版本的声明不会随本地文件修改而更新。
 
 ## 编译、混淆与源码保护
 
-1. 以 `BetterSky.js` 为入口，打包全部运行依赖闭包；Cesium、three 及各自子路径保持 external。关闭 `preserveModules`，首版收敛为 `dist/index.js`，不按源码目录逐文件输出。
-   Cesium 依赖只使用实际所需的显式具名导入，不物化、枚举或动态访问整个 Cesium 命名空间。构建前后的 AST 检查均拒绝 Cesium namespace/default 导入及整包再导出，防止混淆后触发旧版 Cesium 入口中无关的缺失再导出。
+1. 以 `src/index.ts` 为公开入口（内部继续使用 `BetterSky.js`），打包全部运行依赖闭包；Cesium、three 及各自子路径保持 external。关闭 `preserveModules`，首版收敛为 `dist/index.js`，不按源码目录逐文件输出。
+   Cesium 依赖只使用实际所需的显式具名导入，不物化、枚举或动态访问整个 Cesium 命名空间。构建前后的 AST 检查均拒绝 Cesium namespace/default 导入及整包再导出，控制 Cesium 依赖闭包；Vite 8 会验证全部再导出，不能依赖具名导入绕过上游缺失导出，组合兼容性按实际安装验证。
 2. 将 `?raw` 引用的 GLSL 在构建时内联入 JS。压缩前先清点运行时 `replace` / `indexOf` 等着色器组装操作，保护 `/*__CLOUD_LAYER_DENSITY__*/`、体积光插入标记及所有精确匹配片段（包括空白）；例如 `FocusedCloudShadowPass.js` 依赖函数签名和完整语句定位、切片及替换，这些内容不能按普通注释或空白删除。首版仅压缩已确认不参与组装的部分，保留必要换行、预处理指令、uniform/attribute 名与第三方通知，不对 GLSL 直接套用 JavaScript 混淆器。针对组装操作校验预期匹配次数、切片边界及生成结果，匹配缺失、次数异常或应替换的标记残留均中止验收，不能仅凭 JS 构建成功判定通过。接入项目无需再配置 SDK 的 `?raw` loader。
 3. 在 bundle 生成后使用 `javascript-obfuscator` 的本地构建步骤混淆内部标识符与选定字符串；实施时固定并记录经验证的版本、配置与非零 seed。不把源码上传到在线混淆服务。
 4. 首版采用保守配置：`sourceMap: false`、`renameGlobals: false`、`renameProperties: false`；关闭控制流平坦化、死代码注入、调试阻断和 `selfDefending`。保留导出、公开方法/配置字段、Cesium/three 属性、资源路径及 GLSL 接口，不引入 `eval` 或 `new Function`。避免影响宿主的再次打包与每帧渲染性能，具体强度以实测为准。
@@ -145,7 +147,7 @@ package/
 - Cesium 官方资源与插件效果资源共用宿主的 `CESIUM_BASE_URL`；SDK 不覆盖该配置，构建 SDK 时也不能把 demo 的 `/cesium/` 固化进库产物。
 - 限制同页一个活动实例，第二实例在改变场景前报错，销毁后允许重建。
 - 首版仅支持具有 `scene.globe` 的 `SceneMode.SCENE3D` 场景及 `PerspectiveFrustum` 透视相机；在修改宿主场景、注册回调或创建 GPU 资源前检查，拒绝二维、Columbus View、正交相机和无 Globe 场景。宿主切换到不支持的模式前须先 `dispose()`；每帧入口也应检测场景与相机条件，遇到不支持的状态时停止效果渲染并一次性报告明确错误，避免继续执行透视矩阵计算。恢复受支持的场景后须销毁并重建实例，不承诺模式自动切换兼容。
-- 在混淆包中保留并验证源码的单实例生命周期保障：幂等销毁，SMAA 避免重复并发加载，释放实例拥有的阴影、纹理和帧缓冲，销毁后迟到的回调跳过 GPU 资源创建。请求不主动中止，不增加公开的全部资源就绪 Promise；不得把辅助方法/原型扩展或宿主设置宣称为完全回滚。
+- 在混淆包中保留并验证源码的单实例生命周期保障：幂等销毁，SMAA 避免重复并发加载，释放实例拥有的阴影、纹理和帧缓冲，销毁后迟到的回调跳过 GPU 资源创建。请求不主动中止；新增 `assetsReady` 等待天空 Pass 六项必需资源，雪为按需可选、SMAA 单独管理，不宣称等待全部可选资源。移除共享数学原型扩展，HBAO 状态改为实例字段；不得把 context 辅助方法或宿主设置宣称为完全回滚。
 - 明确并检查必要的浏览器能力，包括 WebGL 2、所需浮点纹理能力、`Float16Array` 和 `structuredClone`。
 - 保留当前场景设置行为，说明时钟、HDR 等影响及销毁恢复范围。
 - 保留源码内的原始通知，发布包附上 [第三方代码及许可](THIRD_PARTY_NOTICES.md) 中合并的必要声明。该清单只列已确认的复用关系，不列推测来源。MIT/BSD/Apache 代码按原条款用于闭源商业产品，不要求公开整个 SDK 或业务项目源码；本项目的收费条款不改变这些第三方材料的原有许可。
@@ -199,7 +201,7 @@ README 以提示形式说明：按许可规则，对外分发 SDK 或其运行�
 - 使用 `finally` 或等效清理流程停止本轮启动的测试服务、关闭测试页面，并删除本轮专用目录中的测试项目、`node_modules`、解压文件、资源副本、测试构建产物、测试专用缓存和过程截图/日志。删除前核对解析后的绝对路径，确保目标仅限本轮专用目录；不得删除指定父目录中的其他内容、共享缓存或既有项目资源。清理后检查仓库状态，确认验收未留下测试文件或意外改动；失败时将必要诊断摘要纳入归档后再清理。
 
 1. 按实际分发内容核对第三方许可条件及自有代码授权范围，确认合并声明完整；资源清单逐文件核实用途和分发权。
-2. 编译混淆并组装 `.sdk-package/`，按上述白名单检查文件、文本内容及资源哈希；无 sourcemap、原始实现、未混淆副本、环境变量、demo 或开发数据，必要通知齐全。检查公开声明各成员 JSDoc、所有方法参数 `@param` 及维护源/最终产物字节一致性，确保单位、默认值和联动规则与实现一致。校验压缩前后所有着色器组装操作的匹配次数、切片边界和生成结果，覆盖云密度、云阴影及体积光路径，防止替换静默失效。
+2. 编译混淆并组装 `.sdk-package/`，按上述白名单检查文件、文本内容及资源哈希；无 sourcemap、原始实现、未混淆副本、环境变量、demo 或开发数据，必要通知齐全。检查公开声明各成员 JSDoc、所有方法参数 `@param`、声明与维护源的公开 AST/JSDoc 一致性及两处声明输出的字节一致性，确保单位、默认值和联动规则与实现一致。校验压缩前后所有着色器组装操作的匹配次数、切片边界和生成结果，覆盖云密度、云阴影及体积光路径，防止替换静默失效。
 3. 在 `.sdk-package/` 中用 `npm pack --dry-run --json` 预审，再用 `npm pack` 或 `pnpm pack` 生成实际 `.tgz`。将包复制到验收专用目录后解压，逐项复核文件、包元数据、README、资源字节和映射痕迹，记录 SHA-256；dry-run 不能代替实际包验收。
 4. 同一份 `.tgz` 分别安装到独立 npm 项目和默认依赖布局的 pnpm 项目，以 Vite、TypeScript 和最低/当前最新版本的 Cesium、three 交叉组合验证导出、类型、外部依赖解析与文档命令。发布验收时重新核实最新版本，并记录实际版本与结果。所有组合均按 Cesium 自身依赖规则安装 engine/widgets，不使用其 overrides，也不手工另装指定内部组件来制造通过结果。默认接入组只声明 SDK 和 Cesium，让 SDK 自动安装 three，项目中没有任何 overrides；另设最低 three 版本的兼容组，只有该测试组使用 three 的版本覆盖，以验证 SDK 真正加载了最低版本。以安装后的 SDK 入口为解析起点，记录并断言 three 路径、版本及宿主最终解析结果，同时记录 Cesium 自动解析的内部组件版本，确认 Cesium 与宿主共享同一份依赖。对照源码仅用于单独标注的性能基线；实际安装验收不得使用源码别名或工作区链接，也不得改写待发布包的依赖声明来替代矩阵控制。
 5. 使用 `@browser` 验证混淆包的渲染、参数更新、开关和所有必要纹理；检查根路径、`/app/` 子路径和自定义 Cesium 资源根目录均只需配置宿主的 `CESIUM_BASE_URL`，以及宿主生产构建后二次压缩的运行情况。确认 JS/GLSL 无编译错误、资源非 404/HTML 回退，控制台无新增错误，并对照混淆前后的加载耗时、包大小和同场景帧耗时。
@@ -221,7 +223,7 @@ npm publish ./bettersky-cesium-0.1.0.tgz --access public --registry=https://regi
 
 ## 官方参考
 
-- [Vite 6 库模式](https://v6.vite.dev/guide/build#library-mode)
+- [Vite 库模式](https://vite.dev/guide/build#library-mode)
 - [npm package.json 配置](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/)
 - [npm 包页面与 README](https://docs.npmjs.com/about-package-readme-files/)
 - [javascript-obfuscator 配置](https://github.com/javascript-obfuscator/javascript-obfuscator)

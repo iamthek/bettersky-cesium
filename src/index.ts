@@ -1,4 +1,6 @@
 import type { Cartesian2, Cartesian4, PostProcessStageComposite, Scene, Viewer } from 'cesium';
+// @ts-expect-error The legacy JavaScript implementation is an opaque runtime boundary; explicit public interfaces and runtime tests define its contract.
+import RuntimeBetterSky from "../BetterSky.js";
 
 /** 二维参数：数组依次为 [x, y]，也可传入 Cesium Cartesian2；单位由具体配置项定义。 */
 export type BetterSkyVector2 = [number, number] | Cartesian2;
@@ -233,7 +235,7 @@ export interface BetterSkyHbaoOptions {
    */
   gamma?: number;
   /**
-   * HBAO 双边滤波降噪开关；仅构造时生效，update() 不会重建该配置，与云体降噪分别控制。
+   * HBAO 双边滤波降噪开关；仅构造时生效，运行期更改会明确拒绝，需 dispose() 后重建，与云体降噪分别控制。
    * @default true
    */
   denoise?: boolean;
@@ -336,6 +338,30 @@ export interface BetterSkyOptions {
   time?: string | null;
 }
 
+/**
+ * 运行时局部更新配置；未传字段保留已有配置，数组整体替换。
+ * HBAO denoise 仅在构造时决定滤波阶段，运行时如需变更须 dispose() 后重建。
+ */
+export type BetterSkyUpdateOptions = Omit<BetterSkyOptions, 'hbao'> & {
+  /** false 关闭但保存数值，true 恢复已有数值，对象局部更新数值并启用 HBAO。 */
+  hbao?: boolean | Omit<BetterSkyHbaoOptions, 'denoise'>;
+};
+
+/** 天空 Pass 资源状态；不包含 SMAA 查找纹理，idle 表示尚未开始加载。 */
+export type BetterSkyAssetStatus = 'idle' | 'loading' | 'ready' | 'error' | 'disposed';
+
+/** 单项天空效果资源的加载错误；required=false 的可选资源失败不阻止核心天空资源就绪。 */
+export interface BetterSkyAssetError {
+  /** 资源的稳定标识。 */
+  readonly id: string;
+  /** 本轮加载使用的资源 URL。 */
+  readonly url: string;
+  /** 是否为核心天空效果所需资源。 */
+  readonly required: boolean;
+  /** 原始加载错误。 */
+  readonly error: unknown;
+}
+
 /** 高级 Pass 控制；直接修改不会同步 BetterSky 保存的配置，通常优先使用 BetterSky.update()。 */
 export interface BetterSkyPass {
   /** 已加入 Cesium 后处理集合的天空合成阶段；销毁宿主实例后不要继续使用缓存的引用。 */
@@ -387,21 +413,43 @@ export interface BetterSkyPass {
  * 为 Cesium 三维地球场景添加天空效果，同页只允许一个活动实例，销毁后可重建。
  * 场景需要 globe、SceneMode.SCENE3D、PerspectiveFrustum，以及 WebGL 2 和所需浮点纹理能力。
  * 浏览器还需支持 Float16Array、structuredClone；切换至不支持的场景模式前先 dispose()。
+ * 所有公开 setter 和更新方法在销毁后均抛出错误；只读状态和配置快照仍可查询。
  */
-export declare class BetterSky {
-  /** 内置默认预设的独立副本；修改返回对象不会修改内置默认值，可用于读取默认值或生成自定义预设。 */
-  static readonly defaultOptions: BetterSkyOptions;
-  /**
-   * 创建天空效果，将后处理加入场景并注册每帧更新；效果资源异步加载，宿主需持续渲染以驱动云动画。
-   * @param viewerOrScene 已创建的 Cesium Viewer 或 Scene；仅传 Scene 时不会设置 Viewer 时钟。
-   * @param options 覆盖默认预设的部分配置，嵌套对象深合并、数组整体替换；省略时使用完整默认预设。
-   * @throws 场景/浏览器能力不受支持、已有活动实例或受校验的配置不合法时抛出错误。
-   */
-  constructor(viewerOrScene: Viewer | Scene, options?: BetterSkyOptions);
+export interface BetterSky {
   /** 底层天空 Pass 的受支持高级控制；dispose() 后为 undefined。 */
   readonly pass: BetterSkyPass | undefined;
   /** 已加入 scene.postProcessStages 的天空合成阶段；dispose() 后为 undefined。 */
   readonly stage: PostProcessStageComposite | undefined;
+  /**
+   * 核心天空 Pass 的异步资源状态，涵盖天气、噪声、大气 LUT 等及按需可选资源；不包含 SMAA 查找纹理。
+   * ready 与 Cesium stage.ready 分别表示异步资源和后处理阶段就绪，二者不能互相替代。
+   */
+  readonly assetStatus: BetterSkyAssetStatus;
+  /** 当前天空资源错误的冻结数组；资源失败后通过 retryAssets() 重试。 */
+  readonly assetErrors: readonly BetterSkyAssetError[];
+  /**
+   * 读取时显式按需启动天空 Pass 的六项必需资源（天气、湍流、形状、细节、STBN、大气），即使 enabled=false。
+   * 等待当前一轮加载结束，成功、失败、销毁均正常结算，不因加载失败而 reject；完成后读取 assetStatus 和 assetErrors 判断结果。
+   * SMAA 查找纹理独立加载，不包含在此 Promise 内。
+   */
+  readonly assetsReady: Promise<void>;
+  /**
+   * 重试失败的天空资源，等待此次加载结束；失败通过 assetStatus/assetErrors 查询。
+   * @throws 实例已销毁或运行场景不受支持时抛出错误。
+   */
+  retryAssets(): Promise<void>;
+  /**
+   * 订阅天空资源变化，返回取消订阅函数；在回调中读取资源 getter 获取最新状态。
+   * @param listener 状态变化通知函数，不应在回调中抛出异常。
+   * @throws 实例已销毁、运行场景不受支持或监听器不是函数时抛出错误。
+   */
+  subscribeAssets(listener: () => void): () => void;
+  /**
+   * 读取最近接受配置的独立快照；数组及嵌套对象均可自由修改，不影响实例。
+   * 向量统一表示为数组；场景 HDR、gamma 与对数深度字段反映最近更新时的实际场景值。
+   * HBAO 关闭时为 false，重开会恢复保存的数值；直接写高级 pass 的变更不会自动进入快照。
+   */
+  getOptions(): BetterSkyOptions;
   /** 天空效果总开关，同时联动已配置的 HBAO/SMAA；false 暂停效果渲染但不释放资源。 */
   enabled: boolean;
   /** 云量覆盖度 [0, 1]，设置后使云历史失效；越大云区越广，与每层云密度分别控制。 */
@@ -454,16 +502,34 @@ export declare class BetterSky {
   setCloudShapeDetailAmounts(value: BetterSkyVector4): void;
   /**
    * 批量局部更新配置，嵌套对象深合并、数组整体替换；未提供字段保留已有值。
-   * 部分便捷 setter（如 coverage、toneMappingExposure）仅写 Pass，不回写保存的配置；需要合并选项时统一使用本方法。
+   * 所有便捷 setter 与本方法共用归一化、校验及应用通路，均同步 getOptions() 的配置快照。
    * @param options 本次需要覆盖的字段，省略为不改参数；含 haze* 且未显式指定 mode 时切到 legacy，场景设置规则见 applySceneSettings。
-   * @throws 实例已销毁、运行场景已不受支持或受校验的配置不合法时抛出错误。
+   * @throws 实例已销毁、运行场景已不受支持、存在未知字段或配置不合法时抛出错误；非法命令不会部分提交。
    */
-  update(options?: BetterSkyOptions): void;
+  update(options?: BetterSkyUpdateOptions): void;
   /**
    * 移除每帧回调、移除并销毁自有后处理和 GPU 资源；可重复调用，必须在销毁宿主 Viewer 前调用。
    * 请求不主动中止，销毁后迟到的资源回调跳过 GPU 创建；不承诺还原时钟、HDR、gamma、对数深度等全部宿主设置。
    */
   dispose(): void;
 }
+
+/** BetterSky 构造器；支持 new、typeof BetterSky、命名导出和默认导出。 */
+export interface BetterSkyConstructor extends Function {
+  /** 内置默认预设的独立副本；修改返回对象不会修改内置默认值，可用于读取默认值或生成自定义预设。 */
+  readonly defaultOptions: BetterSkyOptions;
+  /**
+   * 创建天空效果，将后处理加入场景并注册每帧更新；效果资源异步加载，宿主需持续渲染以驱动云动画。
+   * @param viewerOrScene 已创建的 Cesium Viewer 或 Scene；仅传 Scene 时不会设置 Viewer 时钟。
+   * @param options 覆盖默认预设的部分配置，嵌套对象深合并、数组整体替换；省略时使用完整默认预设。
+   * @throws 场景/浏览器能力不受支持、已有活动实例或受校验的配置不合法时抛出错误。
+   */
+  new (viewerOrScene: Viewer | Scene, options?: BetterSkyOptions): BetterSky;
+  /** JavaScript 实例原型，可用于标准构造器反射；不作为公开扩展或改写入口。 */
+  readonly prototype: BetterSky;
+}
+
+/** 公开类型由本文件定义；运行时继续使用兼容的 JavaScript 入口。 */
+export const BetterSky: BetterSkyConstructor = RuntimeBetterSky as unknown as BetterSkyConstructor;
 
 export default BetterSky;

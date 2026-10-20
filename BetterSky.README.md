@@ -14,10 +14,12 @@ For the planned npm/pnpm package, see [Usage](README.md#usage). This CesiumJS pl
 | Package manager | pnpm 12.8.1 |
 | Cesium | Supported range `>=1.142.0`; reproducible repository lockfile baseline 1.142.0 |
 | three | Supported range `>=0.160.1`; reproducible repository lockfile baseline 0.160.1; runtime dependency for texture loaders and cascaded shadows |
-| Demo tools | Vite 6.4.3 and vite-plugin-static-copy 2.3.2, as resolved in the lockfile |
+| Demo tools | Vite 8.3.4, vite-plugin-static-copy 4.1.1 and TypeScript 7.0.2 in the lockfile (Node 24 recommended for development) |
 | Browser / GPU | Modern browser with WebGL 2, 3D/array textures and floating-point render targets; native `Float16Array` and `structuredClone` are also required |
 
 Use one active BetterSky instance per page with one Viewer and a globe in 3D perspective mode. The supported ranges include later dependency versions, while the lockfile preserves the development baseline. Renderer internals are version-sensitive: test dependency upgrades before deployment, and extend the minimum/current-latest matrix when new versions are released. A version range does not mean every future release has already been verified.
+
+> **Compatibility tip:** The SDK minimum remains `cesium@1.142.0`, verified with engine `26.0.0` / widgets `16.0.0`. A fresh installation may resolve engine `26.4.0` / widgets `16.3.0` within Cesium's official `^` ranges; that combination has an independently reproducible upstream missing-export issue under Vite 8. Preserve a verified complete lockfile, or upgrade Cesium if this error occurs. The SDK does not require internal-component overrides. See the [installation tip](README.md#install).
 
 ### Compatibility regression matrix
 
@@ -84,7 +86,7 @@ From the repository root:
 
 ```bash
 pnpm install --frozen-lockfile
-cp .env.example .env.local
+cp demo/.env.example .env.local
 ```
 
 Optionally fill in `.env.local`:
@@ -105,15 +107,16 @@ pnpm dev
 Open the address printed by Vite, normally [http://localhost:3000/](http://localhost:3000/). Vite selects another port if 3000 is occupied. The demo includes parameter controls, help text, reset controls and a timeline; `window.viewer` and `window.fx` are available in its browser console.
 
 ```bash
-pnpm build    # Write the demo to dist/
-pnpm preview  # Preview dist/; use the printed URL
+pnpm run build:demo # Build demo/index.html into dist-demo/
+pnpm preview        # Preview dist-demo/; use the printed URL
+pnpm run build:sdk  # Build the SDK separately from src/index.ts
 ```
 
 The demo adjusts `viewer.resolutionScale` to cap large drawing buffers at approximately four million pixels. Applications using the SDK manage their own overall render resolution.
 
 ## Add the SDK source to another project
 
-The repository currently provides the SDK as source modules. Copy `BetterSky.js`, the complete `Library/` directory and `static/BetterSkyAssets/`, preserving relative paths.
+The repository currently provides the SDK as source modules. Copy `BetterSky.js`, the complete `src/` and `Library/` directories and `static/BetterSkyAssets/`, preserving relative paths. The public build entry is `src/index.ts`; defaults and validation live in `src/options.js`, while the JavaScript runtime entry remains compatible.
 
 Shader sources live in `Library/shaders/` and are imported as strings using Vite's `?raw` feature, for example `import shaderSource from './Library/shaders/geospatial/cloudsMaterial.frag.glsl?raw'` in a module at the project root. Vite projects require no additional GLSL plugin; include this directory when copying the SDK. Other bundlers need equivalent raw-text import support.
 
@@ -365,7 +368,7 @@ The default `hbao` value is an object containing the seven numeric options below
 | `hbao.gamma` | number | `2.5` | Positive AO curve exponent, separate from scene gamma. |
 | `hbao.denoise` | boolean | `true` | Bilateral filter, construction only; update() does not rebuild this option. |
 
-The seven numeric fields support `update()`. `hbao.denoise` is a construction-time setting.
+The seven numeric fields support `update()`. Changing construction-only `hbao.denoise` at runtime throws explicitly; dispose and recreate to change it. Repeating its existing value is idempotent.
 
 ## Runtime API
 
@@ -393,7 +396,11 @@ Changing cloud shape, density, coverage, lighting or visibility parameters inval
 | API | Access / purpose |
 | --- | --- |
 | `BetterSky.defaultOptions` | Static getter; returns a fresh default configuration. |
-| `fx.update(options)` | Apply supported fields from a partial configuration. |
+| `fx.update(options)` | Uses the same validation/application path as convenience setters; rejects unknown fields or invalid values before committing. |
+| `fx.getOptions()` | Independent snapshot of accepted options; HBAO retains its parameters internally while disabled. |
+| `fx.assetStatus` / `fx.assetErrors` | Sky resource status and a read-only error snapshot. |
+| `fx.assetsReady` | Reading starts and waits for six required resources; settles on failure/disposal too, excluding SMAA and optional snow. |
+| `fx.retryAssets()` / `fx.subscribeAssets(listener)` | Explicit failed-resource retry and a subscription returning an unsubscribe function. |
 | `fx.enabled` | Get/set the pipeline switch. |
 | `fx.coverage` | Get/set weather coverage. |
 | `fx.toneMappingExposure` | Get/set exposure multiplier. |
@@ -491,9 +498,9 @@ viewer.destroy();
 
 Call `dispose()` before `viewer.destroy()`; do not use the instance afterward. Disposal is idempotent and cleans up the instance-owned effect textures, framebuffers, shadow resources and shader-cache references through its passes. Host default textures and shared viewport geometry remain under host/shared ownership.
 
-It is safe to dispose while initial assets are loading, then create a replacement after disposal returns. Requests are not actively aborted and there is no public all-assets-ready promise. Late completion callbacks check the destroyed state and skip GPU resource creation. SMAA prevents duplicate concurrent lookup loads per stage, and its callbacks also respect disposal.
+It is safe to dispose while initial assets are loading, then create a replacement after disposal returns. Requests are not actively aborted. Reading `assetsReady` starts the six required sky resources on demand, including while disabled; inspect `assetErrors` after it settles. Optional snow and SMAA are outside that wait. Late completion callbacks check the destroyed state and skip GPU resource creation. SMAA prevents duplicate concurrent lookup loads per stage, and its callbacks also respect disposal.
 
-Disposal does not remove the installed context helpers, added sun fields on `context.uniformState` or `Cartesian2/3/4` and `Matrix4` prototype extensions. The implementation uses selected Cesium renderer internals, and HBAO also has shared module state. Use one pipeline per Viewer and one active Viewer per page; isolated concurrent instances are not supported.
+Disposal does not remove installed context helpers or added sun fields on `context.uniformState`. Math conveniences now use internal types without modifying shared Cesium prototypes, and HBAO owns its stage/camera state per instance. Renderer internals are concentrated in an adapter and still require upgrade validation. The public one-active-instance-per-page restriction remains.
 
 ## Troubleshooting
 
@@ -512,7 +519,9 @@ Disposal does not remove the installed context helpers, added sun fields on `con
 
 ## Explore the implementation
 
-- [BetterSky.js](BetterSky.js): public API, defaults, validation and updates.
+- [src/index.ts](src/index.ts): public types and SDK build entry; [src/options.js](src/options.js): defaults, normalization and validation.
+- [BetterSky.js](BetterSky.js): JavaScript runtime entry, unified updates and lifecycle.
+- [Architecture and boundaries](SDK_ARCHITECTURE.md) and [demo deployment](demo/README.md): responsibilities and GitHub Pages workflow.
 - [GeospatialPipelinePass.js](Library/GeospatialPipelinePass.js): scene integration, atmosphere and composition.
 - [CloudsMaterialPass.js](Library/geospatial/CloudsMaterialPass.js): cloud/light integration and temporal reconstruction.
 - [VolumetricLightPass.js](Library/geospatial/VolumetricLightPass.js) and [FocusedCloudShadowPass.js](Library/geospatial/FocusedCloudShadowPass.js): independent local volumetric light, temporal history and focused sunlight visibility.

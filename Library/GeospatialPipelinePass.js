@@ -7,7 +7,6 @@ import {
     defined,
     PostProcessStageSampleMode,
     PostProcessStageComposite,
-    Matrix4,
     ClearCommand,
     Color,
     Pass,
@@ -26,9 +25,7 @@ import {
     Appearance,
     Sampler,
     WebGLConstants,
-    Cartesian4,
     PixelFormat,
-    Cartesian3,
     TextureMinificationFilter,
     TextureMagnificationFilter,
     Cartographic,
@@ -42,8 +39,6 @@ import {
     Matrix3,
     Resource,
     buildModuleUrl,
-    Cartesian2,
-    destroyObject,
     TextureWrap,
     BoundingRectangle,
     ShaderSource,
@@ -51,6 +46,11 @@ import {
  } from "cesium";
 const defaultValue = (a, b) => a ?? b; // 官方 Cesium 不导出 defaultValue
 defaultValue.EMPTY_OBJECT = Object.freeze({});
+import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from "./internal/MathTypes.js";
+import AssetManager from "./internal/AssetManager.js";
+import SceneStateLease from "./internal/SceneStateLease.js";
+import { getWebGLContext, getCameraPosition, getStageIndex, restoreStageOrder } from "./internal/CesiumAdapter.js";
+import { runCleanup } from "./internal/cleanup.js";
 import Texture3D from "./Texture3D.js";
 import { AerialPerspectiveEffectFS, AerialPerspectiveEffectVS } from "./geospatial/AerialPerspectiveEffect.js";
 import { parseInt8Array, parseUint8Array } from "./geospatial/typedArrayParsers.js";
@@ -95,79 +95,6 @@ import {
     RedFormat,
     RepeatWrapping,
  } from "three";
-Cartesian2.prototype.set = function (x, y) {
-    this.x = x; this.y = y;
-    return this;
-}
-Cartesian2.prototype.copy = function (src) {
-    this.x = src.x; this.y = src.y;
-    return this;
-}
-Cartesian3.prototype.set = function (x, y, z) {
-    this.x = x; this.y = y; this.z = z;
-    return this;
-}
-Cartesian3.prototype.copy = function (src) {
-    this.x = src.x; this.y = src.y; this.z = src.z;
-    return this;
-}
-Cartesian3.prototype.dot = function (right) {
-    return this.x * right.x + this.y * right.y + this.z * right.z;
-};
-Cartesian3.prototype.toArray = function (right) {
-    return [this.x, this.y, this.z];
-};
-Cartesian3.prototype.applyMatrix4 = function (matrix4) {
-    const x = this.x, y = this.y, z = this.z;
-    const e = matrix4;
-
-    const w = 1 / (e[3] * x + e[7] * y + e[11] * z + e[15]);
-
-    this.x = (e[0] * x + e[4] * y + e[8] * z + e[12]) * w;
-    this.y = (e[1] * x + e[5] * y + e[9] * z + e[13]) * w;
-    this.z = (e[2] * x + e[6] * y + e[10] * z + e[14]) * w;
-
-    return this;
-};
-Cartesian4.prototype.set = function (x, y, z, w) {
-    this.x = x; this.y = y; this.z = z, this.w = w;
-    return this;
-}
-Cartesian4.prototype.copy = function (src) {
-    this.x = src.x; this.y = src.y; this.z = src.z, this.w = src.w;
-    return this;
-}
-Cartesian4.prototype.dot = function (right) {
-    return this.x * right.x + this.y * right.y + this.z * right.z + this.w * right.w;
-};
-Cartesian4.prototype.toArray = function () {
-    return [this.x, this.y, this.z, this.w];
-};
-Matrix4.prototype.copy = function (matrix) {
-    if (!defined(matrix)) {
-        return undefined;
-    }
-    const result = this;
-    result[0] = matrix[0];
-    result[1] = matrix[1];
-    result[2] = matrix[2];
-    result[3] = matrix[3];
-    result[4] = matrix[4];
-    result[5] = matrix[5];
-    result[6] = matrix[6];
-    result[7] = matrix[7];
-    result[8] = matrix[8];
-    result[9] = matrix[9];
-    result[10] = matrix[10];
-    result[11] = matrix[11];
-    result[12] = matrix[12];
-    result[13] = matrix[13];
-    result[14] = matrix[14];
-    result[15] = matrix[15];
-    return result;
-};
-
-
 // 缓存向量，避免频繁创建对象
 const vectorScratch = new Cartesian3();
 const vectorScratch2 = new Cartesian3();
@@ -302,6 +229,7 @@ export default class GeospatialPipelinePass {
         this._destroyed = false;
         // Track only textures allocated by this pass; uniforms may also reference host textures.
         this._ownedTextures = new Set();
+        this._assets = new AssetManager({ onError: ({ error }) => console.error(error) });
         try {
         this.id = createGuid();
         this._showTAA = false;
@@ -419,7 +347,7 @@ export default class GeospatialPipelinePass {
         this._systemLight = defaultValue(options.systemLight, true);
         this._scene.context.uniformState.sunPositionWC2 = new Cartesian3(57848520396.59603, 134403446914.8757, -22823453895.737892);
         this._scene.context.uniformState.sunDirectionWC2 = new Cartesian3(0.39062193129550293, 0.9075588043864757, -0.15411529246496697);
-        this._ellipsoidRadii = ellipsoid._radii;
+        this._ellipsoidRadii = ellipsoid.radii;
         this._ellipsoidCenter = new Cartesian3();
         this._altitudeCorrection = new Cartesian3();
         this._inverseEllipsoidMatrix = new Matrix4();
@@ -440,7 +368,7 @@ export default class GeospatialPipelinePass {
             viewMatrix: () => { return this._scene.context.uniformState.view },
             inverseProjectionMatrix: () => { return this._scene.context.uniformState.inverseProjection },
             inverseViewMatrix: () => { return this._scene.context.uniformState.inverseView },
-            cameraPosition: () => { return this._scene.context.uniformState._cameraPosition },
+            cameraPosition: () => { return getCameraPosition(this._scene) },
             bottomRadius: () => { return atmosphere.bottomRadius },
             ellipsoidRadii: () => { return this._ellipsoidRadii },
             ellipsoidCenter: () => { return this._ellipsoidCenter },
@@ -550,7 +478,9 @@ export default class GeospatialPipelinePass {
         } catch (error) {
             // A throwing constructor never reaches the public wrapper assignment.
             // Release its partial allocations here so the wrapper can retry safely.
-            this.destroy();
+            try { this.destroy(); } catch (cleanupError) {
+                throw new AggregateError([error, cleanupError], "Pipeline initialization and cleanup failed");
+            }
             throw error;
         }
     }
@@ -607,7 +537,7 @@ export default class GeospatialPipelinePass {
         if (isUpdate && defined(this._stage)) {
             const pps = this._scene.postProcessStages;
             if (typeof pps.contains === "function" && pps.contains(this._stage)) {
-                stageIndex = this._stage._index;
+                stageIndex = getStageIndex(this._stage);
                 pps.remove(this._stage); // remove() 内部会销毁该 stage
             } else if (!this._stage.isDestroyed()) {
                 this._stage.destroy();
@@ -680,26 +610,10 @@ export default class GeospatialPipelinePass {
         }
         if (!this._snowCoverMaskMap && this._showSnow) {
             this._snowCoverMaskMap = this._scene.context.defaultTexture;
-            Resource.createIfNeeded(buildModuleUrl("BetterSkyAssets/snowCoverMask.png")).fetchImage().then(image => {
-                if (this._destroyed) return;
-                this._snowCoverMaskMap = new Texture({
-                    context: this._scene.context,
-                    source: image,
-                    width: image.width,
-                    height: image.height,
-                    sampler: new Sampler({
-                        wrapS: WebGLConstants.REPEAT,
-                        wrapT: WebGLConstants.REPEAT,
-                        minificationFilter: WebGLConstants.LINEAR,
-                        magnificationFilter: WebGLConstants.LINEAR,
-                    })
-                })
-                this._ownedTextures.add(this._snowCoverMaskMap);
-            }).catch(error => {
-                if (!this._destroyed) console.error(error);
-            });
+            this._registerImageAsset("snow", "BetterSkyAssets/snowCoverMask.png", "_snowCoverMaskMap", false);
+            this._assets.start(["snow"]);
         }
-        const gl = this._scene.context._gl;
+        const gl = getWebGLContext(this._scene.context);
         if (this._aerialPerspectiveComoman) {
             this._aerialPerspectiveComoman.shaderProgram = this._aerialPerspectiveComoman.shaderProgram?.destroy();
         }
@@ -865,10 +779,7 @@ export default class GeospatialPipelinePass {
             if (typeof pps.contains === "function" && !pps.contains(this._stage)) {
                 pps.add(this._stage);
                 // 官方集合没有插入 API；重建后保留原位置，SMAA 必须仍在天空合成之后。
-                if (defined(stageIndex)) {
-                    pps._stages[stageIndex] = pps._stages.pop();
-                    this._stage._index = stageIndex;
-                }
+                restoreStageOrder(pps, this._stage, stageIndex);
             }
         }
         // 重写执行渲染函数
@@ -904,22 +815,16 @@ export default class GeospatialPipelinePass {
             }
 
             // 接管 Cesium 内置天空/大气，避免与自定义管线叠加
-            if (!this._originalSceneSettings) {
+            if (!this._sceneLease) {
                 const scene = this._scene;
-                this._originalSceneSettings = [
-                    [scene.skyAtmosphere, "show"], [scene.skyBox, "show"],
-                    [scene.sun, "show"], [scene.fog, "enabled"],
-                    [scene.globe, "showGroundAtmosphere"], [scene.globe, "enableLighting"],
-                    [scene.globe, "tileCacheSize"], [scene.globe, "maximumScreenSpaceError"],
-                ].filter(([target]) => target).map(([target, key]) => [target, key, target[key]]);
-                this._scene.globe.showGroundAtmosphere = false;
-                if (scene.skyAtmosphere) scene.skyAtmosphere.show = false;
-                if (this._scene.fog) { this._scene.fog.enabled = false; }
-                if (this._scene.skyBox) { this._scene.skyBox.show = false; }
-                this._scene.globe.enableLighting = true;
-                if (this._scene.sun) { this._scene.sun.show = false; }
-                this._scene.globe.tileCacheSize = 2E3;
-                this._scene.globe.maximumScreenSpaceError = 2;
+                // Explicit legacy policy: disabling/disposal restores the captured host values.
+                this._sceneLease = new SceneStateLease({ restore: "always" });
+                for (const [target, key, value] of [
+                    [scene.skyAtmosphere, "show", false], [scene.skyBox, "show", false],
+                    [scene.sun, "show", false], [scene.fog, "enabled", false],
+                    [scene.globe, "showGroundAtmosphere", false], [scene.globe, "enableLighting", true],
+                    [scene.globe, "tileCacheSize", 2E3], [scene.globe, "maximumScreenSpaceError", 2],
+                ]) this._sceneLease.write(target, key, value);
             }
 
             if (!this._isPrecomputed) {
@@ -1084,223 +989,140 @@ export default class GeospatialPipelinePass {
         }
     }
 
+    _publishTexture(key, create, mipmaps = false) {
+        let texture;
+        try {
+            texture = create();
+            this._ownedTextures.add(texture);
+            if (mipmaps) texture.generateMipmap();
+        } catch (error) {
+            if (texture) {
+                try {
+                    if (!texture.isDestroyed()) texture.destroy();
+                    this._ownedTextures.delete(texture);
+                } catch (cleanupError) {
+                    throw new AggregateError([error, cleanupError], "Texture upload and cleanup failed");
+                }
+            }
+            throw error;
+        }
+        this[key] = texture;
+    }
+
+    _registerImageAsset(id, assetPath, key, required = true, mipmaps = false) {
+        const url = buildModuleUrl(assetPath);
+        this._assets.add({ id, url, required, load: async () => {
+            const image = await Resource.createIfNeeded(url).fetchImage();
+            if (this._destroyed) return;
+            this._publishTexture(key, () => new Texture({
+                context: this._scene.context,
+                source: image,
+                width: image.width,
+                height: image.height,
+                sampler: new Sampler({
+                    wrapS: WebGLConstants.REPEAT,
+                    wrapT: WebGLConstants.REPEAT,
+                    minificationFilter: mipmaps ? WebGLConstants.LINEAR_MIPMAP_LINEAR : WebGLConstants.LINEAR,
+                    magnificationFilter: WebGLConstants.LINEAR,
+                }),
+            }), mipmaps);
+        } });
+    }
+
+    _registerVolumeAsset(id, file, key, width, height, depth, { levels, nearest = false } = {}) {
+        const url = buildModuleUrl("BetterSkyAssets/GeospatialAssets/" + file);
+        this._assets.add({ id, url, load: async () => {
+            const Loader = createData3DTextureLoaderClass(parseUint8Array, {
+                width, height, depth,
+                format: RedFormat,
+                minFilter: nearest ? NearestFilter : LinearFilter,
+                magFilter: nearest ? NearestFilter : LinearFilter,
+                wrapS: RepeatWrapping,
+                wrapT: RepeatWrapping,
+                wrapR: RepeatWrapping,
+                ...(!nearest ? { colorSpace: NoColorSpace } : {}),
+            });
+            const texture = await new Loader().loadAsync(url);
+            if (this._destroyed) return;
+            this._publishTexture(key, () => new Texture3D({
+                context: this._scene.context,
+                width, height, depth,
+                pixelFormat: PixelFormat.RED,
+                pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
+                useTexStorage: true,
+                ...(levels === undefined ? {} : { levels }),
+                flipY: false,
+                sampler: new Sampler({
+                    wrapS: TextureWrap.REPEAT,
+                    wrapT: TextureWrap.REPEAT,
+                    wrapR: TextureWrap.REPEAT,
+                    minificationFilter: nearest ? TextureMinificationFilter.NEAREST : TextureMinificationFilter.LINEAR_MIPMAP_LINEAR,
+                    magnificationFilter: nearest ? TextureMagnificationFilter.NEAREST : TextureMagnificationFilter.LINEAR,
+                }),
+                source: { arrayBufferView: texture.image.data },
+            }), !nearest);
+        } });
+    }
+
     precomputed() {
         if (this._destroyed || this._isPrecomputed) return;
         this._isPrecomputed = true;
-        // Fetches can finish after disposal; guard before allocating any GPU texture.
-        Resource.createIfNeeded(buildModuleUrl("BetterSkyAssets/GeospatialAssets/local_weather.png")).fetchImage().then(image => {
-            if (this._destroyed) return;
-            this.localWeatherTexture = new Texture({
-                context: this._scene.context,
-                source: image,
-                width: image.width,
-                height: image.height,
-                sampler: new Sampler({
-                    wrapS: WebGLConstants.REPEAT,
-                    wrapT: WebGLConstants.REPEAT,
-                    minificationFilter: WebGLConstants.LINEAR_MIPMAP_LINEAR,
-                    magnificationFilter: WebGLConstants.LINEAR,
-                })
-            });
-            this._ownedTextures.add(this.localWeatherTexture);
-            this.localWeatherTexture.generateMipmap();
-        }).catch(error => {
-            if (!this._destroyed) console.error(error);
-        });
-        Resource.createIfNeeded(buildModuleUrl("BetterSkyAssets/GeospatialAssets/turbulence.png")).fetchImage().then(image => {
-            if (this._destroyed) return;
-            this.turbulenceTexture = new Texture({
-                context: this._scene.context,
-                source: image,
-                width: image.width,
-                height: image.height,
-                sampler: new Sampler({
-                    wrapS: WebGLConstants.REPEAT,
-                    wrapT: WebGLConstants.REPEAT,
-                    minificationFilter: WebGLConstants.LINEAR_MIPMAP_LINEAR,
-                    magnificationFilter: WebGLConstants.LINEAR,
-                })
-            })
-            this._ownedTextures.add(this.turbulenceTexture);
-            this.turbulenceTexture.generateMipmap();
-        }).catch(error => {
-            if (!this._destroyed) console.error(error);
-        });
-        const Loader = createData3DTextureLoaderClass(parseUint8Array, {
-            width: CLOUD_SHAPE_TEXTURE_SIZE,
-            height: CLOUD_SHAPE_TEXTURE_SIZE,
-            depth: CLOUD_SHAPE_TEXTURE_SIZE,
-            format: RedFormat,
-            minFilter: LinearFilter,
-            magFilter: LinearFilter,
-            wrapS: RepeatWrapping,
-            wrapT: RepeatWrapping,
-            wrapR: RepeatWrapping,
-            colorSpace: NoColorSpace
-        })
-        const loader = new Loader();
-        (async () => {
-            const texture = await loader.loadAsync(buildModuleUrl("BetterSkyAssets/GeospatialAssets/shape.bin"))
-            if (this._destroyed) return;
-            this.shapeTexture = new Texture3D({
-                context: this._scene.context,
-                width: CLOUD_SHAPE_TEXTURE_SIZE,
-                height: CLOUD_SHAPE_TEXTURE_SIZE,
-                depth: CLOUD_SHAPE_TEXTURE_SIZE,
-                pixelFormat: PixelFormat.RED,
-                pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
-                useTexStorage: true,
-                levels: 8,
-                flipY: false,
-                sampler: new Sampler({
-                    wrapS: TextureWrap.REPEAT,
-                    wrapT: TextureWrap.REPEAT,
-                    wrapR: TextureWrap.REPEAT,
-                    minificationFilter: TextureMinificationFilter.LINEAR_MIPMAP_LINEAR,
-                    magnificationFilter: TextureMagnificationFilter.LINEAR,
-                }),
-                source: {
-                    arrayBufferView: texture.image.data
-                }
-            });
-            this._ownedTextures.add(this.shapeTexture);
-            this.shapeTexture.generateMipmap();
-        })().catch(error => {
-            if (!this._destroyed) console.error(error);
-        })
-        const Loader2 = createData3DTextureLoaderClass(parseUint8Array, {
-            width: CLOUD_SHAPE_DETAIL_TEXTURE_SIZE,
-            height: CLOUD_SHAPE_DETAIL_TEXTURE_SIZE,
-            depth: CLOUD_SHAPE_DETAIL_TEXTURE_SIZE,
-            format: RedFormat,
-            minFilter: LinearFilter,
-            magFilter: LinearFilter,
-            wrapS: RepeatWrapping,
-            wrapT: RepeatWrapping,
-            wrapR: RepeatWrapping,
-            colorSpace: NoColorSpace
-        })
-        const loader2 = new Loader2();
-        (async () => {
-            const texture = await loader2.loadAsync(buildModuleUrl("BetterSkyAssets/GeospatialAssets/shape_detail.bin"))
-            if (this._destroyed) return;
-            this.shapeDetailTexture = new Texture3D({
-                context: this._scene.context,
-                width: CLOUD_SHAPE_DETAIL_TEXTURE_SIZE,
-                height: CLOUD_SHAPE_DETAIL_TEXTURE_SIZE,
-                depth: CLOUD_SHAPE_DETAIL_TEXTURE_SIZE,
-                pixelFormat: PixelFormat.RED,
-                pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
-                useTexStorage: true,
-                levels: 1 + Math.floor(Math.log2(CLOUD_SHAPE_DETAIL_TEXTURE_SIZE)),
-                flipY: false,
-                sampler: new Sampler({
-                    wrapS: TextureWrap.REPEAT,
-                    wrapT: TextureWrap.REPEAT,
-                    wrapR: TextureWrap.REPEAT,
-                    minificationFilter: TextureMinificationFilter.LINEAR_MIPMAP_LINEAR,
-                    magnificationFilter: TextureMagnificationFilter.LINEAR,
-                }),
-                source: {
-                    arrayBufferView: texture.image.data
-                }
-            });
-            this._ownedTextures.add(this.shapeDetailTexture);
-            this.shapeDetailTexture.generateMipmap();
-        })().catch(error => {
-            if (!this._destroyed) console.error(error);
-        })
-        const STBNLoader = createData3DTextureLoaderClass(parseUint8Array, {
-            format: RedFormat,
-            minFilter: NearestFilter,
-            magFilter: NearestFilter,
-            wrapS: RepeatWrapping,
-            wrapT: RepeatWrapping,
-            wrapR: RepeatWrapping,
-            width: STBN_TEXTURE_WIDTH,
-            height: STBN_TEXTURE_HEIGHT,
-            depth: STBN_TEXTURE_DEPTH
-        })
-        const loader3 = new STBNLoader();
-        (async () => {
-            const texture = await loader3.loadAsync(buildModuleUrl("BetterSkyAssets/GeospatialAssets/stbn.bin"))
-            if (this._destroyed) return;
-            this.stbnTexture = new Texture3D({
-                context: this._scene.context,
-                width: STBN_TEXTURE_WIDTH,
-                height: STBN_TEXTURE_HEIGHT,
-                depth: STBN_TEXTURE_DEPTH,
-                pixelFormat: PixelFormat.RED,
-                pixelDatatype: PixelDatatype.UNSIGNED_BYTE,
-                useTexStorage: true,
-                flipY: false,
-                sampler: new Sampler({
-                    wrapS: TextureWrap.REPEAT,
-                    wrapT: TextureWrap.REPEAT,
-                    wrapR: TextureWrap.REPEAT,
-                    minificationFilter: TextureMinificationFilter.NEAREST,
-                    magnificationFilter: TextureMagnificationFilter.NEAREST,
-                }),
-                source: {
-                    arrayBufferView: texture.image.data
-                }
-            });
-            this._ownedTextures.add(this.stbnTexture);
-        })().catch(error => {
-            if (!this._destroyed) console.error(error);
-        })
-        new PrecomputedTexturesLoader().load(
-            buildModuleUrl("BetterSkyAssets/GeospatialAssets/"),
-            (result) => {
-                if (this._destroyed) return;
-                this._u_scattering_texture = new Texture3D({
-                    context: this._scene.context,
-                    width: result.scatteringTexture.image.width,
-                    height: result.scatteringTexture.image.height,
-                    depth: result.scatteringTexture.image.depth,
-                    pixelFormat: PixelFormat.RGBA,
-                    pixelDatatype: PixelDatatype.FLOAT,
-                    useTexStorage: true,
-                    flipY: false,
-                    source: {
-                        arrayBufferView: result.scatteringTexture.image.data
+        this._registerImageAsset("weather", "BetterSkyAssets/GeospatialAssets/local_weather.png", "localWeatherTexture", true, true);
+        this._registerImageAsset("turbulence", "BetterSkyAssets/GeospatialAssets/turbulence.png", "turbulenceTexture", true, true);
+        this._registerVolumeAsset("shape", "shape.bin", "shapeTexture", CLOUD_SHAPE_TEXTURE_SIZE, CLOUD_SHAPE_TEXTURE_SIZE, CLOUD_SHAPE_TEXTURE_SIZE, { levels: 8 });
+        this._registerVolumeAsset("shape-detail", "shape_detail.bin", "shapeDetailTexture", CLOUD_SHAPE_DETAIL_TEXTURE_SIZE, CLOUD_SHAPE_DETAIL_TEXTURE_SIZE, CLOUD_SHAPE_DETAIL_TEXTURE_SIZE, { levels: 1 + Math.floor(Math.log2(CLOUD_SHAPE_DETAIL_TEXTURE_SIZE)) });
+        this._registerVolumeAsset("stbn", "stbn.bin", "stbnTexture", STBN_TEXTURE_WIDTH, STBN_TEXTURE_HEIGHT, STBN_TEXTURE_DEPTH, { nearest: true });
+        const url = buildModuleUrl("BetterSkyAssets/GeospatialAssets/");
+        this._assets.add({ id: "atmosphere", url, load: () => new Promise((resolve, reject) => {
+            new PrecomputedTexturesLoader().load(url, result => {
+                if (this._destroyed) { resolve(); return; }
+                const textures = [];
+                try {
+                    // Publish the LUT set atomically: an upload failure keeps every fallback valid.
+                    for (const [name, Type] of [["scatteringTexture", Texture3D], ["irradianceTexture", Texture], ["transmittanceTexture", Texture]]) {
+                        const image = result[name].image;
+                        const texture = new Type({
+                            context: this._scene.context,
+                            width: image.width,
+                            height: image.height,
+                            ...(name === "scatteringTexture" ? { depth: image.depth } : {}),
+                            pixelFormat: PixelFormat.RGBA,
+                            pixelDatatype: PixelDatatype.FLOAT,
+                            useTexStorage: true,
+                            flipY: false,
+                            source: { arrayBufferView: image.data },
+                        });
+                        textures.push(texture);
+                        this._ownedTextures.add(texture);
                     }
-                });
-                this._ownedTextures.add(this._u_scattering_texture);
-                this._u_single_mie_scattering_texture = this._u_scattering_texture;
-                this._u_irradiance_texture = new Texture({
-                    context: this._scene.context,
-                    width: result.irradianceTexture.image.width,
-                    height: result.irradianceTexture.image.height,
-                    pixelFormat: PixelFormat.RGBA,
-                    pixelDatatype: PixelDatatype.FLOAT,
-                    useTexStorage: true,
-                    flipY: false,
-                    source: {
-                        arrayBufferView: result.irradianceTexture.image.data
+                    [this._u_scattering_texture, this._u_irradiance_texture, this._u_transmittance_texture] = textures;
+                    this._u_single_mie_scattering_texture = this._u_scattering_texture;
+                    resolve();
+                } catch (error) {
+                    const errors = [error];
+                    for (const texture of textures) {
+                        try {
+                            if (!texture.isDestroyed()) texture.destroy();
+                            this._ownedTextures.delete(texture);
+                        }
+                        catch (cleanupError) { errors.push(cleanupError); }
                     }
-                });
-                this._ownedTextures.add(this._u_irradiance_texture);
-                this._u_transmittance_texture = new Texture({
-                    context: this._scene.context,
-                    width: result.transmittanceTexture.image.width,
-                    height: result.transmittanceTexture.image.height,
-                    pixelFormat: PixelFormat.RGBA,
-                    pixelDatatype: PixelDatatype.FLOAT,
-                    useTexStorage: true,
-                    flipY: false,
-                    source: {
-                        arrayBufferView: result.transmittanceTexture.image.data
-                    }
-                });
-                this._ownedTextures.add(this._u_transmittance_texture);
-            },
-            undefined,
-            error => {
-                if (!this._destroyed) console.error(error);
-            }
-        );
+                    reject(errors.length === 1 ? error : new AggregateError(errors, "Atmosphere upload and cleanup failed"));
+                }
+            }, undefined, reject);
+        }) });
+        this._assets.start();
     }
+
+    get assetStatus() { return this._assets.status; }
+    get assetErrors() { return this._assets.errors; }
+    get assetsReady() {
+        // An explicit readiness request starts required assets even before the first enabled frame.
+        this.precomputed();
+        return this._assets.ready;
+    }
+    retryAssets() { return this._assets.retry(); }
+    subscribeAssets(listener) { return this._assets.subscribe(listener); }
 
     get stage() {
 
@@ -1332,9 +1154,9 @@ export default class GeospatialPipelinePass {
     }
 
     restoreScene() {
-        if (!this._originalSceneSettings) return;
-        for (const [target, key, value] of this._originalSceneSettings) target[key] = value;
-        this._originalSceneSettings = undefined;
+        const lease = this._sceneLease;
+        this._sceneLease = undefined;
+        lease?.restore();
     }
 
     _isSupported(context) {
@@ -1343,70 +1165,58 @@ export default class GeospatialPipelinePass {
     }
 
     _releaseAerialRenderTarget() {
-        if (this._passState?.framebuffer) {
-            this._passState.framebuffer.destroy();
-            this._passState.framebuffer = undefined;
-        }
-        if (this._aerialPerspectiveOutputColor) {
-            this._aerialPerspectiveOutputColor.destroy();
-            this._aerialPerspectiveOutputColor = undefined;
-        }
+        const framebuffer = this._passState?.framebuffer;
+        const texture = this._aerialPerspectiveOutputColor;
+        if (this._passState) this._passState.framebuffer = undefined;
+        this._aerialPerspectiveOutputColor = undefined;
+        runCleanup([
+            () => framebuffer?.destroy(),
+            () => texture?.destroy(),
+        ], "Aerial render target cleanup failed");
     }
 
     _releaseThresholdResources() {
-        if (this._downsampleThresholdPassState?.framebuffer) {
-            this._downsampleThresholdPassState.framebuffer.destroy();
-            this._downsampleThresholdPassState.framebuffer = undefined;
-        }
-        if (this._downsampleThresholdBuffer) {
-            this._downsampleThresholdBuffer.destroy();
-            this._downsampleThresholdBuffer = undefined;
-        }
-        if (this.downsampleThresholdDrawComomand) {
-            this.downsampleThresholdDrawComomand.shaderProgram = this.downsampleThresholdDrawComomand.shaderProgram?.destroy();
-            this.downsampleThresholdDrawComomand = undefined;
-        }
+        const framebuffer = this._downsampleThresholdPassState?.framebuffer;
+        const texture = this._downsampleThresholdBuffer;
+        const command = this.downsampleThresholdDrawComomand;
+        if (this._downsampleThresholdPassState) this._downsampleThresholdPassState.framebuffer = undefined;
+        this._downsampleThresholdBuffer = undefined;
+        this.downsampleThresholdDrawComomand = undefined;
+        runCleanup([
+            () => framebuffer?.destroy(),
+            () => texture?.destroy(),
+            () => command?.shaderProgram?.destroy(),
+        ], "Threshold resource cleanup failed");
     }
 
     destroy() {
         if (this._destroyed) return;
         this._destroyed = true;
-        this.restoreScene();
-        if (this._stage) {
+        this._assets.dispose();
+        const stage = this._stage;
+        const command = this._aerialPerspectiveComoman;
+        this._stage = undefined;
+        this._aerialPerspectiveComoman = undefined;
+        const actions = [() => this.restoreScene(), () => {
+            if (!stage) return;
             const stages = this._scene.postProcessStages;
-            if (typeof stages.contains === "function" && stages.contains(this._stage)) {
-                stages.remove(this._stage);
-            } else if (!this._stage.isDestroyed()) {
-                this._stage.destroy();
+            if (typeof stages.contains === "function" && stages.contains(stage)) {
+                stages.remove(stage);
             }
-            this._stage = undefined;
+        }, () => { if (stage && !stage.isDestroyed()) stage.destroy(); }];
+        for (const pass of [this.volumetricLightPass, this.focusedCloudShadowPass, this.cloudMaterialPass, this.shadowMaterialPass]) {
+            actions.push(() => { if (pass && !pass.isDestroyed()) pass.destroy(); });
         }
-        if (this.volumetricLightPass && !this.volumetricLightPass.isDestroyed()) {
-            this.volumetricLightPass.destroy();
-        }
-        if (this.focusedCloudShadowPass && !this.focusedCloudShadowPass.isDestroyed()) {
-            this.focusedCloudShadowPass.destroy();
-        }
-        if (this.cloudMaterialPass && !this.cloudMaterialPass.isDestroyed()) {
-            this.cloudMaterialPass.destroy();
-        }
-        if (this.shadowMaterialPass && !this.shadowMaterialPass.isDestroyed()) {
-            this.shadowMaterialPass.destroy();
-        }
-        this._releaseAerialRenderTarget();
-        this._releaseThresholdResources();
-        if (this._aerialPerspectiveComoman) {
-            // Each command owns one shader-cache reference; the viewport vertex array is shared.
-            this._aerialPerspectiveComoman.shaderProgram = this._aerialPerspectiveComoman.shaderProgram?.destroy();
-            this._aerialPerspectiveComoman = undefined;
-        }
+        actions.push(() => this._releaseAerialRenderTarget(), () => this._releaseThresholdResources(),
+            // Commands own a shader-cache reference; viewport vertex arrays belong to the context.
+            () => command?.shaderProgram?.destroy());
         for (const texture of this._ownedTextures) {
-            if (!texture.isDestroyed()) texture.destroy();
+            actions.push(() => { if (!texture.isDestroyed()) texture.destroy(); });
         }
         this._ownedTextures.clear();
         this._downSamplesMap = undefined;
         this._upSamplesMap = undefined;
-        return destroyObject(this)
+        runCleanup(actions, "Pipeline cleanup failed");
     }
 
     isDestroyed() {
@@ -1414,428 +1224,4 @@ export default class GeospatialPipelinePass {
         return this._destroyed;
     }
 
-    addGUI(datGui, viewer) {
-        {
-            const geospatialGui = datGui.addFolder('寒霜预处理大气');
-
-            const toneMapping = geospatialGui.addFolder('PostProess');
-            toneMapping.add({ bloomIntensity: 0.008 }, "bloomIntensity", 0.0001, 2, 0.0001).name("bloomIntensity").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline._bloomIntensity = value
-            })
-            toneMapping.add({ ghostAmount: 0.001 }, "ghostAmount", 0.001, 1, 0.001).name("ghostAmount").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline._ghostAmount = value
-            })
-            toneMapping.add({ haloAmount: 0.001 }, "haloAmount", 0.001, 1, 0.001).name("haloAmount").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline._haloAmount = value
-            })
-            toneMapping.add({ v: "AGX" }, "v", ["AGX", "ACES", "Neutral", "Uncharted2", "Reinhard2",
-                "Linear", "Reinhard", "Cineon"
-            ]).name("反射指数").onChange((value) => {
-                switch (value) {
-                    case "AGX": this.toneMappingMode = 7; break;
-                    case "ACES": this.toneMappingMode = 9; break;
-                    case "Neutral": this.toneMappingMode = 8; break;
-                    case "Uncharted2": this.toneMappingMode = 4; break;
-                    case "Reinhard2": this.toneMappingMode = 2; break;
-                    case "Linear": this.toneMappingMode = 10; break;
-                    case "Reinhard": this.toneMappingMode = 11; break;
-                    case "Cineon": this.toneMappingMode = 12; break;
-                }
-            })
-            toneMapping.add({ toneMappingExposure: 10 }, "toneMappingExposure", 0, 100, 1).name("toneMappingExposure").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.toneMappingExposure = value
-            })
-            toneMapping.add({ whitePoint: 10 }, "whitePoint", 0, 20, 0.1).name("whitePoint").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.whitePoint = value
-            })
-            toneMapping.add({ middleGrey: 10 }, "middleGrey", 0, 1, 0.01).name("middleGrey").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.middleGrey = value
-            })
-            toneMapping.add({ averageLuminance: 0.01 }, "averageLuminance", 0, 1, 0.01).name("averageLuminance").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.averageLuminance = value
-            })
-            toneMapping.add({ v: this._showDrakLight }, "v").name("夜光模拟").onChange((value) => {
-                this.showDrakLight = value
-            })
-            toneMapping.add({ v: this._customDarkParam.x }, "v", 1, 20, 0.1).name("天空夜光").onChange((value) => {
-                this._customDarkParam.x = value
-            })
-            toneMapping.add({ v: this._customDarkParam.y }, "v", 0.01, 1, 0.01).name("地面夜光").onChange((value) => {
-                this._customDarkParam.y = value
-            })
-            toneMapping.add({ v: this._sunCull }, "v").name("法线遮蔽").onChange((value) => {
-                this.sunCull = value
-            })
-            toneMapping.add({ v: this._showSSR }, "v").name("屏幕反射").onChange((value) => {
-                this.showSSR = value
-            })
-            toneMapping.add({ v: this._ssrParam.x }, "v", 0.001, 10, 0.001).name("反射强度").onChange((value) => {
-                this._ssrParam.x = value
-            })
-            toneMapping.add({ v: this._ssrParam.y }, "v", 0.001, 2, 0.001).name("粗糙强度").onChange((value) => {
-                this._ssrParam.y = value
-            })
-            toneMapping.add({ v: this._ssrParam.z }, "v", 0.001, 10, 0.001).name("反射指数").onChange((value) => {
-                this._ssrParam.z = value
-            })
-            const cloud = geospatialGui.addFolder('cloud');
-            cloud.add({ coverage: 0.3 }, "coverage", 0, 1, 0.01).name("coverage").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.coverage = value
-            })
-            cloud.add({ animate: true }, "animate").name("animate").onChange(function (value) {
-                if (value) {
-                    viewer.postProcessStages.geospatialPipeline.localWeatherVelocity = new Cartesian2(0.001, 0);
-                } else {
-                    viewer.postProcessStages.geospatialPipeline.localWeatherVelocity = new Cartesian2(0.0, 0);
-                }
-            })
-
-            const atmosphereGUI = geospatialGui.addFolder('atmosphere');
-
-            // 太阳角半径
-            atmosphereGUI.add(this.atmosphere, 'sunAngularRadius', 0.000001, 0.1, 0.000001)
-                .name('Sun Angular Radius');
-
-            // 太阳辐照度（向量）
-            const solarIrradianceFolder = atmosphereGUI.addFolder('Solar Irradiance');
-            solarIrradianceFolder.add(this.atmosphere.solarIrradiance, 'x', 0, 5, 0.01).name('Red');
-            solarIrradianceFolder.add(this.atmosphere.solarIrradiance, 'y', 0, 5, 0.01).name('Green');
-            solarIrradianceFolder.add(this.atmosphere.solarIrradiance, 'z', 0, 5, 0.01).name('Blue');
-            solarIrradianceFolder.open();
-
-            // 底部半径
-            atmosphereGUI.add(this.atmosphere, 'bottomRadius', 0, 1e7, 1000).name('Bottom Radius');
-
-            // 顶部半径
-            atmosphereGUI.add(this.atmosphere, 'topRadius', 0, 1e7, 1000).name('Top Radius');
-
-            // 瑞利散射系数（向量）
-            const rayleighFolder = atmosphereGUI.addFolder('Rayleigh Scattering');
-            rayleighFolder.add(this.atmosphere.rayleighScattering, 'x', 0, 0.1, 0.0001).name('Red');
-            rayleighFolder.add(this.atmosphere.rayleighScattering, 'y', 0, 0.1, 0.0001).name('Green');
-            rayleighFolder.add(this.atmosphere.rayleighScattering, 'z', 0, 0.1, 0.0001).name('Blue');
-            rayleighFolder.open();
-
-            // 米散射系数（向量）
-            const mieFolder = atmosphereGUI.addFolder('Mie Scattering');
-            mieFolder.add(this.atmosphere.mieScattering, 'x', 0, 0.01, 0.0001).name('Red');
-            mieFolder.add(this.atmosphere.mieScattering, 'y', 0, 0.01, 0.0001).name('Green');
-            mieFolder.add(this.atmosphere.mieScattering, 'z', 0, 0.01, 0.0001).name('Blue');
-            mieFolder.open();
-
-            // 米散射相位函数不对称因子
-            atmosphereGUI.add(this.atmosphere, 'miePhaseFunctionG', -1, 1, 0.01).name('Mie Phase G');
-
-            // 最小太阳天顶角余弦
-            atmosphereGUI.add(this.atmosphere, 'muSMin', -1, 1, 0.01).name('Mu S Min');
-            const rendering = geospatialGui.addFolder('rendering');
-            rendering.add({ resolutionScale: 1 }, "resolutionScale", [0.5, 0.75, 1]).name("resolutionScale").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.resolutionScale = value
-            })
-            rendering.add({ temporalUpscale: false }, "temporalUpscale").name("temporalUpscale").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.temporalUpscale = value
-            })
-            rendering.add({ lightShafts: false }, "lightShafts").name("lightShafts").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.lightShafts = value
-            })
-            rendering.add({ shapeDetail: false }, "shapeDetail").name("shapeDetail").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.shapeDetail = value
-            })
-            rendering.add({ turbulence: false }, "turbulence").name("turbulence").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.turbulence = value
-            })
-            rendering.add({ haze: false }, "haze").name("haze").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.haze = value
-            })
-            const scatteringGui = geospatialGui.addFolder('scattering');
-            scatteringGui.add({ scatteringCoefficient: 0 }, "scatteringCoefficient", 0, 5).name("scatteringCoefficient").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.scatteringCoefficient = value;
-            });
-            scatteringGui.add({ absorptionCoefficient: 0 }, "absorptionCoefficient", 0, 5).name("absorptionCoefficient").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.absorptionCoefficient = value;
-            });
-            // scatteringGui.add({ scatterAnisotropy1: 0 }, "scatterAnisotropy1", 0, 1).name("scatterAnisotropy1").onChange(function (value) {
-            //   effect.scatterAnisotropy1 = value;
-            // });
-            // scatteringGui.add({ scatterAnisotropy2: 0 }, "scatterAnisotropy2", -1, 0).name("scatterAnisotropy2").onChange(function (value) {
-            //   effect.scatterAnisotropy2 = value;
-            // });
-            // scatteringGui.add({ scatterAnisotropyMix: 0 }, "scatterAnisotropyMix", 0, 1).name("scatterAnisotropyMix").onChange(function (value) {
-            //   effect.scatterAnisotropyMix = value;
-            // });
-            scatteringGui.add({ skyIrradianceScale: 0 }, "skyIrradianceScale", 0, 5).name("skyIrradianceScale").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.skyIrradianceScale = value;
-            });
-            scatteringGui.add({ groundIrradianceScale: 0 }, "groundIrradianceScale", 0, 10).name("groundIrradianceScale").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.groundIrradianceScale = value;
-            });
-            scatteringGui.add({ powderScale: 0 }, "powderScale", 0, 1).name("powderScale").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.powderScale = value;
-            });
-            scatteringGui.add({ powderExponent: 0 }, "powderExponent", 1, 1000).name("powderExponent").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.powderExponent = value;
-            });
-
-            /* Weather and Shape Controls */
-            const weatherShapeGui = geospatialGui.addFolder('weather and shape');
-            weatherShapeGui.add({ localWeatherRepeat: 0 }, "localWeatherRepeat", 1, 200, 1).name("localWeatherRepeat").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.localWeatherRepeat.x = value;
-            });
-            // Vector controls need separate components
-            const localWeatherOffset = { x: 0, y: 0 };
-            weatherShapeGui.add(localWeatherOffset, "x", 0, 1).name("localWeatherOffset X").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.localWeatherOffset.x = value;
-            });
-            weatherShapeGui.add(localWeatherOffset, "y", 0, 1).name("localWeatherOffset Y").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.localWeatherOffset.y = value;
-            });
-
-            weatherShapeGui.add({ shapeRepeat: 0 }, "shapeRepeat", 1, 10).name("shapeRepeat (×1e4)").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.shapeRepeat.x = value * 1e-4;
-            });
-
-            // Shape Offset vector
-            const shapeOffset = { x: 0, y: 0, z: 0 };
-            weatherShapeGui.add(shapeOffset, "x", 0, 1).name("shapeOffset X").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.shapeOffset.x = value;
-            });
-            weatherShapeGui.add(shapeOffset, "y", 0, 1).name("shapeOffset Y").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.shapeOffset.y = value;
-            });
-            weatherShapeGui.add(shapeOffset, "z", 0, 1).name("shapeOffset Z").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.shapeOffset.z = value;
-            });
-
-            weatherShapeGui.add({ shapeDetailRepeat: 0 }, "shapeDetailRepeat", 1, 10).name("shapeDetailRepeat (×1e3)").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.shapeDetailRepeat.x = value * 1e-3;
-            });
-
-            // Shape Detail Offset vector
-            const shapeDetailOffset = { x: 0, y: 0, z: 0 };
-            weatherShapeGui.add(shapeDetailOffset, "x", 0, 1).name("shapeDetailOffset X").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.shapeDetailOffset.x = value;
-            });
-            weatherShapeGui.add(shapeDetailOffset, "y", 0, 1).name("shapeDetailOffset Y").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.shapeDetailOffset.y = value;
-            });
-            weatherShapeGui.add(shapeDetailOffset, "z", 0, 1).name("shapeDetailOffset Z").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.shapeDetailOffset.z = value;
-            });
-
-            weatherShapeGui.add({ turbulenceRepeat: 0 }, "turbulenceRepeat", 1, 50, 1).name("turbulenceRepeat").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.turbulenceRepeat.x = value;
-            });
-            weatherShapeGui.add({ turbulenceDisplacement: 0 }, "turbulenceDisplacement", 1, 1000).name("turbulenceDisplacement").onChange(function (value) {
-                viewer.postProcessStages.geospatialPipeline.turbulenceDisplacement = value;
-            });
-
-
-            /* Cascaded Shadow Maps Controls */
-            const shadowGui = geospatialGui.addFolder('cascaded shadow maps');
-            // shadowGui.add({ cascadeCount: 1 }, "cascadeCount", [1, 2, 3, 4]).name("cascadeCount").onChange(function (value) {
-            //   effect.shadow.cascadeCount = value;
-            // });
-            // shadowGui.add({ mapSize: 256 }, "mapSize", [256, 512, 1024]).name("mapSize").onChange(function (value) {
-            //   effect.shadow.mapSize.x = value;
-            // });
-            // shadowGui.add({ splitMode: 'practical' }, "splitMode", ['practical', 'uniform', 'logarithmic']).name("splitMode").onChange(function (value) {
-            //   effect.shadow.splitMode = value;
-            // });
-            // shadowGui.add({ splitLambda: 0 }, "splitLambda", 0, 1).name("splitLambda").onChange(function (value) {
-            //   effect.shadow.splitLambda = value;
-            // });
-            const advancedGui = geospatialGui.addFolder('advanced clouds');
-
-            // 多级散射参数
-            // advancedGui.add({ multiScatteringOctaves: 0 }, "multiScatteringOctaves", 1, 12, 1)
-            //   .name("multiScatteringOctaves")
-            //   .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.multiScatteringOctaves = value);
-
-            // // 精确光照控制
-            // advancedGui.add({ accurateSunSkyIrradiance: false }, "accurateSunSkyIrradiance")
-            //   .name("accurateSunSkyIrradiance")
-            //   .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.accurateSunSkyIrradiance = value);
-
-            // advancedGui.add({ accuratePhaseFunction: false }, "accuratePhaseFunction")
-            //   .name("accuratePhaseFunction")
-            //   .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.accuratePhaseFunction = value);
-
-            // 步进控制参数
-            advancedGui.add({ maxIterationCount: 0 }, "maxIterationCount", 10, 1000, 1)
-                .name("maxIterationCount")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.maxIterationCount = value);
-
-            advancedGui.add({ minStepSize: 0 }, "minStepSize", 10, 200, 1)
-                .name("minStepSize")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.minStepSize = value);
-
-            advancedGui.add({ maxStepSize: 0 }, "maxStepSize", 200, 2000, 1)
-                .name("maxStepSize")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.maxStepSize = value);
-
-            // 射线参数
-            advancedGui.add({ maxRayDistance: 0 }, "maxRayDistance", 1e4, 1e6)
-                .name("maxRayDistance")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.maxRayDistance = value);
-
-            advancedGui.add({ perspectiveStepScale: 0 }, "perspectiveStepScale", 1, 1.1)
-                .name("perspectiveStepScale")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.perspectiveStepScale = value);
-
-            // 对数参数处理
-            advancedGui.add({ minDensity: 0 }, "minDensity", -7, -1)
-                .name("minDensity (log10)")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.minDensity = Math.pow(10, value));
-
-            advancedGui.add({ minExtinction: 0 }, "minExtinction", -7, -1)
-                .name("minExtinction (log10)")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.minExtinction = Math.pow(10, value));
-
-            advancedGui.add({ minTransmittance: 0 }, "minTransmittance", -7, -1)
-                .name("minTransmittance (log10)")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.minTransmittance = Math.pow(10, value));
-
-            // 太阳和地面迭代控制
-            advancedGui.add({ maxIterationCountToSun: 0 }, "maxIterationCountToSun", 0, 10, 1)
-                .name("maxIterationCountToSun")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.maxIterationCountToSun = value);
-
-            advancedGui.add({ maxIterationCountToGround: 0 }, "maxIterationCountToGround", 0, 10, 1)
-                .name("maxIterationCountToGround")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.maxIterationCountToGround = value);
-
-            // 阴影长度参数
-            advancedGui.add({ maxShadowLengthIterationCount: 0 }, "maxShadowLengthIterationCount", 10, 1000, 1)
-                .name("maxShadowLengthIterationCount")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.maxShadowLengthIterationCount = value);
-
-            advancedGui.add({ minShadowLengthStepSize: 0 }, "minShadowLengthStepSize", 50, 200, 1)
-                .name("minShadowLengthStepSize")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.minShadowLengthStepSize = value);
-
-            advancedGui.add({ maxShadowLengthRayDistance: 0 }, "maxShadowLengthRayDistance", 1e4, 1e6)
-                .name("maxShadowLengthRayDistance")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.maxShadowLengthRayDistance = value);
-
-            // 雾效参数
-            advancedGui.add({ hazeDensityScale: 0 }, "hazeDensityScale", -6, -3)
-                .name("hazeDensityScale (log10)")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.hazeDensityScale = Math.pow(10, value));
-
-            advancedGui.add({ hazeExponent: 0 }, "hazeExponent", -3, -1)
-                .name("hazeExponent (log10)")
-                .onChange(value => viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.hazeExponent = Math.pow(10, value));
-            /* Advanced Shadow Controls */
-            const shadowAdvancedGui = geospatialGui.addFolder('advanced shadow');
-            // 时间相关参数
-            // shadowAdvancedGui.add({ temporalPass: false }, "temporalPass").name("temporalPass").onChange(value => {
-            //   effect.shadow.temporalPass = value;
-            // });
-            // shadowAdvancedGui.add({ temporalJitter: false }, "temporalJitter").name("temporalJitter").onChange(value => {
-            //   effect.shadow.temporalJitter = value;
-            // });
-
-            // 步进控制参数
-            shadowAdvancedGui.add({ maxIterationCount: 50 }, "maxIterationCount", 10, 100, 1).name("maxIterationCount").onChange(value => {
-                viewer.postProcessStages.geospatialPipeline.shadowMaterialPass.maxIterationCount = value;
-            });
-            shadowAdvancedGui.add({ minStepSize: 0 }, "minStepSize", 10, 200, 1).name("minStepSize").onChange(value => {
-                viewer.postProcessStages.geospatialPipeline.shadowMaterialPass.minStepSize = value;
-            });
-            shadowAdvancedGui.add({ maxStepSize: 0 }, "maxStepSize", 200, 2000, 1).name("maxStepSize").onChange(value => {
-                viewer.postProcessStages.geospatialPipeline.shadowMaterialPass.maxStepSize = value;
-            });
-
-            // 对数参数处理
-            shadowAdvancedGui.add({ minDensity: 0 }, "minDensity", -7, -1).name("minDensity (log10)").onChange(value => {
-                viewer.postProcessStages.geospatialPipeline.shadowMaterialPass.minDensity = Math.pow(10, value);
-            });
-            shadowAdvancedGui.add({ minExtinction: 0 }, "minExtinction", -7, -1).name("minExtinction (log10)").onChange(value => {
-                viewer.postProcessStages.geospatialPipeline.shadowMaterialPass.minExtinction = Math.pow(10, value);
-            });
-            shadowAdvancedGui.add({ minTransmittance: 0 }, "minTransmittance", -7, -1).name("minTransmittance (log10)").onChange(value => {
-                viewer.postProcessStages.geospatialPipeline.shadowMaterialPass.minTransmittance = Math.pow(10, value);
-            });
-
-            // 光深参数
-            shadowAdvancedGui.add({ opticalDepthTailScale: 0 }, "opticalDepthTailScale", 0, 4).name("opticalDepthTailScale").onChange(value => {
-                viewer.postProcessStages.geospatialPipeline.shadowMaterialPass.opticalDepthTailScale = value;
-            });
-
-
-            /* Cloud Layers Controls */
-            const cloudLayersGui = geospatialGui.addFolder('cloud layers');
-
-            // 生成云层控制函数
-            const vector = ["x", "y", "z", "w"]
-            function createCloudLayerControls(layerIndex) {
-                const layerGui = cloudLayersGui.addFolder(`layer ${layerIndex}`);
-
-                // 通道选择
-                // layerGui.add({ channel: 'r' }, "channel", ['r', 'g', 'b', 'a']).name("channel").onChange(value => {
-                //   effect.cloudLayers[layerIndex].channel = value;
-                // });
-
-
-                // 基础参数
-                layerGui.add({ altitude: viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.altitudes[vector[layerIndex]] }, "altitude", 0, 10000, 1).name("altitude").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.altitudes[vector[layerIndex]] = value;
-                });
-                layerGui.add({ height: viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.heights[vector[layerIndex]] }, "height", 0, 15000, 1).name("height").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.heights[vector[layerIndex]] = value;
-                });
-                layerGui.add({ densityScale: viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.densityScales[vector[layerIndex]] }, "densityScale", 0, 1).name("densityScale").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.densityScales[vector[layerIndex]] = value;
-                });
-
-                // 形状参数
-                layerGui.add({ shapeAmount: 0 }, "shapeAmount", 0, 1).name("shapeAmount").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.shapeAmounts[vector[layerIndex]] = value;
-                });
-                layerGui.add({ shapeDetailAmount: 0 }, "shapeDetailAmount", 0, 1).name("shapeDetailAmount").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.shapeDetailAmounts[vector[layerIndex]] = value;
-                });
-
-                // 天气参数
-                layerGui.add({ weatherExponent: 0 }, "weatherExponent", 0, 3).name("weatherExponent").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.weatherExponents[vector[layerIndex]] = value;
-                });
-
-                // 高级参数
-                layerGui.add({ shapeAlteringBias: 0 }, "shapeAlteringBias", 0, 1).name("shapeAlteringBias").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.shapeAlteringBiases[vector[layerIndex]] = value;
-                });
-                layerGui.add({ coverageFilterWidth: 0 }, "coverageFilterWidth", 0, 1).name("coverageFilterWidth").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.coverageFilterWidths[vector[layerIndex]] = value;
-                });
-                layerGui.add({ shadow: true }, "shadow").name("shadow").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.shadowLayerMask[vector[layerIndex]] = value ? 1 : 0;
-                });
-
-                // 密度剖面子文件夹
-                const densityProfileGui = layerGui.addFolder('density profile');
-                densityProfileGui.add({ expTerm: 0 }, "expTerm", 0, 1).name("expTerm").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.expTerms[vector[layerIndex]] = value;
-                });
-                densityProfileGui.add({ exponent: 0 }, "exponent", -10, 10).name("exponent").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.exponents[vector[layerIndex]] = value;
-                });
-                densityProfileGui.add({ linearTerm: 0 }, "linearTerm", -2, 2).name("linearTerm").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.linearTerms[vector[layerIndex]] = value;
-                });
-                densityProfileGui.add({ constantTerm: 0 }, "constantTerm", -2, 2).name("constantTerm").onChange(value => {
-                    viewer.postProcessStages.geospatialPipeline.cloudMaterialPass.constantTerms[vector[layerIndex]] = value;
-                });
-                densityProfileGui.close();
-
-                // 默认折叠非首层
-                if (layerIndex > 0) {
-                    layerGui.close();
-                }
-            }
-
-            // 初始化四层云控制
-            [0, 1, 2, 3].forEach(createCloudLayerControls);
-        }
-    }
 }

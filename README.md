@@ -29,7 +29,9 @@ pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 
 Both install the same package. Cesium is shared with the application; three (`>=0.160.1`) is installed automatically as a runtime dependency. Applications may pin versions they have verified within these ranges.
 
-Cesium installs its matching engine and widgets through its own dependencies. No Cesium component overrides are required. Preserve the application's lockfile and validate the complete dependency combination after an upgrade.
+Cesium declares and installs engine and widgets automatically; the SDK does not require installing them manually or adjusting them through overrides. Preserve the application's lockfile and validate the complete dependency combination after an upgrade.
+
+> **Compatibility tip:** The SDK supports `cesium@1.142.0`, verified with engine `26.0.0` / widgets `16.0.0`. Cesium 1.142 declares internal dependencies using `^`, so a fresh installation can resolve newer components. The engine `26.4.0` / widgets `16.3.0` combination has an upstream `MISSING_EXPORT` issue under Vite 8, reproducible without this SDK. If encountered, preserve or restore a verified complete lockfile, or upgrade Cesium (a clean `1.146.0` installation passed this round). This caveat concerns a particular upstream dependency combination; the SDK minimum remains `>=1.142.0`, and overrides are not required by the SDK.
 
 ### Copy assets
 
@@ -147,6 +149,27 @@ The declarations cover these existing controls with their defaults unchanged:
 | `toneMappingMode` | `2` Reinhard2, `4` Uncharted2, `7` AgX, `8` Neutral, `9` ACES, `10` Linear, `11` Reinhard, `12` Cineon; default `9`. Historical mode `3` is currently unsupported. |
 | `hbao.denoise` | HBAO bilateral filtering, default `true`; configurable only during construction. `update()` does not change it. |
 | `effects.pass.showSnow` / `showRain` | Pass setters, both `false` by default. Assign explicitly to enable; assignments rebuild related stages. These are neither constructor/update options nor getters for the current state. |
+
+### Configuration snapshots and resource state
+
+Convenience setters and `update()` share normalization, validation and application. `effects.getOptions()` returns an independent snapshot of accepted options. Unknown fields, invalid values and parameter changes after disposal throw explicitly. Changing construction-only `hbao.denoise` at runtime also throws; dispose and recreate to change it.
+
+```ts
+const options = effects.getOptions()
+effects.coverage = 0.5
+
+const unsubscribe = effects.subscribeAssets(() => {
+  if (effects.assetStatus === 'error') console.error(effects.assetErrors)
+})
+
+await effects.assetsReady // Reading starts and waits for six required sky resources, even while disabled.
+const requiredErrors = effects.assetErrors.filter(error => error.required)
+// A user-triggered retry can call await effects.retryAssets().
+
+unsubscribe()
+```
+
+`assetsReady` settles on success, failure or disposal; inspect `assetErrors` for the outcome. It excludes on-demand snow and SMAA lookup textures, so optional resources may still be loading or failed. Failed resources are not retried every frame, and explicit retries do not reload successful resources.
 
 ## License
 

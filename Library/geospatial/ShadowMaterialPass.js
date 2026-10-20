@@ -1,3 +1,4 @@
+import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from "../internal/MathTypes.js";
 import shadowMaterialVertexShaderSource from "../shaders/geospatial/shadowMaterial.vert.glsl?raw";
 import shadowMaterialFragmentShaderSource from "../shaders/geospatial/shadowMaterial.frag.glsl?raw";
 import shadowResolveMaterialVertexShaderSource from "../shaders/geospatial/shadowResolveMaterial.vert.glsl?raw";
@@ -10,7 +11,6 @@ import {
     defined,
     PostProcessStageSampleMode,
     PostProcessStageComposite,
-    Matrix4,
     ClearCommand,
     Color,
     Pass,
@@ -29,9 +29,7 @@ import {
     Appearance,
     Sampler,
     WebGLConstants,
-    Cartesian4,
     PixelFormat,
-    Cartesian3,
     TextureMinificationFilter,
     TextureMagnificationFilter,
     Cartographic,
@@ -45,7 +43,6 @@ import {
     Matrix3,
     Resource,
     buildModuleUrl,
-    Cartesian2,
     destroyObject,
     BoundingRectangle,
     CullFace,
@@ -192,7 +189,9 @@ export default class ShadowMaterialPass {
         try {
             this.init();
         } catch (error) {
-            this.destroy();
+            try { this.destroy(); } catch (cleanupError) {
+                throw new AggregateError([error, cleanupError], "Pipeline initialization and cleanup failed");
+            }
             throw error;
         }
     }

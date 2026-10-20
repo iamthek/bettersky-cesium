@@ -68,6 +68,12 @@ export default class SMAAStage {
     return this._stage.ready;
   }
 
+  get assetStatus() { return this._smaa?.assetStatus ?? "disposed"; }
+  get assetErrors() { return this._smaa?.assetErrors ?? Object.freeze([]); }
+  get assetsReady() { return this._smaa?.assetsReady ?? Promise.resolve(); }
+  retryAssets() { return this._smaa?.retryAssets() ?? Promise.resolve(); }
+  subscribeAssets(listener) { return this._smaa?.subscribeAssets(listener) ?? (() => {}); }
+
   get name() {
     return this._stage.name;
   }

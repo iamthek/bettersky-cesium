@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { spawn } from 'node:child_process';
 import { delimiter } from 'node:path';
-import { parse, tokenizer } from 'acorn';
+import { parse } from 'acorn';
+import { inspectPublicDeclarations, validateDeclarationContract } from './declarations.mjs';
+export { inspectPublicDeclarations } from './declarations.mjs';
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const packageDirectory = join(repoRoot, '.sdk-package');
@@ -159,80 +161,6 @@ export function inspectJavaScript(source) {
   return { imports: [...new Set(imports)], exports: [...exported] };
 }
 
-// This reviewed template uses one-line declarations/members, without nested
-// object types or generic methods. Fail on other layouts rather than skip them.
-export function inspectPublicDeclarations(source, path = 'scripts/sdk/public-api.d.ts') {
-  const comments = [];
-  const lines = new Map();
-  for (const token of tokenizer(source, { ecmaVersion: 'latest', sourceType: 'module', locations: true, onComment: comments })) {
-    if (!lines.has(token.loc.start.line)) lines.set(token.loc.start.line, []);
-    lines.get(token.loc.start.line).push(token);
-  }
-  const fail = (token, message) => { throw new Error(`${path}:${token.loc.start.line}: ${message}`); };
-  const requireDoc = (token, name, parameters = []) => {
-    const comment = comments.findLast(item => item.end <= token.start);
-    if (!comment || comment.type !== 'Block' || !source.startsWith('/**', comment.start) || source.slice(comment.end, token.start).trim()) fail(token, `Missing JSDoc for ${name}.`);
-    const doc = comment.value.slice(1).replace(/^[\t ]*\*[\t ]?/gm, '').trim();
-    const sections = doc.split(/(?:^|\n)[\t ]*(?=@[A-Za-z])/);
-    if (/^@[A-Za-z]/.test(doc) || !sections[0].trim()) fail(token, `Empty JSDoc description for ${name}.`);
-    const documented = new Set();
-    for (const section of sections.slice(1)) {
-      const parameter = section.match(/^@param[\t ]+(?:\{[^}]+\}[\t ]+)?(\[[^\]\r\n]+\]|[\w$]+)([\s\S]*)$/);
-      if (parameter && parameter[2].replace(/^\s*-\s*/, '').trim()) documented.add(parameter[1].replace(/^\[|\]$/g, '').split('=')[0]);
-    }
-    for (const parameter of parameters) if (!documented.has(parameter)) fail(token, `Missing @param description for ${name}.${parameter}.`);
-  };
-  let owner;
-  let declarations = 0;
-  for (const tokens of lines.values()) {
-    const first = tokens[0];
-    const statement = source.slice(first.start, tokens.at(-1).end);
-    if (tokens.some(token => token.loc.end.line !== first.loc.start.line)) fail(first, 'Public declarations must stay on one line.');
-    if (tokens.filter(token => token.type.label === ';').length > 1) fail(first, 'Each public declaration/member must use its own line.');
-    if (!owner) {
-      if (/^import\s+type\b[\s\S]*;$/.test(statement) || /^export\s+default\s+[\w$]+;$/.test(statement)) continue;
-      const declaration = statement.match(/^export\s+(?:declare\s+)?(type|interface|class)\s+([\w$]+)\b/);
-      if (!declaration || (declaration[1] === 'type' ? !statement.endsWith(';') : !statement.endsWith('{'))) fail(first, 'Unsupported public declaration layout.');
-      if (tokens.filter(token => ['{', '}'].includes(token.type.label)).length !== (declaration[1] === 'type' ? 0 : 1)) fail(first, 'Nested public object declarations are unsupported.');
-      requireDoc(first, declaration[2]);
-      declarations++;
-      if (declaration[1] !== 'type') owner = declaration[2];
-      continue;
-    }
-    if (/^};?$/.test(statement)) { owner = undefined; continue; }
-    if (tokens.some(token => ['{', '}'].includes(token.type.label))) fail(first, 'Nested public object declarations are unsupported.');
-    let index = 0;
-    while (['static', 'readonly'].includes(tokens[index]?.value)) index++;
-    if (['get', 'set'].includes(tokens[index]?.value)) index++;
-    const name = tokens[index++]?.value;
-    if (tokens[index]?.type.label === '?') index++;
-    if (!/^[\w$]+$/.test(name || '') || ![':', '('].includes(tokens[index]?.type.label) || !statement.endsWith(';')) fail(first, 'Unsupported public member layout.');
-    const parameters = [];
-    // Only an opening parenthesis immediately after the member name denotes a
-    // method/accessor. Parentheses and commas inside property types are ignored.
-    if (tokens[index].type.label === '(') {
-      let depth = 0;
-      let expectsName = true;
-      for (const token of tokens.slice(index + 1)) {
-        const label = ['<', '>'].includes(token.value) ? token.value : token.type.label;
-        if (depth === 0 && label === ')') break;
-        if (depth === 0 && label === ',') { expectsName = true; continue; }
-        if (expectsName) {
-          if (label === '...') continue;
-          if (label !== 'name') fail(token, 'Public parameters must have explicit names.');
-          parameters.push(token.value);
-          expectsName = false;
-        }
-        if (['(', '[', '{', '<'].includes(label)) depth++;
-        if ([')', ']', '}', '>'].includes(label)) depth--;
-      }
-    }
-    requireDoc(first, `${owner}.${name}`, parameters);
-  }
-  if (owner || declarations === 0) throw new Error(`${path}: Incomplete public declarations.`);
-  return { declarations };
-}
-
 function scanText(path, data) {
   if (!/\.(?:js|ts|json|md)$/.test(path) && path !== 'LICENSE') return;
   const source = data.toString('utf8');
@@ -270,7 +198,7 @@ export async function validatePackageEntries(entries) {
     if (sha256(actual.get(path)) !== sha256(await readFile(join(repoRoot, path)))) throw new Error(`Packaged document differs from the reviewed repository file: ${path}`);
   }
   if (!actual.get('LICENSE').toString('utf8').includes(copyrightLine(root.author))) throw new Error('LICENSE must contain the copyright line derived from package.json author.');
-  if (sha256(actual.get('dist/index.d.ts')) !== sha256(await readFile(join(repoRoot, 'scripts/sdk/public-api.d.ts')))) throw new Error('Packaged public declarations differ from the reviewed API.');
+  validateDeclarationContract(actual.get('dist/index.d.ts').toString('utf8'), await readFile(join(repoRoot, 'src/index.ts'), 'utf8'));
   const manifest = JSON.parse(actual.get('package.json').toString('utf8'));
   const expectedFiles = ['dist/index.js', 'dist/index.d.ts', 'dist/assets/', 'README.md', 'README.zh-CN.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'];
   const allowedMetadata = ['name', 'version', 'description', 'type', 'license', 'author', 'homepage', 'keywords', 'files', 'exports', 'types', 'peerDependencies', 'dependencies', 'engines', 'sideEffects'];

@@ -1,4 +1,5 @@
-import { Cartesian3, Math as CesiumMath } from "cesium";
+import { Math as CesiumMath } from "cesium";
+import { Cartesian3 } from "../internal/MathTypes.js";
 const paramKeys = [
   'solarIrradiance',
   'sunAngularRadius',

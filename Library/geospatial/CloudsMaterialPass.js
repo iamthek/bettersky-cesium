@@ -1,3 +1,5 @@
+import { getCameraPosition } from "../internal/CesiumAdapter.js";
+import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from "../internal/MathTypes.js";
 import cloudsMaterialVertexShaderSource from "../shaders/geospatial/cloudsMaterial.vert.glsl?raw";
 import cloudLayerDensityShaderSource from "../shaders/geospatial/cloudLayerDensity.glsl?raw";
 import cloudsMaterialFragmentShaderSource from "../shaders/geospatial/cloudsMaterial.frag.glsl?raw";
@@ -12,7 +14,6 @@ import {
     defined,
     PostProcessStageSampleMode,
     PostProcessStageComposite,
-    Matrix4,
     ClearCommand,
     Color,
     Pass,
@@ -31,9 +32,7 @@ import {
     Appearance,
     Sampler,
     WebGLConstants,
-    Cartesian4,
     PixelFormat,
-    Cartesian3,
     TextureMinificationFilter,
     TextureMagnificationFilter,
     Cartographic,
@@ -47,7 +46,6 @@ import {
     Matrix3,
     Resource,
     buildModuleUrl,
-    Cartesian2,
     destroyObject,
     BoundingRectangle,
     ShaderSource,
@@ -300,7 +298,7 @@ export default class CloudMaterialPass {
             // viewMatrix: () => { return this.pipeline.shadowMaterialPass.camera2.viewMatrix },
             // inverseProjectionMatrix: () => { return this._scene.context.uniformState.inverseProjection },
             inverseViewMatrix: () => { return this._scene.context.uniformState.inverseView },
-            cameraPosition: () => { return this._scene.context.uniformState._cameraPosition },
+            cameraPosition: () => { return getCameraPosition(this._scene) },
             ellipsoidRadii: () => { return this.pipeline._ellipsoidRadii },
             u_solar_irradiance: () => { return this.pipeline.atmosphere.solarIrradiance },
             u_sun_angular_radius: () => { return this.pipeline.atmosphere.sunAngularRadius },
@@ -328,7 +326,9 @@ export default class CloudMaterialPass {
         try {
             this.init();
         } catch (error) {
-            this.destroy();
+            try { this.destroy(); } catch (cleanupError) {
+                throw new AggregateError([error, cleanupError], "Pipeline initialization and cleanup failed");
+            }
             throw error;
         }
     }

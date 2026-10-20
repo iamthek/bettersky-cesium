@@ -22,6 +22,7 @@ import GeospatialPipelinePass from "./Library/GeospatialPipelinePass.js";
 import HBAOEffectPass from "./Library/HBAOEffectPass.js";
 import SMAAStage from "./Library/SMAAStage.js";
 import { installViewportCommands } from "./Library/viewportQuadCommand.js";
+import { DEFAULT_OPTIONS, cloneOptions, isPlainObject, mergeOptions, prepareOptions } from "./src/options.js";
 
 // Symbol.for also shares the lease with a second copy of the SDK bundle.
 const ACTIVE_INSTANCE = Symbol.for("bettersky-cesium.activeInstance");
@@ -32,297 +33,12 @@ const HAZE_QUALITY_SAMPLES = Object.freeze({
   high: [32, 4],
 });
 
-/** 内置默认预设（与 demo-official.js 使用的默认效果一致）。 */
-const DEFAULT_OPTIONS = {
-  /** 是否在初始化后启用天空效果；false 保留配置但暂停效果渲染。 */
-  enabled: true,
-  /** 云量覆盖度 [0,1]；越大云区越广，≤0.1 基本无云，独立于云体密度。 */
-  coverage: 0.34,
-  /** 天气纹理移动速度 [x,y]（纹理坐标/秒）；绝对值越大移动越快，0 停止，负值反向。 */
-  localWeatherVelocity: [0.0003, 0.0001],
-  /** HDR 色调映射曲线：7=AgX、8=Neutral、9=ACES、10=Linear、11=Reinhard、12=Cineon。 */
-  toneMappingMode: 9,
-  /** 色调映射前的亮度倍率（无量纲，建议 ≥0）；越大越亮，单位不是曝光档位 EV。 */
-  toneMappingExposure: 2.8,
-  /** 地表光照增益（非负倍率）；越大地表越亮，独立于云体补光，仍受色调映射影响。 */
-  irradianceScale: 0.15,
-  /** 地表大气透视混合强度 [0,1]；越大远景雾感越强，0 关闭此混合，不改变天空和云的散射。 */
-  aerialPerspectiveStrength: 0.15,
-  /** 夜间天空辉光的调制系数（无量纲，建议 [0,1]）；作用于 _customDarkParam.y，白天通常不明显。 */
-  darkParamY: 0.5,
-  /** 太阳泛光/光晕强度（无量纲，建议 ≥0）；越大亮部扩散越明显，0 关闭此强度。 */
-  bloomIntensity: 0.002,
-  /** 独立体积光配置；与旧 cloud.haze* 路径按 mode 互斥渲染。 */
-  volumetricLight: {
-    /** 体积光模式：volumetric 使用独立体积雾，legacy 保留旧 haze，off 关闭两条额外体积光路径。 */
-    mode: "volumetric",
-    /** 介质消光密度（非负，米的倒数）；越大散射和遮蔽越强，0 不产生体积光介质。 */
-    density: 0.000008,
-    /** 散射亮度倍率（非负）；不改变介质密度与消光，0 移除散射亮度。 */
-    intensity: 2,
-    /** 云底向下的体积层厚度（正有限米数）；越大参与散射的垂直范围越厚。 */
-    layerDepth: 2400,
-    /** 体积光沿视线的最大积分距离（正有限米数）；还受场景深度和云前缘限制。 */
-    maxDistance: 16000,
-    /** 前向散射偏好 g [0,0.9]；0 为各向同性，越大越集中于朝太阳的观察方向。 */
-    anisotropy: 0.55,
-    /** 分辨率比例/积分步数/可见性图尺寸：low=0.25/24/512，balanced=0.5/48/1024，high=0.5/64/2048。 */
-    quality: "balanced",
-  },
-  /** 云层形态、照明、穿云光介质与降噪配置；初始化时可只覆盖其中的部分字段。 */
-  cloud: {
-    /** 按相机椭球高度淡出云量 [开始高度,消失高度]（米，0 ≤ 开始 < 消失）；null 禁用。 */
-    altitudeFadeRange: [30000, 90000],
-    /** 三层云型依次为积云/高积云/卷云；支持 cumulus、altocumulus、cirrus，null 恢复原有云形。 */
-    layerTypes: ["cumulus", "altocumulus", "cirrus"],
-    /** 按距相机距离降低采样细节 [近距离阈值,远距离阈值]（米，0 ≤ 近 < 远）；null 关闭 LOD。 */
-    lodRange: [200000, 500000],
-    /** 云底高度 [第一层,第二层,第三层,预留]（米），接受数组或 Cartesian4；以渲染行星高度为基准。 */
-    altitudes: [4000, 6000, 10000, 0],
-    /** 云层厚度 [第一层,第二层,第三层,预留]（米），接受数组或 Cartesian4；云顶 = 云底 + 厚度。 */
-    heights: [1300, 1800, 650, 0],
-    /** 云密度倍率 [第一层,第二层,第三层,预留]（无量纲，建议 ≥0），接受数组或 Cartesian4；0 关闭对应层介质。 */
-    densityScales: [0.12, 0.09, 0.0015, 0],
-    /** 云形细节侵蚀 [第一层,第二层,第三层,预留]（各分量 [0,1]），接受数组或 Cartesian4；越大边缘越破碎。 */
-    shapeDetailAmounts: [0.18, 0.12, 0, 0],
-    /** 天空辐照度对云体的补光倍率（非负）；越大云暗面越亮，0 移除这一补光项。 */
-    skyIrradianceScale: 1.8,
-    /** 地面反射辐照度对云体的补光倍率（非负）；越大云下部越亮，独立于地表增益 irradianceScale。 */
-    groundIrradianceScale: 1.3,
-    /** 穿云光 haze 介质密度缩放（非负）；越大散射和消光越强，0 关闭额外穿云光，建议小于 0.0001。 */
-    hazeDensityScale: 0.08 * 0.0001,
-    /** true 在参与云影投射的云底附近积分世界固定薄层，可独立开启近地雾；false 使用行星表面以上的指数高度雾。 */
-    hazeCloudAttached: true,
-    /** 局部模式的近地薄雾密度倍率 [0,1]；0 仅保留云底薄层，1 恢复完整近地层，不影响传统高度雾。 */
-    hazeGroundDensityScale: 0,
-    /** 局部薄层模式的最大观察距离（正有限米数）；只限制候选薄层的可见距离，空路不产生介质。 */
-    hazeViewDistance: 16000,
-    /** 局部薄层模式沿视线累计的散射区间长度上限（正有限米数）；按近到远累积，空路不计入长度。 */
-    hazeVolumeLength: 1200,
-    /** haze 太阳直射散射增益（非负倍率）；0 移除此直射项，不改变介质消光、云体照明或天空补光。 */
-    hazeDirectLightScale: 8,
-    /** haze 积分预算：low=16 点/每点 1 次云影读取，balanced=24/2，high=32/4；越高越细腻但更耗 GPU。 */
-    hazeQuality: "high",
-    /** haze 垂直密度衰减尺度（正有限米数）；传统模式在此高度降至 1/e，局部模式用于限制薄层厚度。 */
-    hazeHeightFalloff: 1200,
-    /** haze 前向散射偏好 g [0,0.9]；0 为各向同性，越大越集中于朝太阳的观察方向。 */
-    hazeAnisotropy: 0.55,
-    /** 大气阴影长度积分上限（正有限米数）；传统模式同时限制 haze 光路，局部模式改用上方两个距离参数。 */
-    maxShadowLengthRayDistance: 6000,
-    /** haze 日光的线性 RGB 倍率 [r,g,b]（非负，可大于 1）；不是 0–255 的 sRGB 值，不改变云本身的颜色。 */
-    hazeSunColor: [1, 0.78, 0.42],
-    /** 云的时域积累与空间重建配置；平衡静止时的稳定性、运动拖影和细节保留。 */
-    denoise: {
-      /** 普通时域积累的当前帧权重 [0,1]；越小越依赖历史、降噪越强，但可能拖影。 */
-      temporalAlpha: 0.04,
-      /** 时域升采样中本帧采样相位的当前帧权重 [0,1]；越大新采样越快生效，但更易暴露噪声。 */
-      currentFrameAlpha: 0.08,
-      /** 相机运动时的当前帧权重下限 [0,1]；越大拖影越少但噪声越明显，0 保持普通降噪权重。 */
-      motionAlpha: 0.25,
-      /** 历史颜色方差裁剪的标准差倍率（正有限数）；越大保留历史越宽松，越小越严格排除旧色。 */
-      varianceGamma: 2,
-      /** 深度/透明度感知的邻域重建混合强度 [0,1]；越大越平滑但细节更少，0 关闭此邻域平滑。 */
-      spatialFilterStrength: 0.8,
-    },
-  },
-  /**
-   * 太阳光来源：
-   *   true  —— 跟随 Cesium 实际太阳（由 viewer.clock 时间决定，推荐）。
-   *   false —— 使用 pass 内置的自定义太阳方向（需自行写入 uniformState.sunDirectionWC2）。
-   * 此开关只决定光源方向的来源，不调节光照强度。
-   */
-  systemLight: true,
-  /** 初始化时是否统一设置 HDR、对数深度、gamma 和地形深度测试；false 由调用方自行配置场景。 */
-  applySceneSettings: true,
-  /** 场景 HDR 开关；true 保留更宽的亮度范围供色调映射使用，初始化时受 applySceneSettings 控制。 */
-  highDynamicRange: true,
-  /** 场景对数深度缓冲开关；改善远近同框时的深度精度，初始化时受 applySceneSettings 控制。 */
-  logarithmicDepthBuffer: true,
-  /** 场景显示 Gamma（正数）；一般增大会提亮中间调，初始化时受 applySceneSettings 控制。 */
-  gamma: 2.2,
-  /**
-   * HBAO 屏幕空间环境光遮蔽（增强建筑/地形接触阴影与立体感，纯深度实现）。
-   * false 关闭；true 用底层默认参数；或传对象覆盖部分参数：
-   * { intensity, maxRadius, bias, frustumLength, blackPoint, whitePoint, gamma, denoise }
-   */
-  hbao: {
-    /** AO 强度指数（建议 ≥0）；越大接触遮蔽越暗，0 不产生 AO 对比。 */
-    intensity: 100,
-    /** 视空间遮蔽邻域的最大半径（米）；越大影响范围越广，过大可能产生暗边或跨物体污染。 */
-    maxRadius: 30,
-    /** 遮蔽切线的角度偏移（弧度）；增大可减少自遮蔽伪影，但会弱化细小接触阴影。 */
-    bias: 0.1,
-    /** AO 处理的相机视空间深度上限（米）；超过此距离的远景跳过遮蔽计算。 */
-    frustumLength: 100000,
-    /** AO 调制颜色曲线的输入黑点（建议 [0,1)）；越大暗部截断越多，不能设为 1。 */
-    blackPoint: 0.05,
-    /** AO 调制颜色曲线的输出亮度倍率（建议 [0,1]）；越大被遮蔽部分越亮，0 为黑色。 */
-    whitePoint: 0.9,
-    /** AO 调制曲线的幂指数（正数）；越大中间亮度越暗，独立于场景 gamma 和降噪 varianceGamma。 */
-    gamma: 2.5,
-  },
-  /**
-   * SMAA 亚像素形态学抗锯齿（比 FXAA 更锐利、无明显模糊，纯屏幕空间）。
-   * 作用于天空效果合成后的最终图像。false 关闭；true 启用，不替代云体时域降噪。
-   */
-  smaa: true,
-  /**
-   * Viewer 时钟时间（ISO8601 字符串，Z 表示 UTC）；systemLight=true 时用于决定太阳角度。
-   * 显式传 undefined 或 null 可保留用户时钟；仅传 Scene 时不会设置时钟。
-   */
-  time: "2026-05-01T06:00Z",
-};
-
-function isPlainObject(v) {
-  return v && typeof v === "object" && !Array.isArray(v);
+function toCartesian2(value) {
+  return new Cartesian2(value[0], value[1]);
 }
 
-function deepMerge(base, override) {
-  const out = Array.isArray(base) ? base.slice() : { ...base };
-  if (!isPlainObject(override)) return out;
-  for (const key of Object.keys(override)) {
-    if (key === "__proto__" || key === "constructor" || key === "prototype") {
-      throw new Error("[BetterSky] 非法配置字段。");
-    }
-    const ov = override[key];
-    if (isPlainObject(ov) && isPlainObject(base[key])) {
-      out[key] = deepMerge(base[key], ov);
-    } else {
-      out[key] = Array.isArray(ov) ? ov.slice() : ov;
-    }
-  }
-  return out;
-}
-
-// 兼容判断只看本次调用：显式新 mode 优先，旧 haze 增量则自动选择 legacy。
-function normalizeVolumetricLightOptions(options) {
-  const volumetricLight = options.volumetricLight;
-  if (isPlainObject(volumetricLight) && Object.prototype.hasOwnProperty.call(volumetricLight, "mode")) return options;
-  if (!isPlainObject(options.cloud) || !Object.keys(options.cloud).some(key => key.startsWith("haze"))) return options;
-  if ("volumetricLight" in options && !isPlainObject(volumetricLight)) return options;
-  return { ...options, volumetricLight: { ...volumetricLight, mode: "legacy" } };
-}
-
-function validateVolumetricLightOptions(options) {
-  if (!("volumetricLight" in options)) return;
-  const volumetricLight = options.volumetricLight;
-  if (!isPlainObject(volumetricLight)) {
-    throw new Error("[BetterSky] volumetricLight 必须是体积光参数对象。");
-  }
-  if ("mode" in volumetricLight && !["volumetric", "legacy", "off"].includes(volumetricLight.mode)) {
-    throw new Error("[BetterSky] volumetricLight.mode 必须是 volumetric、legacy 或 off。");
-  }
-  if ("quality" in volumetricLight && !["low", "balanced", "high"].includes(volumetricLight.quality)) {
-    throw new Error("[BetterSky] volumetricLight.quality 必须是 low、balanced 或 high。");
-  }
-  for (const key of ["density", "intensity"]) {
-    if (key in volumetricLight && (!Number.isFinite(volumetricLight[key]) || volumetricLight[key] < 0)) {
-      throw new Error(`[BetterSky] volumetricLight.${key} 必须是非负有限数字。`);
-    }
-  }
-  for (const key of ["layerDepth", "maxDistance"]) {
-    if (key in volumetricLight && (!Number.isFinite(volumetricLight[key]) || volumetricLight[key] <= 0)) {
-      throw new Error(`[BetterSky] volumetricLight.${key} 必须是正的有限距离（米）。`);
-    }
-  }
-  if ("anisotropy" in volumetricLight && (!Number.isFinite(volumetricLight.anisotropy) || volumetricLight.anisotropy < 0 || volumetricLight.anisotropy > 0.9)) {
-    throw new Error("[BetterSky] volumetricLight.anisotropy 必须在 0..0.9 范围内。");
-  }
-}
-
-function toCartesian2(v) {
-  if (v instanceof Cartesian2) return v;
-  if (Array.isArray(v)) return new Cartesian2(v[0], v[1]);
-  return v;
-}
-
-function toCartesian4(v) {
-  if (v instanceof Cartesian4) return v;
-  if (Array.isArray(v)) return new Cartesian4(v[0], v[1], v[2], v[3]);
-  return v;
-}
-
-function validateCloudOptions(options) {
-  if ("aerialPerspectiveStrength" in options && (!Number.isFinite(options.aerialPerspectiveStrength) || options.aerialPerspectiveStrength < 0 || options.aerialPerspectiveStrength > 1)) {
-    throw new Error("[BetterSky] aerialPerspectiveStrength 必须在 0..1 范围内。");
-  }
-  if ("irradianceScale" in options && (!Number.isFinite(options.irradianceScale) || options.irradianceScale < 0)) {
-    throw new Error("[BetterSky] irradianceScale 必须是非负有限数字。");
-  }
-  const cloud = options.cloud;
-  if (!isPlainObject(cloud)) return;
-  if ("hazeCloudAttached" in cloud && typeof cloud.hazeCloudAttached !== "boolean") {
-    throw new Error("[BetterSky] cloud.hazeCloudAttached 必须是布尔值。");
-  }
-  if ("hazeGroundDensityScale" in cloud && (!Number.isFinite(cloud.hazeGroundDensityScale) || cloud.hazeGroundDensityScale < 0 || cloud.hazeGroundDensityScale > 1)) {
-    throw new Error("[BetterSky] cloud.hazeGroundDensityScale 必须在 0..1 范围内。");
-  }
-  for (const key of ["hazeViewDistance", "hazeVolumeLength"]) {
-    if (key in cloud && (!Number.isFinite(cloud[key]) || cloud[key] <= 0)) {
-      throw new Error(`[BetterSky] cloud.${key} 必须是正的有限距离（米）。`);
-    }
-  }
-  if ("layerTypes" in cloud && cloud.layerTypes !== null) {
-    if (!Array.isArray(cloud.layerTypes) || cloud.layerTypes.length !== 3 || !cloud.layerTypes.every(type => CLOUD_LAYER_TYPES.includes(type))) {
-      throw new Error("[BetterSky] cloud.layerTypes 必须是三个 cumulus/altocumulus/cirrus 云型，或 null。");
-    }
-  }
-  if ("lodRange" in cloud && cloud.lodRange !== null) {
-    const range = cloud.lodRange;
-    if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isFinite) || range[0] < 0 || range[1] <= range[0]) {
-      throw new Error("[BetterSky] cloud.lodRange 必须为 [非负近景距离, 更大的远景距离]（米），或 null。");
-    }
-  }
-  if ("hazeQuality" in cloud && !Object.keys(HAZE_QUALITY_SAMPLES).includes(cloud.hazeQuality)) {
-    throw new Error("[BetterSky] cloud.hazeQuality 必须是 low、balanced 或 high。");
-  }
-  if ("hazeHeightFalloff" in cloud && (!Number.isFinite(cloud.hazeHeightFalloff) || cloud.hazeHeightFalloff <= 0)) {
-    throw new Error("[BetterSky] cloud.hazeHeightFalloff 必须是正的有限高度（米）。");
-  }
-  if ("hazeAnisotropy" in cloud && (!Number.isFinite(cloud.hazeAnisotropy) || cloud.hazeAnisotropy < 0 || cloud.hazeAnisotropy > 0.9)) {
-    throw new Error("[BetterSky] cloud.hazeAnisotropy 必须在 0..0.9 范围内。");
-  }
-  if ("altitudeFadeRange" in cloud && cloud.altitudeFadeRange !== null) {
-    const range = cloud.altitudeFadeRange;
-    if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isFinite) || range[0] < 0 || range[1] <= range[0]) {
-      throw new Error("[BetterSky] cloud.altitudeFadeRange 必须为 [非负开始高度, 更大的结束高度]，或 null。");
-    }
-  }
-  if ("maxShadowLengthRayDistance" in cloud && (!Number.isFinite(cloud.maxShadowLengthRayDistance) || cloud.maxShadowLengthRayDistance <= 0)) {
-    throw new Error("[BetterSky] cloud.maxShadowLengthRayDistance 必须大于 0。");
-  }
-  if ("hazeSunColor" in cloud && (!Array.isArray(cloud.hazeSunColor) || cloud.hazeSunColor.length !== 3 || cloud.hazeSunColor.some(value => !Number.isFinite(value) || value < 0))) {
-    throw new Error("[BetterSky] cloud.hazeSunColor 必须是三个非负有限数字。");
-  }
-  for (const key of ["skyIrradianceScale", "groundIrradianceScale", "hazeDensityScale", "hazeDirectLightScale"]) {
-    if (key in cloud && (!Number.isFinite(cloud[key]) || cloud[key] < 0)) {
-      throw new Error(`[BetterSky] cloud.${key} 必须是非负有限数字。`);
-    }
-  }
-  if ("shapeDetailAmounts" in cloud) {
-    const value = cloud.shapeDetailAmounts;
-    const components = value instanceof Cartesian4 ? [value.x, value.y, value.z, value.w] : value;
-    if (!Array.isArray(components) || components.length !== 4) {
-      throw new Error("[BetterSky] cloud.shapeDetailAmounts 必须是含四个 0..1 有限数字的 Array 或 Cartesian4。");
-    }
-    for (let i = 0; i < 4; i++) {
-      if (!Number.isFinite(components[i]) || components[i] < 0 || components[i] > 1) {
-        throw new Error(`[BetterSky] cloud.shapeDetailAmounts[${i}] 必须是 0..1 的有限数字。`);
-      }
-    }
-  }
-  if ("denoise" in cloud) {
-    if (!isPlainObject(cloud.denoise)) {
-      throw new Error("[BetterSky] cloud.denoise 必须是降噪参数对象。");
-    }
-    for (const key of Object.keys(DEFAULT_OPTIONS.cloud.denoise)) {
-      if (!(key in cloud.denoise)) continue;
-      const value = cloud.denoise[key];
-      if (!Number.isFinite(value) || (key === "varianceGamma" ? value <= 0 : value < 0 || value > 1)) {
-        throw new Error(`[BetterSky] cloud.denoise.${key} 必须是${key === "varianceGamma" ? "大于 0" : " 0..1"}的有限数字。`);
-      }
-    }
-  }
+function toCartesian4(value) {
+  return new Cartesian4(value[0], value[1], value[2], value[3]);
 }
 
 function getUseLogDepth(scene) {
@@ -353,7 +69,7 @@ function assertRuntimeSupport(scene) {
 export class BetterSky {
   /** 内置默认预设的独立副本，可用于读取默认值或生成自定义预设。 */
   static get defaultOptions() {
-    return structuredClone(DEFAULT_OPTIONS);
+    return cloneOptions(DEFAULT_OPTIONS);
   }
 
   /**
@@ -361,9 +77,8 @@ export class BetterSky {
    * @param {object} [options] 覆盖默认预设的配置（深合并）
    */
   constructor(viewerOrScene, options = {}) {
-    options = normalizeVolumetricLightOptions(options);
-    validateVolumetricLightOptions(options);
-    validateCloudOptions(options);
+    const prepared = prepareOptions(options);
+    options = prepared.options;
     if (!defined(viewerOrScene)) {
       throw new Error("[BetterSky] 需要传入 Cesium Viewer 或 Scene。");
     }
@@ -377,10 +92,13 @@ export class BetterSky {
     assertRuntimeSupport(scene);
     this._viewer = defined(viewerOrScene.scene) ? viewerOrScene : undefined;
     this._scene = scene;
-    this._options = deepMerge(BetterSky.defaultOptions, options);
+    this._options = mergeOptions(DEFAULT_OPTIONS, options);
+    this._hbaoOptions = mergeOptions({ ...DEFAULT_OPTIONS.hbao, denoise: true }, isPlainObject(options.hbao) ? options.hbao : {});
+    if (this._options.hbao) this._options.hbao = cloneOptions(this._hbaoOptions);
     this._disposed = false;
     const clock = this._viewer?.clock;
-    const initialTime = defined(this._options.time) && defined(clock) ? JulianDate.fromIso8601(this._options.time) : undefined;
+    const initialTime = defined(clock) && defined(this._options.time)
+      ? prepared.time ?? JulianDate.fromIso8601(this._options.time) : undefined;
     // Only a failed construction rolls these settings back. Normal dispose keeps
     // the documented clock/HDR settings and restores the pass-owned sky settings.
     const initialSettings = this._options.applySceneSettings ? [
@@ -404,12 +122,12 @@ export class BetterSky {
       if (defined(this._options.gamma)) scene.gamma = this._options.gamma;
       scene.globe.depthTestAgainstTerrain = true;
     }
+    this._syncSceneOptions();
     if (defined(initialTime)) clock.currentTime = initialTime;
 
     // 3) HBAO 环境光遮蔽（可选，先于天空效果加入，在地表几何上叠加柔和接触阴影）
     const hbaoEnabled = !!this._options.hbao;
-    const hbaoOpts = isPlainObject(this._options.hbao) ? this._options.hbao : {};
-    this._hbao = new HBAOEffectPass(scene, { show: hbaoEnabled, ...hbaoOpts });
+    this._hbao = new HBAOEffectPass(scene, { show: hbaoEnabled, ...this._hbaoOptions });
     scene.postProcessStages.add(this._hbao.stage);
 
     // 4) 创建天空管线 Pass（关闭依赖 GBuffer 的 SSR / fields；太阳跟随系统光）
@@ -439,7 +157,8 @@ export class BetterSky {
       const sceneError = getSceneSupportError(scene);
       if (sceneError) {
         this._runtimeError = new Error(`[BetterSky] ${sceneError} 效果已停止，请 dispose() 后在支持的场景中重建。`);
-        this.enabled = false;
+        this._options.enabled = false;
+        this._applyEnabled();
         console.error(this._runtimeError);
         return;
       }
@@ -552,10 +271,64 @@ export class BetterSky {
           if (defined(opt.hbao[key])) this._hbao[`_${key}`] = opt.hbao[key];
         }
       }
-      this.hbaoEnabled = !!opt.hbao;
     }
-    if (defined(opt.smaa)) this.smaaEnabled = !!opt.smaa;
-    if (defined(opt.enabled)) this.enabled = opt.enabled;
+    if (opt.smaa && !this._smaa) {
+      this._smaa = new SMAAStage(this._scene, { show: true });
+      this._scene.postProcessStages.add(this._smaa.stage);
+    }
+    if ("hbao" in opt || "smaa" in opt || "enabled" in opt) this._applyEnabled();
+  }
+
+  /** Keep configured switches distinct from their effective, master-gated state. */
+  _applyEnabled() {
+    const enabled = this._options.enabled;
+    if (this._geo) this._geo.enabled = enabled;
+    if (this._hbao) this._hbao.enabled = enabled && !!this._options.hbao;
+    if (this._smaa) this._smaa.enabled = enabled && this._options.smaa;
+  }
+
+  _syncSceneOptions() {
+    for (const key of ["highDynamicRange", "logarithmicDepthBuffer", "gamma"]) this._options[key] = this._scene[key];
+  }
+
+  _assertMutable() {
+    if (this._disposed) throw new Error("[BetterSky] 实例已销毁，请重新创建。");
+    if (this._runtimeError) throw this._runtimeError;
+    const sceneError = getSceneSupportError(this._scene);
+    if (sceneError) throw new Error(`[BetterSky] ${sceneError} 请在支持的场景中更新。`);
+  }
+
+  /** 当前已接受配置的独立快照；直接修改底层 pass 的高级操作不包含在内。 */
+  getOptions() {
+    return cloneOptions(this._options);
+  }
+
+  /** 天空 Pass 异步效果资源状态；不包含 SMAA 查找纹理。 */
+  get assetStatus() {
+    return this._disposed ? "disposed" : this._geo.assetStatus;
+  }
+
+  /** 当前资源错误的只读快照。 */
+  get assetErrors() {
+    return this._disposed ? Object.freeze([]) : this._geo.assetErrors;
+  }
+
+  /** 等待当前一轮天空资源加载结束；失败通过 assetStatus/assetErrors 查询。 */
+  get assetsReady() {
+    return this._disposed ? Promise.resolve() : this._geo.assetsReady;
+  }
+
+  /** 重试失败的天空资源；实例已销毁时抛出错误。 */
+  retryAssets() {
+    this._assertMutable();
+    return this._geo.retryAssets();
+  }
+
+  /** 订阅天空资源状态变化，返回取消订阅函数。 */
+  subscribeAssets(listener) {
+    this._assertMutable();
+    if (typeof listener !== "function") throw new Error("[BetterSky] 资源监听器必须是函数。");
+    return this._geo.subscribeAssets(listener);
   }
 
   /** 底层 GeospatialPipelinePass 实例（高级用法） */
@@ -573,10 +346,7 @@ export class BetterSky {
     return this._geo ? this._geo.enabled : false;
   }
   set enabled(v) {
-    if (this._disposed || (v && this._runtimeError)) return;
-    if (this._geo) this._geo.enabled = v;
-    if (this._hbao) this._hbao.enabled = !!v && !!this._options.hbao;
-    if (this._smaa) this._smaa.enabled = !!v && !!this._options.smaa;
+    this.update({ enabled: v });
   }
 
   /** 云量覆盖度 [0,1] */
@@ -584,10 +354,7 @@ export class BetterSky {
     return this._geo ? this._geo.coverage : 0;
   }
   set coverage(v) {
-    if (this._geo) {
-      this._geo.coverage = v;
-      this._geo.cloudMaterialPass.invalidateHistory();
-    }
+    this.update({ coverage: v });
   }
 
   /** 曝光 */
@@ -595,45 +362,36 @@ export class BetterSky {
     return this._geo ? this._geo.toneMappingExposure : 0;
   }
   set toneMappingExposure(v) {
-    if (this._geo) this._geo.toneMappingExposure = v;
+    this.update({ toneMappingExposure: v });
   }
 
   /** 色调映射模式（设置会触发管线重建） */
   set toneMappingMode(v) {
-    if (this._geo) this._geo.toneMappingMode = v;
+    this.update({ toneMappingMode: v });
   }
 
   /** 风/天气速度，接受 [x,y] 或 Cartesian2 */
   set localWeatherVelocity(v) {
-    if (this._geo) this._geo.localWeatherVelocity = toCartesian2(v);
+    this.update({ localWeatherVelocity: v });
   }
 
   /** 三层云底高度及预留分量，接受数组或 Cartesian4。 */
   setCloudAltitudes(v) {
-    if (this._geo) {
-      this._geo.cloudMaterialPass.altitudes = toCartesian4(v);
-      this._geo.cloudMaterialPass.invalidateHistory();
-    }
+    this.update({ cloud: { altitudes: v } });
   }
 
   /** 云层厚度，接受数组或 Cartesian4 */
   setCloudHeights(v) {
-    if (this._geo) {
-      this._geo.cloudMaterialPass.heights = toCartesian4(v);
-      this._geo.cloudMaterialPass.invalidateHistory();
-    }
+    this.update({ cloud: { heights: v } });
   }
 
   /** 云密度/散射/消光，接受数组或 Cartesian4 */
   setCloudDensityScales(v) {
-    if (this._geo) {
-      this._geo.cloudMaterialPass.densityScales = toCartesian4(v);
-      this._geo.cloudMaterialPass.invalidateHistory();
-    }
+    this.update({ cloud: { densityScales: v } });
   }
 
   setCloudShapeDetailAmounts(v) {
-    if (this._geo) this.update({ cloud: { shapeDetailAmounts: v } });
+    this.update({ cloud: { shapeDetailAmounts: v } });
   }
 
   /** HBAO 是否启用（运行时开关） */
@@ -641,18 +399,19 @@ export class BetterSky {
     return this._hbao ? this._hbao.enabled : false;
   }
   set hbaoEnabled(v) {
-    this._options.hbao = v ? (this._options.hbao || true) : false;
-    if (this._hbao) this._hbao.enabled = !!v && this.enabled;
+    this._assertMutable();
+    if (typeof v !== "boolean") throw new Error("[BetterSky] hbaoEnabled 必须是布尔值。");
+    this.update({ hbao: v });
   }
 
   /** HBAO 强度（越大遮蔽越深） */
   set hbaoIntensity(v) {
-    if (this._hbao) this._hbao._intensity = v;
+    this._updateOptions({ hbao: { intensity: v } }, true);
   }
 
   /** HBAO 最大视空间采样半径（米）。 */
   set hbaoMaxRadius(v) {
-    if (this._hbao) this._hbao._maxRadius = v;
+    this._updateOptions({ hbao: { maxRadius: v } }, true);
   }
 
   /** SMAA 抗锯齿是否启用（运行时开关） */
@@ -660,33 +419,40 @@ export class BetterSky {
     return this._smaa ? this._smaa.enabled : false;
   }
   set smaaEnabled(v) {
-    if (this._disposed || this._runtimeError) return;
-    this._options.smaa = !!v;
-    if (v && !this._smaa) {
-      this._smaa = new SMAAStage(this._scene, { show: true });
-      this._scene.postProcessStages.add(this._smaa.stage);
-    }
-    if (this._smaa) this._smaa.enabled = !!v && this.enabled;
+    this.update({ smaa: v });
   }
 
   /** 批量更新参数（同构造时 options，部分字段即可） */
   update(options = {}) {
-    if (this._disposed) throw new Error("[BetterSky] 实例已销毁，请重新创建。");
-    if (this._runtimeError) throw this._runtimeError;
-    options = normalizeVolumetricLightOptions(options);
-    validateVolumetricLightOptions(options);
-    validateCloudOptions(options);
-    this._options = deepMerge(this._options, options);
-    if (options.applySceneSettings !== false) {
+    this._updateOptions(options);
+  }
+
+  /** All public commands are normalized and validated before saving or applying any field. */
+  _updateOptions(input, preserveHbaoSwitch = false) {
+    this._assertMutable();
+    const { options, time } = prepareOptions(input);
+    const hbaoOptions = isPlainObject(options.hbao) ? mergeOptions(this._hbaoOptions, options.hbao) : this._hbaoOptions;
+    if (hbaoOptions.denoise !== this._hbaoOptions.denoise) {
+      throw new Error("[BetterSky] hbao.denoise 仅支持构造时配置，请 dispose() 后重建实例。");
+    }
+    const nextOptions = mergeOptions(this._options, options);
+    if ("hbao" in options) {
+      const hbaoEnabled = preserveHbaoSwitch ? !!this._options.hbao : !!options.hbao;
+      nextOptions.hbao = hbaoEnabled ? cloneOptions(hbaoOptions) : false;
+    }
+    // This is a per-command gate, preserving the original update() call semantics.
+    nextOptions.applySceneSettings = options.applySceneSettings !== false;
+    this._options = nextOptions;
+    this._hbaoOptions = cloneOptions(hbaoOptions);
+    if (nextOptions.applySceneSettings) {
       if (defined(options.highDynamicRange)) this._scene.highDynamicRange = !!options.highDynamicRange;
       if (defined(options.logarithmicDepthBuffer)) {
         this._scene.logarithmicDepthBuffer = !!options.logarithmicDepthBuffer;
       }
       if (defined(options.gamma)) this._scene.gamma = options.gamma;
     }
-    if (defined(options.time) && defined(this._viewer) && defined(this._viewer.clock)) {
-      this._viewer.clock.currentTime = JulianDate.fromIso8601(options.time);
-    }
+    this._syncSceneOptions();
+    if (defined(time) && defined(this._viewer?.clock)) this._viewer.clock.currentTime = time;
     this._applyPreset(options);
   }
 

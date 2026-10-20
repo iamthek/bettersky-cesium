@@ -26,28 +26,8 @@ import { viewportTriangleVertexShaderText } from "./PostProcessStage.js";
 
 const attributeLocations = { position: 0, textureCoordinates: 1 };
 
-// 官方 UniformSampler 已按纹理自身的 target 绑定；只需补齐数组采样器的类型分派。
-// 代理仅用于本管线的 ShaderProgram，不修改 WebGL 或 Cesium 的全局原型。
-const samplerContexts = new WeakMap();
-function getSamplerContext(gl) {
-  if (!samplerContexts.has(gl)) {
-    samplerContexts.set(gl, new Proxy(gl, {
-      get(target, key) {
-        if (key === "getActiveUniform") {
-          return (program, index) => {
-            const info = target.getActiveUniform(program, index);
-            return info && info.type === target.SAMPLER_2D_ARRAY
-              ? { name: info.name, size: info.size, type: target.SAMPLER_2D }
-              : info;
-          };
-        }
-        const value = Reflect.get(target, key, target);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    }));
-  }
-  return samplerContexts.get(gl);
-}
+import { adaptArraySamplerProgram } from "./internal/CesiumAdapter.js";
+export { installFramebufferCallbacks } from "./internal/CesiumAdapter.js";
 
 /**
  * 获取（并缓存）覆盖整个视口的全屏四边形 VertexArray。
@@ -107,7 +87,7 @@ function buildCommand(context, fragmentShaderSource, vertexShaderText, overrides
     fragmentShaderSource,
     attributeLocations: attribLoc,
   });
-  shaderProgram._gl = getSamplerContext(context._gl);
+  adaptArraySamplerProgram(shaderProgram, context);
   return new DrawCommand({
     vertexArray: getViewportVertexArray(context),
     primitiveType: defaultValue(overrides.primitiveType, PrimitiveType.TRIANGLES),
@@ -118,19 +98,6 @@ function buildCommand(context, fragmentShaderSource, vertexShaderText, overrides
     framebuffer: overrides.framebuffer,
     pass: overrides.pass,
   });
-}
-
-/** 在帧缓冲绑定流程中调用绘制回调，支持数组分层和历史纹理交换。 */
-export function installFramebufferCallbacks(framebuffer) {
-  if (framebuffer._betterSkyCallbacksInstalled) return;
-  const originalBind = framebuffer._bind;
-  framebuffer._bind = function () {
-    originalBind.call(this);
-    const buffers = this._getActiveColorAttachments();
-    if (this.onBindEvent) this.onBindEvent(buffers);
-    if (this.onDrawEvent) this.onDrawEvent(buffers);
-  };
-  framebuffer._betterSkyCallbacksInstalled = true;
 }
 
 /**

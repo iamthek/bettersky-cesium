@@ -1,3 +1,4 @@
+import { getWebGLContext, getAnisotropicExtension, toWebGL2PixelDatatype, bindFramebuffer, unbindFramebuffer } from "./internal/CesiumAdapter.js";
 import { 
     Cartesian3,
     createGuid,
@@ -94,7 +95,7 @@ export default class Texture3D {
             }
         }
         let _initialized = true;
-        const _gl = context._gl;
+        const _gl = getWebGLContext(context);
         const glPixelDatatype = toWebGL2PixelDatatype(pixelDatatype);
         const textureType = defaultValue(options.textureType, _gl.TEXTURE_3D); // TEXTURE_2D_ARRAY
         const texture = _gl.createTexture();
@@ -134,13 +135,13 @@ export default class Texture3D {
             } else if (defined(source.framebuffer)) {
 
                 if (source.framebuffer !== context.defaultFramebuffer) {
-                    source.framebuffer._bind()
+                    bindFramebuffer(source.framebuffer)
                 }
 
                 _gl.copyTexImage2D(textureType, 0, glInternalFormat, source.xOffset, source.yOffset, width, height, 0)
 
                 if (source.framebuffer !== context.defaultFramebuffer) {
-                    source.framebuffer._unBind()
+                    unbindFramebuffer(source.framebuffer)
                 }
 
             } else {
@@ -165,7 +166,7 @@ export default class Texture3D {
         this._id = createGuid();
         this._context = context;
         this._sizeInBytes = texture3DSizeInBytes(pixelFormat, pixelDatatype, width, height, depth);
-        this._textureFilterAnisotropic = context._textureFilterAnisotropic;
+        this._textureFilterAnisotropic = getAnisotropicExtension(context);
         this._textureTarget = textureType;
         this._texture = texture;
         this._pixelFormat = pixelFormat;
@@ -183,12 +184,6 @@ export default class Texture3D {
         this._sampler = undefined
         this.sampler = defined(options.sampler) ? options.sampler : new Sampler;
     }
-}
-
-function toWebGL2PixelDatatype(pixelDatatype) {
-    // 3D/array textures require WebGL 2. Cesium keeps HALF_FLOAT as HALF_FLOAT_OES,
-    // while its private toWebGLConstant helper has changed its context argument.
-    return pixelDatatype === PixelDatatype.HALF_FLOAT ? WebGLConstants.HALF_FLOAT : pixelDatatype;
 }
 
 function texture3DSizeInBytes(pixelFormat, pixelDatatype, width, height, depth) {
@@ -214,7 +209,7 @@ Object.defineProperties(Texture3D.prototype, {
         set: function (sampler) {
             const minificationFilter = sampler.minificationFilter;
             const magnificationFilter = sampler.magnificationFilter;
-            const _gl = this._context._gl;
+            const _gl = getWebGLContext(this._context);
             const textureTarget = this._textureTarget;
             _gl.activeTexture(_gl.TEXTURE0)
             _gl.bindTexture(textureTarget, this._texture)
@@ -278,14 +273,14 @@ Texture3D.prototype.isDestroyed = function () {
 
 Texture3D.prototype.destroy = function () {
 
-    this._context._gl.deleteTexture(this._texture)
+    getWebGLContext(this._context).deleteTexture(this._texture)
 
     return destroyObject(this);
 
 }
 Texture3D.prototype.fromFramebuffer = function (options = {}) {
     const context = options.context;
-    const _gl = context._gl;
+    const _gl = getWebGLContext(context);
     const pixelFormat = defaultValue(options.pixelFormat, PixelFormat.RGB);
     const xOffset = defaultValue(options.xOffset, 0);
     const yOffset = defaultValue(options.yOffset, 0);
@@ -314,7 +309,7 @@ Texture3D.prototype.fromFramebuffer = function (options = {}) {
 Texture3D.prototype.generateMipmap = function (hint) {
     hint = defaultValue(hint, MipmapHint.DONT_CARE);
     this._hasMipmap = true;
-    const _gl = this._context._gl
+    const _gl = getWebGLContext(this._context)
     const textureTarget = this._textureTarget;
     _gl.hint(_gl.GENERATE_MIPMAP_HINT, hint)
     _gl.activeTexture(_gl.TEXTURE0)
@@ -342,7 +337,7 @@ Texture3D.prototype.copyFrom = function (options) {
     const source = options.source;
 
     const context = this._context;
-    const _gl = context._gl;
+    const _gl = getWebGLContext(context);
     const target = this._textureTarget;
 
     _gl.activeTexture(_gl.TEXTURE0);

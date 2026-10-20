@@ -69,7 +69,7 @@ function fixtureConfig(item) {
     define: { CESIUM_BASE_URL: JSON.stringify(item.assetsBase) },
     build: { target: "es2022", outDir: item.dist, sourcemap: false },
   };
-  if (item.kind === "source-baseline") config.resolve = { alias: { "bettersky-cesium": join(repoRoot, "BetterSky.js") }, dedupe: ["cesium", "three"] };
+  if (item.kind === "source-baseline") config.resolve = { alias: { "bettersky-cesium": join(repoRoot, "src/index.ts") }, dedupe: ["cesium", "three"] };
   const targets = [
     { src: "node_modules/bettersky-cesium/dist/assets/**/*", dest: resourceRoot + "/BetterSkyAssets", rename: { stripBase: 4 } },
     { src: "node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}", dest: resourceRoot, rename: { stripBase: 4 } },
@@ -251,12 +251,12 @@ async function verify(options) {
     const viteVersion = require("vite/package.json").version;
     const currentCesium = await latest("cesium");
     const currentThree = await latest("three");
-    const staticCopyVersion = "4.1.1";
+    const staticCopyVersion = rootManifest.devDependencies["vite-plugin-static-copy"];
     const minimumCesium = rootManifest.dependencies.cesium.match(/^>=\s*(\d+\.\d+\.\d+)$/)?.[1];
     const minimumThree = rootManifest.dependencies.three.match(/^>=\s*(\d+\.\d+\.\d+)$/)?.[1];
     assert.ok(minimumCesium && minimumThree, "Explicit minimum runtime dependency versions are required");
     const versions = options["registry-smoke"] ? { cesium: [currentCesium], three: [currentThree] } : { cesium: [minimumCesium, currentCesium], three: [minimumThree, currentThree] };
-    const typescriptVersion = await latest("typescript");
+    const typescriptVersion = rootManifest.devDependencies.typescript;
     report.versions = { ...versions, vite: viteVersion, staticCopy: staticCopyVersion, typescript: typescriptVersion, node: process.version, packageManager: rootManifest.packageManager };
     for (const manager of ["npm", "pnpm"]) {
       for (const cesiumVersion of [...new Set(versions.cesium)]) {

@@ -14,10 +14,12 @@
 | 包管理器 | pnpm 12.8.1 |
 | Cesium | 支持范围 `>=1.142.0`；仓库锁文件使用 1.142.0 作为可复现开发基线 |
 | three | 支持范围 `>=0.160.1`；仓库锁文件使用 0.160.1 作为可复现开发基线；纹理加载器与级联阴影的运行时依赖 |
-| 示例工具 | 锁文件中的 Vite 6.4.3、vite-plugin-static-copy 2.3.2 |
+| 示例工具 | 锁文件中的 Vite 8.3.4、vite-plugin-static-copy 4.1.1、TypeScript 7.0.2（开发建议 Node 24） |
 | 浏览器 / GPU | 支持 WebGL 2、三维/数组纹理、浮点渲染目标的现代浏览器，同时需要原生 `Float16Array` 和 `structuredClone` |
 
 同页使用一个活动的 BetterSky 实例管理一个包含地球的 Viewer，目标场景为三维透视模式。支持范围包含更高依赖版本，锁文件则保留开发基线。渲染器内部接口对版本敏感：升级依赖后应在部署前验证兼容性，新版本发布后扩展最低版本/当前最新版本矩阵；版本范围不代表已验证所有未来版本。
+
+> **兼容性提示**：SDK 支持下限仍为 `cesium@1.142.0`。它与 engine `26.0.0` / widgets `16.0.0` 的组合已通过验证；但无锁重新安装时，官方 `^` 范围可能解析到 engine `26.4.0` / widgets `16.3.0`，此组合在 Vite 8 下有可独立复现的上游缺失导出问题。请保留已验证的完整锁文件，或在遇到该错误时升级 Cesium；无需为本 SDK 配置内部组件 overrides。详见[安装提示](README.zh-CN.md#安装)。
 
 ### 兼容性回归矩阵
 
@@ -84,7 +86,7 @@ SDK 将渲染阶段接入 `scene.postProcessStages`，通过 `scene.preRender` �
 
 ```bash
 pnpm install --frozen-lockfile
-cp .env.example .env.local
+cp demo/.env.example .env.local
 ```
 
 按需填写 `.env.local`：
@@ -105,15 +107,16 @@ pnpm dev
 打开 Vite 输出的地址，通常为 [http://localhost:3000/](http://localhost:3000/)。3000 端口被占用时会选择其他端口。示例包含参数控件、帮助说明、重置按钮及时间轴；可以在浏览器控制台访问 `window.viewer` 和 `window.fx`。
 
 ```bash
-pnpm build    # 将示例构建到 dist/
-pnpm preview  # 预览 dist/，以终端输出地址为准
+pnpm run build:demo # 将 demo/index.html 构建到 dist-demo/
+pnpm preview        # 预览 dist-demo/，以终端输出地址为准
+pnpm run build:sdk  # 独立 SDK 构建，入口 src/index.ts
 ```
 
 示例会调整 `viewer.resolutionScale`，将大窗口的绘制缓冲限制在约 400 万像素。自行接入 SDK 的应用需要管理自己的整体渲染分辨率。
 
 ## 以源码接入其他项目
 
-当前仓库以源码模块形式提供 SDK。复制 `BetterSky.js`、完整 `Library/` 目录及 `static/BetterSkyAssets/`，保留相对路径。
+当前仓库以源码模块形式提供 SDK。复制 `BetterSky.js`、完整 `src/`、`Library/` 目录及 `static/BetterSkyAssets/`，保留相对路径。公开构建入口为 `src/index.ts`，默认预设与校验位于 `src/options.js`；JavaScript 运行入口继续兼容。
 
 着色器源码位于 `Library/shaders/`，通过 Vite 的 `?raw` 导入为字符串，例如从项目根目录的模块中使用 `import shaderSource from './Library/shaders/geospatial/cloudsMaterial.frag.glsl?raw'`。接入 Vite 项目无需额外 GLSL 插件；复制库时必须包含该目录。其他构建工具需要提供等效的原文字符串导入支持。
 
@@ -212,7 +215,7 @@ const fx = new BetterSky(viewer, {
 });
 ```
 
-下列默认值来自公开入口 [BetterSky.js](BetterSky.js)，会覆盖部分底层 pass 的默认配置。
+下列默认值来自 [src/options.js](src/options.js)，通过公开入口提供独立副本，会覆盖部分底层 pass 的默认配置。
 
 ### 通用参数
 
@@ -365,7 +368,7 @@ Haze 还受相机高度淡出后的有效云覆盖度调制：覆盖度 ≤ 0.2 
 | `hbao.gamma` | number | `2.5` | 正的 AO 曲线幂指数，与场景 gamma 分开。 |
 | `hbao.denoise` | boolean | `true` | 双边滤波，仅构造时生效；update() 不会重建此配置。 |
 
-七个数值字段支持 `update()`；`hbao.denoise` 仅构造时生效。
+七个数值字段支持 `update()`；`hbao.denoise` 仅构造时生效，运行时改变会明确抛错，需销毁并重建；传入相同值保持幂等。
 
 ## 运行时 API
 
@@ -393,7 +396,11 @@ fx.update({
 | API | 读写方式 / 用途 |
 | --- | --- |
 | `BetterSky.defaultOptions` | 静态 getter，返回新的默认配置副本。 |
-| `fx.update(options)` | 应用局部配置中支持的字段。 |
+| `fx.update(options)` | 与便捷 setter 共用校验和应用通路；未知字段或不合法值在提交前拒绝。 |
+| `fx.getOptions()` | 返回当前已接受配置的独立快照；HBAO 关闭时保留其内部参数供重开恢复。 |
+| `fx.assetStatus` / `fx.assetErrors` | 天空资源的状态与只读错误快照。 |
+| `fx.assetsReady` | 读取会按需启动并等待六项必需资源；失败或销毁也结算，不包含 SMAA 和可选雪任务。 |
+| `fx.retryAssets()` / `fx.subscribeAssets(listener)` | 显式重试失败资源；订阅变化并获得取消订阅函数。 |
 | `fx.enabled` | 读取/设置管线总开关。 |
 | `fx.coverage` | 读取/设置天气覆盖度。 |
 | `fx.toneMappingExposure` | 读取/设置曝光倍率。 |
@@ -491,9 +498,9 @@ viewer.destroy();
 
 在 `viewer.destroy()` 之前调用 `dispose()`，之后不再使用该实例。销毁是幂等的，会通过各 pass 清理实例拥有的效果纹理、帧缓冲、阴影资源及 shader cache 引用。宿主默认纹理和共享全屏几何仍由宿主或共享代码管理。
 
-可以在初始资源加载期间销毁实例，并在销毁返回后创建替代实例。请求不会主动中止，也没有公开的全部资源就绪 Promise；迟到的完成回调会检查销毁状态，跳过 GPU 资源创建。SMAA 避免同一 stage 重复并发加载查找纹理，其回调也会检查销毁状态。
+可以在初始资源加载期间销毁实例，并在销毁返回后创建替代实例。请求不会主动中止。读取 assetsReady 会按需启动并等待六项必需天空资源，失败后检查 assetErrors；可选雪和 SMAA 不在此等待范围。迟到的完成回调会检查销毁状态，跳过 GPU 资源创建。SMAA 避免同一 stage 重复并发加载查找纹理，其回调也会检查销毁状态。
 
-销毁不会移除已安装的 context 辅助方法、`context.uniformState` 上新增的太阳字段，或 `Cartesian2/3/4` 与 `Matrix4` 原型扩展。实现使用部分 Cesium 渲染器内部接口，HBAO 也有模块级共享状态。同页只支持一个活动 Viewer、每个 Viewer 一个管线，不支持隔离的并发实例。
+销毁不会移除已安装的 context 辅助方法或 `context.uniformState` 上新增的太阳字段。数学便捷方法使用内部专用类型，不修改 Cesium 共享原型；HBAO 的阶段与相机缓存属于实例。渲染器私有接口集中于内部适配层，仍须在升级 Cesium 后验证。同页一个活动实例的公开限制继续保留。
 
 ## 常见问题
 
@@ -512,7 +519,9 @@ viewer.destroy();
 
 ## 源码导览
 
-- [BetterSky.js](BetterSky.js)：公开 API、默认值、参数校验与更新。
+- [src/index.ts](src/index.ts)：公开类型与 SDK 构建入口；[src/options.js](src/options.js)：默认值、归一化和校验。
+- [BetterSky.js](BetterSky.js)：JavaScript 运行入口、统一参数更新和生命周期。
+- [架构与边界](SDK_ARCHITECTURE.md)和[demo 部署](demo/README.md)：职责划分及 GitHub Pages 流程。
 - [GeospatialPipelinePass.js](Library/GeospatialPipelinePass.js)：场景接入、大气与效果合成。
 - [CloudsMaterialPass.js](Library/geospatial/CloudsMaterialPass.js)：云体/光照积分与时域重建。
 - [VolumetricLightPass.js](Library/geospatial/VolumetricLightPass.js) 和 [FocusedCloudShadowPass.js](Library/geospatial/FocusedCloudShadowPass.js)：独立局部体积光、时域历史与聚焦日光可见性。

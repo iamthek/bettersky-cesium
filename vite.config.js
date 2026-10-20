@@ -1,27 +1,41 @@
-import { defineConfig } from 'vite';
+import { fileURLToPath } from 'node:url';
+import { defineConfig, normalizePath } from 'vite';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 
+const repoRoot = fileURLToPath(new URL('.', import.meta.url));
+const fromRepo = path => normalizePath(fileURLToPath(new URL(path, import.meta.url)));
+
+// This configuration serves only the demo; the SDK has its own explicit build entry.
 export default defineConfig({
+  root: fromRepo('./demo/'),
+  envDir: repoRoot,
+  base: process.env.VITE_DEMO_BASE || '/',
+  publicDir: false,
   build: {
-    outDir: 'dist-demo',
+    outDir: fromRepo('./dist-demo/'),
+    emptyOutDir: true,
     sourcemap: false,
   },
-  define: {
-    // 官方资源与 BetterSkyAssets 均通过 buildModuleUrl 从此根目录加载。
-    CESIUM_BASE_URL: JSON.stringify('/cesium/'),
-  },
   plugins: [
-    // 保留官方资源的目录层级；开发时提供 /cesium/，demo 构建时复制到 dist-demo/cesium/。
+    {
+      name: 'demo-cesium-base',
+      config(config) {
+        // Read the merged base so CLI --base and GitHub Pages subpaths stay aligned.
+        const base = (config.base || '/').replace(/\/?$/, '/');
+        return { define: { CESIUM_BASE_URL: JSON.stringify(`${base}cesium/`) } };
+      },
+    },
     viteStaticCopy({
       targets: [
         {
-          src: 'node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}',
+          src: fromRepo('./node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}/**/*'),
           dest: 'cesium',
+          rename: { stripBase: 4 },
         },
         {
-          // 整体复制效果资源目录，保留根目录文件与各效果的子目录。
-          src: 'static/BetterSkyAssets',
-          dest: 'cesium',
+          src: fromRepo('./static/BetterSkyAssets/**/*'),
+          dest: 'cesium/BetterSkyAssets',
+          rename: { stripBase: 2 },
         },
       ],
     }),
@@ -29,5 +43,7 @@ export default defineConfig({
   server: {
     port: 3000,
     open: false,
+    // The demo imports the typed SDK facade from its parent directory.
+    fs: { allow: [repoRoot] },
   },
 });
