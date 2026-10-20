@@ -1,23 +1,26 @@
 # BetterSky for Cesium
 
-**English** | [简体中文](https://cdn.jsdelivr.net/npm/bettersky-cesium@0.1.0/README.zh-CN.md)
+**English** | [简体中文](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/README.zh-CN.md)
 
-BetterSky for Cesium is a CesiumJS visual effects plugin. Its **BetterSky** adds volumetric clouds, atmosphere, cloud shadows, volumetric light and image enhancement to an existing 3D globe scene.
+An atmosphere, volumetric cloud and lighting SDK for CesiumJS. Add layered clouds, moving cloud shadows, sunlight shafts and image effects to an existing 3D globe through a single `BetterSky` instance.
+
+[User guide & API](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/BetterSky.README.md) · [npm](https://www.npmjs.com/package/bettersky-cesium)
 
 ## Highlights
 
-- Layered volumetric clouds with configurable shape, altitude, coverage and motion.
-- Atmospheric scattering, moving cloud shadows and sunlight shafts in one scene.
-- Bloom, lens flare, tone mapping and optional HBAO/SMAA.
-- Built-in presets, partial parameter updates and runtime switches through one API.
+- **Layered skies** — Three cloud layers with configurable cloud types, altitude, thickness, density and weather motion.
+- **Atmosphere and lighting** — Atmospheric perspective, day/night skies, cloud shadows and volumetric sunlight.
+- **Image quality** — Bloom, lens flare, tone mapping, HBAO ambient occlusion and SMAA antialiasing.
+- **Performance-conscious rendering** — Low-resolution cloud sampling and temporal reconstruction, distance-based detail reduction and high-altitude fading reduce rendering work. Actual performance depends on the GPU, resolution, view and enabled effects.
+- **Application integration** — Built-in defaults, partial updates, runtime switches and TypeScript declarations for an existing Cesium Viewer.
 
-## Usage
+## Quick start
 
-Use Cesium **1.142.0 or later**, three **0.160.1 or later**, a browser bundler and one active BetterSky/Viewer per page. These are minimum supported versions; they do not imply that every future release has already been tested. Check rendering and lifecycle behavior when upgrading dependencies because the plugin uses renderer internals. The browser/GPU must support WebGL 2, 3D/array textures, the required floating-point render targets, native `Float16Array` and `structuredClone`.
+Use an ESM browser application with Cesium `>=1.142.0`, WebGL 2, the required floating-point texture/render-target support, `Float16Array` and `structuredClone`. The scene must contain a globe and use a 3D perspective camera. See the guide for full requirements and upgrade considerations.
 
-### Install
+### 1. Install
 
-Choose npm or pnpm in the consuming application's directory:
+Run either command in your application:
 
 ```bash
 npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
@@ -27,149 +30,51 @@ npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
 
-Both install the same package. Cesium is shared with the application; three (`>=0.160.1`) is installed automatically as a runtime dependency. Applications may pin versions they have verified within these ranges.
+Cesium is shared with the application; three (`>=0.160.1`) is installed as a runtime dependency. Keep your application's verified lockfile.
 
-Cesium declares and installs engine and widgets automatically; the SDK does not require installing them manually or adjusting them through overrides. Preserve the application's lockfile and validate the complete dependency combination after an upgrade.
+### 2. Prepare assets
 
-> **Compatibility tip:** The SDK supports `cesium@1.142.0`, verified with engine `26.0.0` / widgets `16.0.0`. Cesium 1.142 declares internal dependencies using `^`, so a fresh installation can resolve newer components. The engine `26.4.0` / widgets `16.3.0` combination has an upstream `MISSING_EXPORT` issue under Vite 8, reproducible without this SDK. If encountered, preserve or restore a verified complete lockfile, or upgrade Cesium (a clean `1.146.0` installation passed this round). This caveat concerns a particular upstream dependency combination; the SDK minimum remains `>=1.142.0`, and overrides are not required by the SDK.
-
-### Copy assets
-
-The plugin uses the host's **`CESIUM_BASE_URL`**. Copy the contents of `node_modules/bettersky-cesium/dist/assets/` into **`BetterSkyAssets/` under that Cesium asset root**. For `CESIUM_BASE_URL='/cesium/'` in a Vite application:
+BetterSky uses the application's `CESIUM_BASE_URL`. For `/cesium/` in a Vite application, copy these directories into `public/`:
 
 | Source | Destination |
 | --- | --- |
-| `node_modules/bettersky-cesium/dist/assets/` contents | `public/cesium/BetterSkyAssets/` |
-| Cesium's `Workers/`, `Assets/`, `ThirdParty/`, `Widgets/` | Keep the application's existing copies under `public/cesium/` |
+| `node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}` | `public/cesium/` — keep all four directories |
+| Contents of `node_modules/bettersky-cesium/dist/assets/` | `public/cesium/BetterSkyAssets/` — preserve nested directories |
 
-> **Tip:** Under the license terms, keep `LICENSE` and `THIRD_PARTY_NOTICES.md` with any copy of the SDK or its runtime build that you distribute.
+Keep your existing Cesium asset setup if already configured. Set the base URL before creating the Viewer, as in the next step. [Automatic copying and subpath deployment](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/BetterSky.README.md) are covered in the guide.
 
-Use `vite-plugin-static-copy` to copy the runtime assets automatically during dev and build instead of maintaining copies under `public/` by hand:
+### 3. Attach to your Viewer
 
-```bash
-npm install -D vite-plugin-static-copy@4.1.1
-```
-
-```js
-import { defineConfig } from 'vite'
-import { viteStaticCopy } from 'vite-plugin-static-copy'
-
-export default defineConfig({
-  define: {
-    CESIUM_BASE_URL: JSON.stringify('/cesium/'),
-  },
-  plugins: [
-    viteStaticCopy({
-      targets: [
-        {
-          // Copy entries inside assets, preserving GeospatialAssets/.
-          src: 'node_modules/bettersky-cesium/dist/assets/**/*',
-          dest: 'cesium/BetterSkyAssets',
-          rename: { stripBase: 4 },
-        },
-      ],
-    }),
-  ],
-})
-```
-
-The `assets/**/*` pattern includes nested resources. `rename: { stripBase: 4 }` removes `node_modules/bettersky-cesium/dist/assets/` while preserving `GeospatialAssets/` and its files. npm and pnpm both use the paths above, without accessing `.pnpm/`. CI builds copy the assets automatically too. On upgrade, replace only `BetterSkyAssets/` and refresh cached assets so JavaScript and resources stay on the same version.
-
-Keep the application's existing Cesium asset configuration. If Cesium assets are not configured yet, copy them in the same plugin:
-
-```js
-viteStaticCopy({
-  targets: [
-    {
-      src: 'node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}',
-      dest: 'cesium',
-      rename: { stripBase: 4 },
-    },
-    // BetterSky targets from above
-  ],
-})
-```
-
-For a site hosted at `/app/`, use the matching application base and `CESIUM_BASE_URL='/app/cesium/'`. Plugin assets then load from `/app/cesium/BetterSkyAssets/`. If Cesium resources are already hosted elsewhere, put `BetterSkyAssets/` alongside their `Workers/` directory. No additional plugin asset URL is needed.
-
-### Attach to a Viewer
-
-After the application has created its Cesium `viewer` on the client:
+In the client entry, before creating your application's `viewer`:
 
 ```js
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { BetterSky } from 'bettersky-cesium'
 
-const effects = new BetterSky(viewer, {
-  time: undefined, // Preserve the application's current clock time.
-})
+window.CESIUM_BASE_URL = '/cesium/'
 
-effects.update({ coverage: 0.5 })
-effects.enabled = false
-effects.enabled = true
+// Create your application's Cesium Viewer here, then attach BetterSky.
+const effects = new BetterSky(viewer, { time: undefined })
 ```
 
-Keep rendering continuously for animated clouds. The pipeline applies scene settings such as HDR, gamma and logarithmic depth; disposal does not restore all settings. On page/component teardown, dispose of the effects before destroying the Viewer:
+`time: undefined` preserves the application's clock. Keep the Viewer rendering continuously for animated clouds. When leaving the scene, call `effects.dispose()` before destroying the Viewer. Continue with the guide for configuration, resource loading and lifecycle details.
 
-```js
-effects.dispose()
-viewer.destroy()
+### Run the repository demo
+
+Use Node.js 24 and pnpm 12.8.1. From a clone of this repository:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-`dispose()` is safe to call more than once, including while assets are loading. Requests are not actively canceled; late callbacks skip GPU resource creation after disposal. Dispose of the previous instance before creating a replacement.
+Open the URL printed by Vite, usually [http://localhost:3000/](http://localhost:3000/). Service keys are optional; without them, the demo uses local imagery and ellipsoid terrain.
 
-If effects are missing, first check resource requests under `CESIUM_BASE_URL + 'BetterSkyAssets/'`, the browser console and WebGL capabilities. Requests must return actual files rather than an HTML fallback.
+## Documentation
 
-### Parameter hints and TypeScript
-
-The SDK includes `dist/index.d.ts`; no separate types package is needed. Its Chinese JSDoc explains configuration meanings, units, ranges, defaults and interactions, with parameter descriptions for constructors, methods and setters. Hover over a field or inspect a call signature in an editor with TypeScript language services, such as VS Code. JavaScript projects can use these hints too.
-
-```ts
-import { BetterSky, type BetterSkyOptions } from 'bettersky-cesium'
-
-const options: BetterSkyOptions = {
-  time: undefined, // Explicitly keep the host time; omitting this field in the constructor uses the preset date.
-  coverage: 0.5, // Cloud coverage [0, 1], controlled separately from per-layer density.
-  localWeatherVelocity: [0.0003, 0.0001], // Weather texture UV per second, rather than metres per second.
-  cloud: {
-    altitudes: [4000, 6000, 10000, 0], // Three cloud base heights in metres above the rendered planet, then a reserved zero.
-  },
-}
-
-const effects = new BetterSky(viewer, options)
-effects.update({ cloud: { heights: [1300, 1800, 650, 0] } }) // Partial update: nested objects merge, arrays are replaced.
-```
-
-Read `BetterSky.defaultOptions` for an independent copy of the complete preset. The declarations also describe interactions between legacy `cloud.haze*` settings and volumetric light modes, scene settings and disposal constraints.
-
-The declarations cover these existing controls with their defaults unchanged:
-
-| Control | Usage and default |
-| --- | --- |
-| `toneMappingMode` | `2` Reinhard2, `4` Uncharted2, `7` AgX, `8` Neutral, `9` ACES, `10` Linear, `11` Reinhard, `12` Cineon; default `9`. Historical mode `3` is currently unsupported. |
-| `hbao.denoise` | HBAO bilateral filtering, default `true`; configurable only during construction. `update()` does not change it. |
-| `effects.pass.showSnow` / `showRain` | Pass setters, both `false` by default. Assign explicitly to enable; assignments rebuild related stages. These are neither constructor/update options nor getters for the current state. |
-
-### Configuration snapshots and resource state
-
-Convenience setters and `update()` share normalization, validation and application. `effects.getOptions()` returns an independent snapshot of accepted options. Unknown fields, invalid values and parameter changes after disposal throw explicitly. Changing construction-only `hbao.denoise` at runtime also throws; dispose and recreate to change it.
-
-```ts
-const options = effects.getOptions()
-effects.coverage = 0.5
-
-const unsubscribe = effects.subscribeAssets(() => {
-  if (effects.assetStatus === 'error') console.error(effects.assetErrors)
-})
-
-await effects.assetsReady // Reading starts and waits for six required sky resources, even while disabled.
-const requiredErrors = effects.assetErrors.filter(error => error.required)
-// A user-triggered retry can call await effects.retryAssets().
-
-unsubscribe()
-```
-
-`assetsReady` settles on success, failure or disposal; inspect `assetErrors` for the outcome. It excludes on-demand snow and SMAA lookup textures, so optional resources may still be loading or failed. Failed resources are not retried every frame, and explicit retries do not reload successful resources.
+- [User guide & API reference](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/BetterSky.README.md): complete setup, options, methods and usage notes, with differences between the current source and npm `0.1.0` identified.
+- [Demo setup and deployment](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/demo/README.md): optional service keys and GitHub Pages configuration.
+- [Changelog](https://github.com/iamthek/BetterSky4Cesium/blob/sdk-publish/CHANGELOG.md).
 
 ## License
 

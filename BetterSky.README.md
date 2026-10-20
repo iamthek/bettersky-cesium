@@ -1,136 +1,58 @@
-# BetterSky Rendering and API Reference
+# BetterSky Usage Guide and API Reference
 
 **English** | [简体中文](BetterSky.README.zh-CN.md) · [Project overview](README.md)
 
-This repository-only reference covers rendering principles, the demo and source integration, configuration and lifecycle management. It is not included in the npm package.
+This guide covers SDK integration, configuration, and usage notes.
 
-For the planned npm/pnpm package, see [Usage](README.md#usage). This CesiumJS plugin uses the host's existing `CESIUM_BASE_URL`; copy the bundled assets from `node_modules` into `BetterSkyAssets/` under that Cesium asset root. SDK packaging and these examples are pending release verification. The source-copy instructions below describe the current repository workflow, rather than the future npm package contents.
+[Usage](#usage) · [Parameters](#parameters) · [Notes](#notes)
 
-## Requirements
+## Usage
 
-| Dependency | Repository configuration |
-| --- | --- |
-| Node.js | 22 or newer |
-| Package manager | pnpm 12.8.1 |
-| Cesium | Supported range `>=1.142.0`; reproducible repository lockfile baseline 1.142.0 |
-| three | Supported range `>=0.160.1`; reproducible repository lockfile baseline 0.160.1; runtime dependency for texture loaders and cascaded shadows |
-| Demo tools | Vite 8.3.4, vite-plugin-static-copy 4.1.1 and TypeScript 7.0.2 in the lockfile (Node 24 recommended for development) |
-| Browser / GPU | Modern browser with WebGL 2, 3D/array textures and floating-point render targets; native `Float16Array` and `structuredClone` are also required |
+### Version scope
 
-Use one active BetterSky instance per page with one Viewer and a globe in 3D perspective mode. The supported ranges include later dependency versions, while the lockfile preserves the development baseline. Renderer internals are version-sensitive: test dependency upgrades before deployment, and extend the minimum/current-latest matrix when new versions are released. A version range does not mean every future release has already been verified.
+The installation examples use the published npm release `0.1.0`; the parameter tables describe the current repository's public entry point. The current source has not been republished. A repository `package.json` that still says `0.1.0` does not mean the npm package contains all current changes.
 
-> **Compatibility tip:** The SDK minimum remains `cesium@1.142.0`, verified with engine `26.0.0` / widgets `16.0.0`. A fresh installation may resolve engine `26.4.0` / widgets `16.3.0` within Cesium's official `^` ranges; that combination has an independently reproducible upstream missing-export issue under Vite 8. Preserve a verified complete lockfile, or upgrade Cesium if this error occurs. The SDK does not require internal-component overrides. See the [installation tip](README.md#install).
-
-### Compatibility regression matrix
-
-The current-latest versions below were checked against the npm registry on 2026-10-18. The four endpoint combinations cover the minimum and current-latest versions independently; they do not cover every intermediate or future release. SDK packaging and installation verification remain pending separately.
-
-| Cesium | three | Source browser API and lifecycle regression (2026-10-18) |
+| Capability | npm `0.1.0` | Current repository |
 | --- | --- | --- |
-| 1.142.0 | 0.160.1 | Passed |
-| 1.142.0 | 0.186.1 | Passed |
-| 1.146.0 | 0.160.1 | Passed |
-| 1.146.0 | 0.186.1 | Passed |
+| Initialization, partial updates, effect toggles, disposal, and the configuration groups below | Basic integration is available | Retained, with the current parameter validation rules |
+| `getOptions()` configuration snapshot | Unavailable | Available |
+| `assetStatus`, `assetErrors`, `assetsReady`, `retryAssets()`, `subscribeAssets()` | Unavailable | Available |
+| Tone mapping modes `2` / `4` and Pass rain/snow controls | Available at runtime; older declarations are incomplete | Declarations now cover them |
+| `hbao.denoise` and the update-specific type | Older declarations omit this field and `BetterSkyUpdateOptions` | Explicitly declared as a constructor-only option; excluded from the update type |
 
-The same source regression run passed 24 automated tests. The browser checks covered parameter updates, switches, resize and teardown/recreation, including disposal during asset loading; they do not replace packaged-SDK release verification.
+Use examples marked "current repository" in this checkout, or wait for a release that includes those capabilities. Do not call the new methods on `0.1.0`.
 
-SSR and SSS are outside the supported BetterSky feature set.
+### Requirements
 
-## Rendering capabilities
-
-| Capability | What it adds |
+| Item | Requirement |
 | --- | --- |
-| Volumetric clouds | Ray-marched cloud layers around the globe, procedural 3D shape/detail textures, weather-map advection, self-shadowing and sky/ground fill light. |
-| Atmosphere and celestial lighting | Precomputed scattering and transmittance lookups for sky color, atmospheric perspective, sunlight, moon rendering and procedural night stars. |
-| Volumetric light | Sunlight shafts in a thin medium below the lowest active shadow-casting cloud base. Density fades toward the lower boundary, while focused cloud-shadow visibility shapes light through cloud gaps. |
-| Ground cloud shadows | Cascaded cloud shadow maps project moving cloud cover onto scene surfaces. The first two cloud layers cast shadows by default. |
-| Bloom and lens flare | HDR bright-region extraction, a downsample/upsample chain, blur, ghosts and halos. |
-| Tone mapping | ACES, AgX, Neutral, Linear, Reinhard, Reinhard2, Uncharted2 and Cineon curves, with exposure and separate ground-light controls. |
-| HBAO | Depth-based ambient occlusion with bilateral filtering for terrain and geometry contact shading. Optional and enabled by default. |
-| SMAA | Three-pass morphological antialiasing applied after sky composition. Optional and enabled by default. |
-| Pass-level extensions | Optional surface snow cover and rain/flash overlays through the underlying pass; disabled by default. |
+| Application | A browser project using an ESM build tool; create instances on the client |
+| Cesium | `>=1.142.0`, sharing the application's Cesium dependency |
+| three | `>=0.160.1`, installed automatically as an npm runtime dependency |
+| Scene | Has a `globe`, uses `SceneMode.SCENE3D` and `PerspectiveFrustum` |
+| Browser / GPU | WebGL 2, 3D and array textures, floating-point and half-float textures with corresponding render targets and linear filtering; support for `Float16Array` and `structuredClone` |
+| Package installation | The npm package declares Node.js `>=22.0.0`; also meet your build tool's Node.js requirements |
+| Repository demo / development | Node.js `>=22.12.0`, preferably Node.js 24; pnpm 12.8.1 |
 
-See [Volumetric light and legacy haze](#volumetric-light-and-legacy-haze) for the default independent light path and its mutually exclusive `legacy` and `off` modes.
+Only one BetterSky instance may be active per page. Dispose of the old instance before creating a replacement.
 
-## Rendering optimizations
+### Installation
 
-| Area | Implementation and purpose |
-| --- | --- |
-| Cloud sampling cost | Clouds render at `ceil(width / 4) × ceil(height / 4)`, then reconstruct at full resolution using a 16-phase Bayer sequence. This reduces the number of primary cloud pixels to approximately 1/16 of the drawing buffer. |
-| Work inside cloud layers | Rays intersect, sort and merge active spherical cloud-layer intervals. Marching skips gaps between layers, adapts step sizes and stops when transmittance becomes sufficiently low. |
-| Distant cloud detail | Screen-footprint mip selection, continuous detail fading and deterministic secondary-light sampling reduce unresolved detail and frame-to-frame changes. |
-| Cloud temporal stability | Motion reprojection, variance clipping, depth/opacity checks and camera-dependent blending balance stationary noise reduction against moving-camera ghosting. Major camera, projection, lighting and cloud-configuration changes invalidate history. |
-| Terrain silhouettes and distance precision | Cloud reconstruction consults full-resolution scene depth at terrain boundaries. Cloud depth/velocity buffers use 32-bit floats to avoid the 65,504 limit of half-float distance storage. |
-| Stable, softer cloud shadows | Shadow-footprint filtering and temporal accumulation stabilize the maps. Ground shading uses fixed-pattern PCF that averages transmitted light, plus cascade blending and a fill-light floor to soften mixed shadow edges. |
-| Independent volumetric light | A separate sampling budget, focused cloud-shadow map and temporal history handle local shafts. Full-resolution terrain and cloud-front depths guide reconstruction; see [Independent volumetric light](#independent-volumetric-light) for medium coverage, quality budgets and edge handling. |
-| High-altitude views | Clouds, their shadows and associated light fade together between 30 km and 90 km camera ellipsoid height by default. Fully faded views skip cloud and shadow draw calls. |
-| Atmosphere and bloom | Precomputed atmosphere textures supply scattering data; bloom processes a progressively smaller image pyramid before composition. |
-
-The 1/16 figure describes cloud sampling resolution, not an overall frame-rate multiplier. Actual performance depends on the GPU, drawing-buffer size, view and enabled effects. The demo's separate drawing-buffer cap is described in [Run the demo](#run-the-demo); measured volumetric-light costs are in [Performance and validation reference](#performance-and-validation-reference).
-
-## How the pipeline fits together
-
-```text
-Cesium scene color + depth
-  → HBAO (optional)
-  → atmosphere + volumetric clouds + cloud shadows + volumetric light
-  → bloom / lens flare + tone mapping
-  → SMAA (optional)
-```
-
-The SDK registers stages in `scene.postProcessStages` and updates lighting, weather motion and offscreen passes through `scene.preRender`.
-
-## Run the demo
-
-From the repository root:
+Run either command in your application:
 
 ```bash
-pnpm install --frozen-lockfile
-cp demo/.env.example .env.local
+npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
-
-Optionally fill in `.env.local`:
-
-```dotenv
-VITE_CESIUM_ION_TOKEN=your_cesium_ion_token
-VITE_TIANDITU_TOKEN=your_tianditu_key
-```
-
-Leave a value empty to use its fallback: local NaturalEarthII imagery without a Tianditu key, or ellipsoid terrain without an Ion token. World terrain loads asynchronously; if it fails, the demo keeps ellipsoid terrain.
-
-`.env.local` is ignored by Git. `VITE_` values are embedded in browser code, so use client-side service credentials only. Restart the dev server after changing them.
 
 ```bash
-pnpm dev
+pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
 
-Open the address printed by Vite, normally [http://localhost:3000/](http://localhost:3000/). Vite selects another port if 3000 is occupied. The demo includes parameter controls, help text, reset controls and a timeline; `window.viewer` and `window.fx` are available in its browser console.
+The package provides named and default exports and `dist/index.d.ts`; no separate type package is needed. The current repository's declarations also include Chinese field documentation for editor hints covering meanings, units, defaults, and constraints.
 
-```bash
-pnpm run build:demo # Build demo/index.html into dist-demo/
-pnpm preview        # Preview dist-demo/; use the printed URL
-pnpm run build:sdk  # Build the SDK separately from src/index.ts
-```
+### Assets and deployment
 
-The demo adjusts `viewer.resolutionScale` to cap large drawing buffers at approximately four million pixels. Applications using the SDK manage their own overall render resolution.
-
-## Add the SDK source to another project
-
-The repository currently provides the SDK as source modules. Copy `BetterSky.js`, the complete `src/` and `Library/` directories and `static/BetterSkyAssets/`, preserving relative paths. The public build entry is `src/index.ts`; defaults and validation live in `src/options.js`, while the JavaScript runtime entry remains compatible.
-
-Shader sources live in `Library/shaders/` and are imported as strings using Vite's `?raw` feature, for example `import shaderSource from './Library/shaders/geospatial/cloudsMaterial.frag.glsl?raw'` in a module at the project root. Vite projects require no additional GLSL plugin; include this directory when copying the SDK. Other bundlers need equivalent raw-text import support.
-
-Install dependencies within the supported ranges:
-
-```bash
-pnpm add "cesium@>=1.142.0" "three@>=0.160.1"
-```
-
-The repository lockfile uses Cesium 1.142.0 and three 0.160.1 to reproduce its development baseline. These exact versions are optional for source integration; applications may pin any verified versions within the supported ranges.
-
-### Deploy static assets
-
-Set `CESIUM_BASE_URL` to the deployed Cesium asset root. The repository uses `/cesium/` with this layout:
+The SDK uses the host application's `CESIUM_BASE_URL`. Deploy the contents of `node_modules/bettersky-cesium/dist/assets/` into `BetterSkyAssets/` under that root, alongside Cesium's `Workers/`:
 
 ```text
 /cesium/
@@ -139,391 +61,377 @@ Set `CESIUM_BASE_URL` to the deployed Cesium asset root. The repository uses `/c
   ThirdParty/
   Widgets/
   BetterSkyAssets/
-    ...other effect assets
+    snowCoverMask.png
     GeospatialAssets/
       *.exr
       *.bin
       *.png
 ```
 
-Copy the first four directories from `node_modules/cesium/Build/Cesium/`, and copy the complete `static/BetterSkyAssets/` folder alongside them. Keep `GeospatialAssets` spelled exactly as shown. It contains the atmosphere lookup tables, 3D noise and weather textures.
+For manual copying in Vite, use `public/cesium/`. The contents of `dist/assets/` belong in `public/cesium/BetterSkyAssets/`; do not add another nested `assets/` directory.
 
-The repository's [Vite configuration](vite.config.js) already serves and copies these resources. For another Vite project, install `vite-plugin-static-copy` and merge the equivalent settings into its configuration:
+Use `vite-plugin-static-copy` to serve the same assets during development and copy them during production builds:
+
+```bash
+npm install -D vite-plugin-static-copy@4.1.1
+```
+
+Merge the following into your application's Vite configuration. If Cesium assets are already deployed, add only the BetterSky copy target:
 
 ```js
-import { defineConfig } from "vite";
-import { viteStaticCopy } from "vite-plugin-static-copy";
+import { defineConfig } from 'vite'
+import { viteStaticCopy } from 'vite-plugin-static-copy'
+
+const base = '/' // Use '/app/' when deploying under that subpath.
 
 export default defineConfig({
-  define: {
-    CESIUM_BASE_URL: JSON.stringify("/cesium/"),
-  },
+  base,
+  define: { CESIUM_BASE_URL: JSON.stringify(`${base}cesium/`) },
   plugins: [
     viteStaticCopy({
       targets: [
         {
-          src: "node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}",
-          dest: "cesium",
+          src: 'node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}/**/*',
+          dest: 'cesium',
+          rename: { stripBase: 4 },
         },
         {
-          src: "static/BetterSkyAssets",
-          dest: "cesium",
+          src: 'node_modules/bettersky-cesium/dist/assets/**/*',
+          dest: 'cesium/BetterSkyAssets',
+          rename: { stripBase: 4 },
         },
       ],
     }),
   ],
-});
+})
 ```
 
-For a subdirectory deployment, adjust the asset URL and hosting paths together. Other bundlers must provide the equivalent asset layout and base URL.
+`stripBase: 4` removes the first four source path segments while preserving internal directories such as `Workers/`, `Assets/`, and `GeospatialAssets/`. npm and pnpm use the same paths; do not access `.pnpm/`. The plugin serves assets during development and copies them into the output directory during builds.
 
-### Attach to a Viewer
+For deployment under `/app/`, keep the application `base`, server mount path, and `CESIUM_BASE_URL='/app/cesium/'` aligned. Effect assets then load from `/app/cesium/BetterSkyAssets/`. On another server or CDN, place `BetterSkyAssets/` under the existing Cesium asset root and allow the application's cross-origin requests. Other build tools can use equivalent asset copying and base URL configuration.
 
-Import Cesium's widget stylesheet in the application entry. After creating your Viewer:
+### Initialization and updates
 
-```js
-import "cesium/Build/Cesium/Widgets/widgets.css";
-import { BetterSky } from "./BetterSky.js";
-
-const fx = new BetterSky(viewer, {
-  time: undefined, // Preserve the application's current clock time.
-});
-
-fx.update({
-  coverage: 0.45,
-  volumetricLight: { quality: "balanced" },
-});
-```
-
-`new BetterSky(viewer)` applies the complete built-in preset, including its fixed clock time. You can also pass `viewer.scene`; clock-setting options then have no effect.
-
-Keep `requestRenderMode: false` for continuous cloud animation and temporal reconstruction. If your application enables explicit rendering, it must continue calling `scene.requestRender()` to supply frames and request a frame after parameter changes; the SDK does not schedule those requests.
-
-## Configuration
-
-`new BetterSky(viewerOrScene, options?)` merges options into the built-in defaults. Nested objects merge by field and arrays replace whole arrays. Supply only the fields you need to change.
-
-`false`, `null` and `undefined` are preserved during merging; their meaning depends on the option. In particular, `time: undefined` preserves the Viewer clock, and the documented nullable cloud controls use `null` to disable their corresponding mode.
+After your application creates `viewer`, initialize the SDK on the client:
 
 ```js
-const defaults = BetterSky.defaultOptions; // An independent copy.
-const fx = new BetterSky(viewer, {
-  time: undefined,
+import 'cesium/Build/Cesium/Widgets/widgets.css'
+import { BetterSky } from 'bettersky-cesium'
+
+const effects = new BetterSky(viewer, {
+  time: undefined, // Preserve the application's time.
   coverage: 0.5,
-  cloud: { denoise: { motionAlpha: 0.4 } },
-  hbao: false,
-});
+  cloud: { densityScales: [0.12, 0.09, 0.0015, 0] },
+})
+
+effects.update({ cloud: { heights: [1300, 1800, 650, 0] } })
+effects.enabled = false
+effects.enabled = true
 ```
 
-These defaults come from the public entry point in [BetterSky.js](BetterSky.js), which overrides several lower-level pass defaults.
+`new BetterSky(viewerOrScene, options?)` accepts a Viewer or Scene. Passing a Scene does not set a Viewer clock. The instance registers its render stages and per-frame updates automatically; do not add `effects.stage` again or manually call lower-level updates.
 
-### General options
+Constructor options merge with the defaults; `update()` merges with the accepted configuration. Nested objects merge by field, and arrays are replaced as a whole. Omitted fields keep their values. In the current repository, explicit `undefined` is treated as omission except for `time`; use `null` only for fields that explicitly support it. Invalid fields or values are rejected during parameter validation.
 
-| Option | Type | Default | Behavior |
-| --- | --- | --- | --- |
-| `enabled` | boolean | `true` | Enable the pipeline; runtime changes also gate HBAO and SMAA. |
-| `coverage` | number | `0.34` | Weather coverage in [0, 1], separate from layer density. |
-| `localWeatherVelocity` | array / Cartesian2 | `[0.0003, 0.0001]` | Weather-map UV offset per second. Negative values reverse direction. |
-| `toneMappingMode` | number | `9` | 2 Reinhard2; 4 Uncharted2; 7 AgX; 8 Neutral; 9 ACES; 10 Linear; 11 Reinhard; 12 Cineon. Changing the mode rebuilds sky stages. Historical mode 3 requires a luminance-texture binding that the current SDK does not provide, so it is not a supported option. |
-| `toneMappingExposure` | number | `2.8` | Brightness multiplier before tone mapping; not EV stops. |
-| `irradianceScale` | number | `0.15` | Nonnegative ground irradiance gain. |
-| `aerialPerspectiveStrength` | number | `0.15` | Ground atmospheric-perspective strength in [0, 1]. Zero removes this blend. |
-| `darkParamY` | number | `0.5` | Night-sky glow modulation; generally subtle during daytime. |
-| `bloomIntensity` | number | `0.002` | Bloom intensity. Zero removes this contribution, but is not a pass-disable switch. |
-| `systemLight` | boolean | `true` | Keep true for consistent Cesium sun lighting. false switches only part of the pipeline to custom sun uniforms; see advanced notes. |
-| `applySceneSettings` | boolean | `true` | Apply initial HDR, logarithmic depth, gamma and terrain depth testing. See scene behavior below. |
-| `highDynamicRange` | boolean | `true` | Scene HDR setting, governed by applySceneSettings. |
-| `logarithmicDepthBuffer` | boolean | `true` | Scene logarithmic depth, governed by applySceneSettings. |
-| `gamma` | number | `2.2` | Scene display gamma, governed by applySceneSettings. |
-| `hbao` | boolean / object | Object below | false disables AO; an object overrides the HBAO parameters below. |
-| `smaa` | boolean | `true` | Final-image SMAA antialiasing. |
-| `time` | string / null / undefined | `"2026-05-01T06:00Z"` | Set a Viewer's clock using ISO 8601; null or undefined preserves its time. Scene-only construction does not set a clock. |
+In this repository, use `import { BetterSky } from './src/index.ts'` relative to the repository root to try unreleased capabilities. The repository demo already uses this entry point.
 
-### Cloud layers and visibility
+### Configuration snapshots and asset loading (current repository)
 
-Four-component layer values use `[layer1, layer2, layer3, reserved]`; keep the fourth component at zero. Cloud-base heights are relative to the rendering planet, not the terrain beneath each cloud. The first two layers cast cloud shadows by default; changing a layer's type does not change that shadow mask.
-
-| Option | Type | Default | Behavior |
-| --- | --- | --- | --- |
-| `cloud.layerTypes` | array / null | `["cumulus", "altocumulus", "cirrus"]` | Exactly three layer types; each can be cumulus, altocumulus or cirrus. null uses the generic noise shape. |
-| `cloud.altitudes` | array / Cartesian4 | `[4000, 6000, 10000, 0]` | Layer-base heights in meters relative to the rendering planet. |
-| `cloud.heights` | array / Cartesian4 | `[1300, 1800, 650, 0]` | Layer thickness in meters; cloud top = altitude + height. |
-| `cloud.densityScales` | array / Cartesian4 | `[0.12, 0.09, 0.0015, 0]` | Density multipliers; zero removes that layer's medium. |
-| `cloud.shapeDetailAmounts` | array / Cartesian4 | `[0.18, 0.12, 0, 0]` | Four values in [0, 1]; higher values erode cloud detail more strongly. |
-| `cloud.lodRange` | array / null | `[200000, 500000]` | Near/far distance thresholds in meters, 0 ≤ near < far. null disables distance LOD; it does not move the clouds. |
-| `cloud.altitudeFadeRange` | array / null | `[30000, 90000]` | Camera ellipsoid-height fade range in meters, 0 ≤ start < end. null disables the fade. |
-| `cloud.skyIrradianceScale` | number | `1.8` | Nonnegative sky fill-light gain on clouds and legacy haze; independent volumetric light uses direct sunlight. |
-| `cloud.groundIrradianceScale` | number | `1.3` | Nonnegative ground-reflected fill-light gain on clouds, separate from irradianceScale. |
-
-Distance LOD adjusts sampling/detail quality. Altitude fading changes cloud visibility, shadows and associated light together; at the end height it also skips cloud and shadow drawing. These are independent controls. Disabling distance LOD does not disable all footprint-based texture filtering.
-
-### Volumetric light and legacy haze
-
-`volumetricLight.mode` selects one of two mutually exclusive paths: `"volumetric"` (the default) uses an independent, low-resolution volumetric pass with its own temporal history; `"legacy"` uses the existing `cloud.haze*` integration; `"off"` disables both extra volumetric-light paths. The global `enabled` switch also controls volumetric rendering.
-
-#### Independent volumetric light
-
-The medium occupies a world-space height envelope below the lowest active, shadow-casting cloud base. Its bottom is clamped to the rendering planet's surface, rather than following local terrain. With the default 4000 m cloud base and 2400 m layer depth, the envelope spans heights of 1600–4000 m. The lower part becomes progressively thinner, and density fades near the maximum viewing distance. This mode adds no separate near-ground fog layer. Weather-map holes do not remove the medium: air remains in cloud gaps, while actual cloud transmittance determines the sunlit and shadowed regions.
-
-Integration covers all valid medium intervals within `maxDistance`, clipped by terrain depth and the planet; the legacy 1200 m accumulated-path limit does not apply. A separate focused cloud-shadow map covers this local range, leaving the large ground-shadow cascades unchanged. World-texel alignment and filtering based on the sun's angular radius help preserve cloud-gap boundaries. Scattering before and after the cloud front is recorded separately, so translucent clouds can reveal light behind them while opaque clouds and terrain occlude it.
-
-The pass stores its own scattering-centroid depth and history. Depth/luminance-aware reconstruction and history rejection handle terrain edges, cloud silhouettes and changing illumination. It does not use the clouds' 16-phase Bayer reconstruction or add a uniform brightness floor to direct sunlight. Shafts follow the actual clouds and solar direction; no beam is generated for a particular clock time.
-
-| Option | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `volumetricLight.mode` | string | `"volumetric"` | `"volumetric"`, `"legacy"` or `"off"`. |
-| `volumetricLight.density` | number | `0.000008` | Nonnegative finite extinction density in inverse meters; zero removes this medium. |
-| `volumetricLight.intensity` | number | `2` | Nonnegative finite scattering-brightness multiplier; does not change density or extinction. |
-| `volumetricLight.layerDepth` | number | `2400` | Positive finite depth in meters below the lowest active, shadow-casting cloud base. |
-| `volumetricLight.maxDistance` | number | `16000` | Positive finite viewing/integration limit in meters, clipped by scene depth and the planet; also determines the focused shadow's receiver range. |
-| `volumetricLight.anisotropy` | number | `0.55` | Finite forward-scattering preference in [0, 0.9]; zero is isotropic. |
-| `volumetricLight.quality` | string | `"balanced"` | `"low"`, `"balanced"` or `"high"`; selects the budgets below. |
-
-| Quality | Width/height scale | Integration steps per pixel | Focused shadow map |
-| --- | --- | --- | --- |
-| `low` | 0.25 | 24 | 512 × 512 |
-| `balanced` | 0.5 | 48 | 1024 × 1024 |
-| `high` | 0.5 | 64 | 2048 × 2048 |
-
-The scale applies to each drawing-buffer dimension, rounded up: `balanced` uses `ceil(width / 2) × ceil(height / 2)`. Higher budgets increase GPU work; these settings do not imply a fixed frame time. Changing a volumetric-light value clears its independent history; quality changes recreate the corresponding targets. Switching to `legacy` or `off` releases the new path's offscreen textures and framebuffers; returning to `volumetric` allocates them as needed.
-
-`density: 0` removes the medium. `intensity: 0` removes its added scattered light but retains extinction; use `mode: "off"` to disable both extra volumetric-light paths. Atmospheric scattering, cloud lighting and lens flare remain separate effects.
-
-#### Modes and existing callers
-
-Compatibility is decided for each constructor or `update()` call: an explicitly supplied `volumetricLight.mode` takes priority, even when the same call also contains old haze fields. Supplying any `cloud.haze*` field without a new mode automatically selects `"legacy"`. Other partial updates preserve the current mode; construction with no options uses `"volumetric"`. Existing haze values are retained when switching modes.
+`BetterSky.defaultOptions` returns an independent copy of the default preset. `effects.getOptions()` returns an independent snapshot of the accepted configuration; changing the snapshot does not change the instance. Vectors are normalized to arrays in snapshots. Direct changes through the advanced Pass API are not reflected in the snapshot.
 
 ```js
-fx.update({ volumetricLight: { mode: "volumetric", intensity: 2, quality: "balanced" } });
-fx.update({ volumetricLight: { mode: "off" } });
-fx.update({ cloud: { hazeDensityScale: 0.000008 } }); // Selects legacy.
-fx.update({ volumetricLight: { mode: "legacy" } });  // Uses retained legacy values.
+const current = effects.getOptions()
+console.log(current.coverage)
+
+const unsubscribe = effects.subscribeAssets(() => {
+  if (effects.assetStatus === 'error') console.error(effects.assetErrors)
+})
+
+await effects.assetsReady
+if (effects.assetStatus !== 'disposed') {
+  const errors = effects.assetErrors.filter(item => item.required)
+  if (errors.length > 0) console.error('Sky assets failed to load', errors)
+}
+
+// Call from a UI retry action; check assetErrors again afterward.
+// await effects.retryAssets()
+
+// Unsubscribe when leaving the page.
+unsubscribe()
 ```
 
-The demo's Godray section shows the controls for the selected path. `off` disables both groups while preserving their values; Restore defaults reads the complete built-in preset, including the default mode.
+Reading `assetsReady` starts and waits for the six required sky asset tasks, even with `enabled: false`. It resolves after success, failure, or disposal. Loading failures do not reject the Promise; inspect `assetErrors`. It does not wait for the optional snow texture or SMAA lookup textures; SMAA textures are not tracked by these asset states.
 
-#### Performance and validation reference
+`assetStatus` is one of `idle`, `loading`, `ready`, `error`, or `disposed`. An optional asset failure may also produce `error`. Each error contains `id`, `url`, `required`, and the original `error`. `retryAssets()` explicitly retries failed assets without reloading successful ones; failures are not retried automatically each frame. `subscribeAssets(listener)` returns an unsubscribe function. Its callback receives no arguments; read the state inside the callback.
 
-A local check on 2026-10-18 used an RTX 3080 through ANGLE/Direct3D11, a 1920 × 1080 drawing buffer and `balanced` defaults. The demo date was 2026-05-01; each view faced the sun with camera and weather fixed. `EXT_disjoint_timer_query_webgl2` measured 64 adjacent frame pairs with alternating order and a fixed cloud phase. The baseline retained allocated targets while skipping the new passes and their composite; the disjoint flag was false.
-
-| Demo UTC | Median added GPU time | P95 added GPU time |
-| --- | --- | --- |
-| 10:30 | 1.621 ms | 1.989 ms |
-| 23:00 | 1.467 ms | 2.279 ms |
-
-The new textures allocated 58,155,008 bytes (55.46 MiB): 47.46 MiB for scattering/depth/history and 8 MiB for the focused shadow. This is allocation accounting, not an independent measurement of driver-level VRAM growth. These scene/device-specific results are not a frame-time guarantee; conventional on/off batch differences fluctuated, so paired GPU timings were used instead of background FPS.
-
-The implementation check covered seven WebGL2 MRT/readback cases: full-interval integration, zero direct light under zero solar visibility, opaque and translucent foreground clouds, terrain clipping, distance fade and cloud-visibility fade. Mode/quality changes, odd viewport dimensions, camera movement, layer crossings and weather changes were also checked. Five enable/disable cycles matched 50 texture creations/deletions and 20 framebuffer creations/deletions. This checks the new path's resource lifecycle, not long-term memory use across every scene.
-
-#### Legacy haze
-
-The options below apply in `"legacy"` mode. Their algorithm and defaults remain available for existing callers.
-
-Local haze occupies world-space regions below the first two active, shadow-casting cloud layers. The default disables the separate near-ground layer and limits the accumulated scattering path to 1.2 km. Cloud-base regions follow the cloud weather footprint projected along the sunlight direction, keeping low-angle shafts aligned with cloud gaps. Its distance controls bound the sampled medium rather than placing fog at the camera. The exponential mode instead uses a height-dependent density above the rendering planet.
-
-| Option | Type | Default | Behavior |
-| --- | --- | --- | --- |
-| `cloud.hazeDensityScale` | number | `0.000008` | Nonnegative medium density; zero removes the extra haze contribution. |
-| `cloud.hazeCloudAttached` | boolean | `true` | true integrates local world-space layers below cloud bases, with optional near-ground haze; false uses an exponential height medium. |
-| `cloud.hazeGroundDensityScale` | number | `0` | Near-ground density multiplier in [0, 1], only in local mode. Zero keeps cloud-base shafts only; one restores the full near-ground layer. |
-| `cloud.hazeViewDistance` | number | `16000` | Positive maximum viewing distance in meters for local layers. |
-| `cloud.hazeVolumeLength` | number | `1200` | Positive total medium-path budget in meters for local layers; gaps do not consume this length. |
-| `cloud.hazeDirectLightScale` | number | `8` | Nonnegative direct sunlight-scattering gain; separate from medium extinction. |
-| `cloud.hazeQuality` | string | `"high"` | Integration-sample budget / shadow-filter taps: low = 16 / 1; balanced = 24 / 2; high = 32 / 4. |
-| `cloud.hazeHeightFalloff` | number | `1200` | Positive height scale in meters: exponential falloff scale, or local-layer thickness control. |
-| `cloud.hazeAnisotropy` | number | `0.55` | Forward-scattering preference in [0, 0.9]; zero is isotropic. |
-| `cloud.maxShadowLengthRayDistance` | number | `6000` | Positive atmospheric shadow-length integration limit in meters; also bounds haze in exponential mode. |
-| `cloud.hazeSunColor` | array | `[1, 0.78, 0.42]` | Three nonnegative linear RGB multipliers, not 0–255 sRGB values. |
-
-Haze is also modulated by effective cloud coverage after altitude fading: its contribution is zero at coverage ≤ 0.2 and ramps up between 0.2 and 0.4. Local mode requires an active shadow-casting layer among the first two. Increasing haze density alone will not override these conditions.
-
-The quality values are budgets, not fixed texture-read counts: early exits and cascade overlap affect the actual work.
-
-### Cloud denoising
-
-| Option | Type | Default | Behavior |
-| --- | --- | --- | --- |
-| `cloud.denoise.temporalAlpha` | number | `0.04` | Current-frame weight in [0, 1]; lower values favor history and stronger smoothing. |
-| `cloud.denoise.currentFrameAlpha` | number | `0.08` | Current-frame weight in [0, 1] for the newly sampled Bayer phase. |
-| `cloud.denoise.motionAlpha` | number | `0.25` | Raises the accumulation base weights during camera motion, in [0, 1]; the final blend remains adaptive. |
-| `cloud.denoise.varianceGamma` | number | `2` | Positive variance-clipping multiplier; higher values accept a wider historical color range. |
-| `cloud.denoise.spatialFilterStrength` | number | `0.8` | Depth/opacity-aware reconstruction strength in [0, 1]; higher values smooth more detail. |
-
-These are base controls. The renderer further adapts blending to history age, distance, camera motion and terrain boundaries. Increasing history dependence can reduce noise while increasing lag; stronger spatial filtering can soften detail. SMAA handles final-image edges and does not replace this cloud reconstruction.
-
-`cloud.denoise` controls cloud reconstruction, including haze rendered through the legacy path. The independent volumetric-light pass uses its own depth/luminance rejection and adaptive history weights; these cloud controls do not tune that history.
-
-### HBAO
-
-The default `hbao` value is an object containing the seven numeric options below; bilateral filtering defaults to enabled in the pass. `hbao: false` disables the effect. `hbao: true` uses the pass defaults at construction; an object overrides individual parameters.
-
-| Option | Type | Default | Behavior |
-| --- | --- | --- | --- |
-| `hbao.intensity` | number | `100` | AO intensity exponent; higher values deepen contact shading. |
-| `hbao.maxRadius` | number | `30` | Maximum sampling radius in view space, in meters. |
-| `hbao.bias` | number | `0.1` | Angular bias in radians; larger values reduce self-occlusion. |
-| `hbao.frustumLength` | number | `100000` | Maximum AO view-space depth in meters. |
-| `hbao.blackPoint` | number | `0.05` | Input black point; keep below 1. |
-| `hbao.whitePoint` | number | `0.9` | Output brightness scale for AO modulation. |
-| `hbao.gamma` | number | `2.5` | Positive AO curve exponent, separate from scene gamma. |
-| `hbao.denoise` | boolean | `true` | Bilateral filter, construction only; update() does not rebuild this option. |
-
-The seven numeric fields support `update()`. Changing construction-only `hbao.denoise` at runtime throws explicitly; dispose and recreate to change it. Repeating its existing value is idempotent.
-
-## Runtime API
-
-Use `update()` for partial configuration changes:
-
-```js
-fx.update({
-  coverage: 0.4,
-  cloud: {
-    layerTypes: ["cumulus", "altocumulus", "cirrus"],
-    altitudes: [4000, 6000, 10000, 0],
-    heights: [1300, 1800, 650, 0],
-    densityScales: [0.12, 0.09, 0.0015, 0],
-  },
-});
-
-fx.update({
-  time: "2026-05-01T10:00:00Z",
-  toneMappingExposure: 2.5,
-});
-```
-
-Changing cloud shape, density, coverage, lighting or visibility parameters invalidates cloud history as needed. Volumetric-light options invalidate their separate history. Frequent large changes can repeatedly restart accumulation.
+### Runtime API
 
 | API | Access / purpose |
 | --- | --- |
-| `BetterSky.defaultOptions` | Static getter; returns a fresh default configuration. |
-| `fx.update(options)` | Uses the same validation/application path as convenience setters; rejects unknown fields or invalid values before committing. |
-| `fx.getOptions()` | Independent snapshot of accepted options; HBAO retains its parameters internally while disabled. |
-| `fx.assetStatus` / `fx.assetErrors` | Sky resource status and a read-only error snapshot. |
-| `fx.assetsReady` | Reading starts and waits for six required resources; settles on failure/disposal too, excluding SMAA and optional snow. |
-| `fx.retryAssets()` / `fx.subscribeAssets(listener)` | Explicit failed-resource retry and a subscription returning an unsubscribe function. |
-| `fx.enabled` | Get/set the pipeline switch. |
-| `fx.coverage` | Get/set weather coverage. |
-| `fx.toneMappingExposure` | Get/set exposure multiplier. |
-| `fx.toneMappingMode` | Setter; changing the mode rebuilds sky stages. |
-| `fx.localWeatherVelocity` | Setter; array or Cartesian2. |
-| `fx.setCloudAltitudes(value)` | Set four cloud-base components. |
-| `fx.setCloudHeights(value)` | Set four thickness components. |
-| `fx.setCloudDensityScales(value)` | Set four density components. |
-| `fx.setCloudShapeDetailAmounts(value)` | Set four detail-erosion components in [0, 1]. |
-| `fx.hbaoEnabled` / `fx.smaaEnabled` | Get/set optional effects. |
-| `fx.hbaoIntensity` / `fx.hbaoMaxRadius` | Setters for AO strength/radius. |
-| `fx.pass` | Getter for the underlying GeospatialPipelinePass; advanced access. |
-| `fx.stage` | Getter for the current sky PostProcessStageComposite. Re-read after stage rebuilds. |
-| `fx.dispose()` | Idempotently remove the frame listener and registered stages, restore captured sky/globe fields and clean up instance-owned pass resources. |
+| `BetterSky.defaultOptions` | Static getter returning a fresh copy of the default options. |
+| `effects.update(options)` | Shares validation and application logic with convenience setters; rejects unknown fields or invalid values before committing changes. |
+| `effects.getOptions()` (current repository) | Returns an independent snapshot of accepted options; retains HBAO's internal values while disabled so they can be restored. |
+| `effects.assetStatus` / `effects.assetErrors` (current repository) | Sky asset state and a read-only error snapshot. |
+| `effects.assetsReady` (current repository) | Reading it starts the six required asset tasks as needed and waits for them; also resolves on failure or disposal. Excludes SMAA and the optional snow task. |
+| `effects.retryAssets()` / `effects.subscribeAssets(listener)` (current repository) | Explicitly retry failed assets; subscribe to changes and receive an unsubscribe function. |
+| `effects.enabled` | Read/write master pipeline switch. |
+| `effects.coverage` | Read/write weather coverage. |
+| `effects.toneMappingExposure` | Read/write exposure multiplier. |
+| `effects.toneMappingMode` | Setter only; changing modes rebuilds the sky render stage. |
+| `effects.localWeatherVelocity` | Setter only; accepts an array or Cartesian2. |
+| `effects.setCloudAltitudes(value)` | Sets four-component cloud base altitudes. |
+| `effects.setCloudHeights(value)` | Sets four-component cloud thicknesses. |
+| `effects.setCloudDensityScales(value)` | Sets four-component cloud density multipliers. |
+| `effects.setCloudShapeDetailAmounts(value)` | Sets four detail erosion amounts in [0, 1]. |
+| `effects.hbaoEnabled` / `effects.smaaEnabled` | Read/write optional effect switches. |
+| `effects.hbaoIntensity` / `effects.hbaoMaxRadius` | Setters only; set AO intensity/radius. |
+| `effects.pass` | Getter exposing the underlying GeospatialPipelinePass for advanced operations. |
+| `effects.stage` | Getter exposing the current sky PostProcessStageComposite; read it again after a stage rebuild. |
+| `effects.dispose()` | Idempotently removes per-frame listeners and registered stages, restores captured sky/globe settings, and releases Pass resources owned by the instance. |
 
-## Common adjustments
+### Common configurations
 
-### Balance light without washing out the terrain
+Adjust surface and cloud fill lighting separately instead of relying only on global exposure:
 
 ```js
-fx.update({
+effects.update({
   irradianceScale: 0.15,
   aerialPerspectiveStrength: 0.2,
-  volumetricLight: { mode: "volumetric", intensity: 2 },
-  cloud: {
-    skyIrradianceScale: 1.8,
-    groundIrradianceScale: 1.3,
-  },
-});
+  volumetricLight: { mode: 'volumetric', intensity: 2 },
+  cloud: { skyIrradianceScale: 1.8, groundIrradianceScale: 1.3 },
+})
 ```
 
-`irradianceScale` affects the ground; the two cloud irradiance controls affect cloud fill light. `volumetricLight.intensity` adjusts independent volumetric scattering. In legacy mode, `cloud.hazeDirectLightScale` and `cloud.hazeSunColor` retain their sunlight controls. Exposure changes the final tone-mapped image.
-
-### Reduce rendering cost
+Reduce volumetric light quality, simplify distant clouds earlier, and disable AO:
 
 ```js
-fx.update({
-  volumetricLight: { mode: "volumetric", quality: "low" },
-  cloud: {
-    lodRange: [120000, 300000],
-  },
+effects.update({
+  volumetricLight: { mode: 'volumetric', quality: 'low' },
+  cloud: { lodRange: [120000, 300000] },
   hbao: false,
-});
+})
 ```
 
-This example starts distance-based simplification sooner, reduces the independent volumetric-light budget and disables AO. Evaluate the resulting detail and shading in your scene. Keep altitude fading enabled when the application includes high-altitude views.
-
-### Control sun time and weather motion
+Control sun time and weather movement separately:
 
 ```js
-fx.update({ time: "2026-05-01T06:00:00Z" });
-viewer.clock.shouldAnimate = false;
-fx.localWeatherVelocity = [0, 0];
+effects.update({ time: '2026-05-01T06:00:00Z' })
+viewer.clock.shouldAnimate = false
+effects.localWeatherVelocity = [0, 0]
 ```
 
-The Viewer clock controls celestial time. Weather offsets advance using elapsed wall time, so pausing the clock does not automatically stop them. The final line stops weather-map advection; advanced shape/detail velocities on the underlying pass are separate.
+Pausing the Viewer clock does not stop weather map movement. Weather velocity is measured in UV/second, not meters/second. Other lower-level cloud shape or detail motion is not controlled by this weather map setting.
 
-## Advanced pass access
+### Advanced Pass controls
 
-The underlying pass exposes optional surface snow cover and rain/flash overlays:
+Prefer `update()` for normal use. `effects.pass` exposes the following advanced members. Direct changes do not update the configuration snapshot and may bypass top-level parameter validation:
 
-```js
-fx.pass.showSnow = true;
-fx.pass.showRain = true;
-```
-
-These setters rebuild the affected stages. Snow uses `BetterSkyAssets/snowCoverMask.png`; `showRain` enables flashes and screen rain streaks over scene surfaces. These are pass-level controls, not constructor options on BetterSky.
-
-Keep `systemLight: true` for consistent sunlight across effects. With `false`, the atmosphere/composition path uses custom sun uniforms while the cloud and cloud-shadow passes still read Cesium's system sun. This is not a unified custom-light API.
-
-## Scene behavior and lifecycle
-
-The pipeline applies the following scene changes:
-
-| When | Behavior |
+| Member | Access / purpose |
 | --- | --- |
-| Construction with `applySceneSettings: true` | Set HDR, logarithmic depth and gamma; enable `globe.depthTestAgainstTerrain`. |
-| Construction/update with a defined `time` and a Viewer | Set `viewer.clock.currentTime`. |
-| First enabled frame | Snapshot and override built-in sky atmosphere, sky box, sun, fog, ground atmosphere and globe lighting. Set globe tile cache size to 2000 and maximum screen-space error to 2. |
-| Disable or dispose | Restore the sky/globe fields captured in that enabled-frame snapshot. |
-| `update()` | Apply supplied HDR/log-depth/gamma fields unless that particular call includes `applySceneSettings: false`. |
-
-`applySceneSettings: false` does not opt out of sky/globe takeover. It also does not suppress setting `time`; use `time: undefined` to preserve the clock. If a later update should leave supplied scene settings unapplied, include `applySceneSettings: false` in that update too.
-
-HDR, logarithmic depth, gamma, terrain depth testing and the clock are not restored automatically. Save and restore them yourself if your application needs that behavior.
+| `stage`, `ready`, `name` | Read-only stage reference, stage readiness, and name; `ready` does not mean all asynchronous assets are ready. |
+| `enabled` | Read/write sky Pass switch; use `effects.enabled` to coordinate HBAO / SMAA as well. |
+| `coverage`, `toneMappingExposure` | Read/write coverage/exposure; prefer the top-level APIs to keep configuration and cloud history consistent. |
+| `toneMappingMode` | Write only; supports the tone mapping modes above and rebuilds the stage on assignment. |
+| `localWeatherVelocity` | Read/write `Cartesian2`, in UV/second. |
+| `aerialPerspectiveStrength` | Read/write aerial perspective strength, `[0, 1]`. |
+| `cloudAltitudeFadeRange` | Read/write altitude range or `null`, with the same units as `cloud.altitudeFadeRange`. |
+| `setVolumetricLightOptions(options)` | Partially updates volumetric light using `BetterSkyVolumetricLightOptions`; prefer top-level `update()`. |
+| `showSnow`, `showRain` | Write-only booleans, both defaulting to `false`; enable surface snow or rain streaks/flashes, rebuilding the affected stages. |
+| `isDestroyed()` | Returns whether the Pass has been destroyed. |
 
 ```js
-fx.enabled = false; // Temporarily disable.
-fx.enabled = true;  // Resume; cloud history is refreshed.
-
-// When leaving the scene:
-fx.dispose();
-viewer.destroy();
+effects.pass.showSnow = true
+effects.pass.showRain = true
 ```
 
-Call `dispose()` before `viewer.destroy()`; do not use the instance afterward. Disposal is idempotent and cleans up the instance-owned effect textures, framebuffers, shadow resources and shader-cache references through its passes. Host default textures and shared viewport geometry remain under host/shared ownership.
+Rain and snow are not top-level constructor or `update()` options. These setters cannot read the current toggle state. Snow requires `BetterSkyAssets/snowCoverMask.png`.
 
-It is safe to dispose while initial assets are loading, then create a replacement after disposal returns. Requests are not actively aborted. Reading `assetsReady` starts the six required sky resources on demand, including while disabled; inspect `assetErrors` after it settles. Optional snow and SMAA are outside that wait. Late completion callbacks check the destroyed state and skip GPU resource creation. SMAA prevents duplicate concurrent lookup loads per stage, and its callbacks also respect disposal.
+### Disposal
 
-Disposal does not remove installed context helpers or added sun fields on `context.uniformState`. Math conveniences now use internal types without modifying shared Cesium prototypes, and HBAO owns its stage/camera state per instance. Renderer internals are concentrated in an adapter and still require upgrade validation. The public one-active-instance-per-page restriction remains.
+```js
+effects.dispose()
+viewer.destroy() // Only if the application also needs to destroy the Viewer.
+```
 
-## Troubleshooting
+Dispose of the effects before destroying the host Viewer. Calling `dispose()` repeatedly is safe. The current repository also supports disposal while assets are loading: requests are not actively aborted, and late callbacks skip GPU creation. Asset state and configuration snapshots remain readable after disposal; parameter updates and loading retries are prohibited.
 
-| Symptom | Check |
+## Parameters
+
+The defaults below match `BetterSky.defaultOptions` in the current repository. All numeric values must be finite; `NaN` and infinity are invalid. All options below support `update()` except the constructor-only `hbao.denoise`. Scene and time options follow their own application rules.
+
+### General options
+
+| Parameter | Type | Default | Meaning / range |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | Master switch coordinating configured HBAO, SMAA, and volumetric light; retains resources when disabled. |
+| `coverage` | number | `0.34` | Overall weather coverage `[0, 1]`, controlled separately from per-layer density. |
+| `localWeatherVelocity` | 2D vector | `[0.0003, 0.0001]` | Weather map UV offset per second. Negative values reverse direction; `[0, 0]` stops weather map movement. |
+| `toneMappingMode` | number | `9` | `2` Reinhard2, `4` Uncharted2, `7` AgX, `8` Neutral, `9` ACES, `10` Linear, `11` Reinhard, `12` Cineon. Changes rebuild the sky stage. Mode `3` is unsupported. |
+| `toneMappingExposure` | number | `2.8` | Nonnegative brightness multiplier; higher values are brighter. Not measured in EV. |
+| `irradianceScale` | number | `0.15` | Nonnegative surface irradiance multiplier, separate from cloud fill lighting. |
+| `aerialPerspectiveStrength` | number | `0.15` | Surface aerial perspective blend strength `[0, 1]`; `0` disables this blend. |
+| `darkParamY` | number | `0.5` | Night sky glow modulation. Any finite number is accepted; `[0, 1]` is recommended. |
+| `bloomIntensity` | number | `0.002` | Nonnegative bloom intensity; `0` removes its intensity contribution without releasing the stage. |
+| `systemLight` | boolean | `true` | Follows Cesium's sun direction; keeping `true` is recommended. See [Notes](#notes). |
+| `applySceneSettings` | boolean | `true` | Controls whether scene settings apply in the current call. See [Scene settings and disposal](#scene-settings-and-disposal). |
+| `highDynamicRange` | boolean | `true` | Scene HDR, governed by `applySceneSettings` in the current call. |
+| `logarithmicDepthBuffer` | boolean | `true` | Scene logarithmic depth, governed by `applySceneSettings` in the current call. |
+| `gamma` | number | `2.2` | Positive scene display gamma, separate from HBAO gamma. |
+| `hbao` | boolean / object | HBAO options below | `false` disables; `true` enables; an object overrides specified values and enables HBAO. Re-enabling restores saved values. |
+| `smaa` | boolean | `true` | SMAA anti-aliasing for the final image. |
+| `time` | string / null / undefined | `"2026-05-01T06:00Z"` | Valid ISO 8601 time; `Z` means UTC. Omitting it during construction uses the preset time; explicit `null` / `undefined` preserves the application clock. Omitting it in `update()` also preserves the clock. Has no effect when only a Scene is provided. |
+
+### Cloud layers and visibility
+
+2D vectors accept `[x, y]` or Cesium `Cartesian2`. 4D vectors accept `[layer 1, layer 2, layer 3, reserved]` or `Cartesian4`; keep the fourth component at `0` by convention. Cloud base altitude is relative to the rendered planet surface, not the terrain height at each location. By default, the first two layers cast cloud shadows; choosing a cloud type does not change which layers cast shadows.
+
+| Parameter | Type | Default | Meaning / range |
+| --- | --- | --- | --- |
+| `cloud.layerTypes` | Three-element array / null | `["cumulus", "altocumulus", "cirrus"]` | Each element is `cumulus`, `altocumulus`, or `cirrus`; `null` uses generic cloud shapes. |
+| `cloud.altitudes` | 4D vector | `[4000, 6000, 10000, 0]` | Cloud base altitudes in meters; each component must be finite. |
+| `cloud.heights` | 4D vector | `[1300, 1800, 650, 0]` | Nonnegative cloud thicknesses in meters; cloud top = base altitude + thickness. |
+| `cloud.densityScales` | 4D vector | `[0.12, 0.09, 0.0015, 0]` | Nonnegative cloud density multipliers; `0` removes the medium in that layer. |
+| `cloud.shapeDetailAmounts` | 4D vector | `[0.18, 0.12, 0, 0]` | Each component is `[0, 1]`; higher values produce more eroded cloud edges. |
+| `cloud.lodRange` | Two-element array / null | `[200000, 500000]` | Near/far camera distance thresholds for detail, in meters, with `0 ≤ near < far`; `null` disables distance-based LOD. |
+| `cloud.altitudeFadeRange` | Two-element array / null | `[30000, 90000]` | Fade range based on camera ellipsoid height, in meters, with `0 ≤ start < end`; affects clouds, cloud shadows, and related light shafts. `null` disables fading. |
+| `cloud.skyIrradianceScale` | number | `1.8` | Nonnegative sky fill multiplier affecting clouds and legacy haze. |
+| `cloud.groundIrradianceScale` | number | `1.3` | Nonnegative ground-reflected fill multiplier for clouds, separate from `irradianceScale`. |
+
+Distance-based LOD does not move the clouds or disable camera altitude fading. By default, clouds fade out completely at a camera altitude of 90 km. Adjust the range or pass `null` if clouds should remain visible at higher altitudes.
+
+### Volumetric light
+
+`volumetricLight.mode` is `volumetric` (the default standalone volumetric light), `legacy` (the older haze options), or `off` (disables both additional volumetric light paths). Atmosphere, cloud lighting, bloom, and lens flare remain independently controlled.
+
+| Parameter | Type | Default | Meaning / range |
+| --- | --- | --- | --- |
+| `volumetricLight.mode` | string | `"volumetric"` | `"volumetric"`, `"legacy"`, or `"off"`. |
+| `volumetricLight.density` | number | `0.000008` | Nonnegative extinction density, in inverse meters; `0` removes this medium. |
+| `volumetricLight.intensity` | number | `2` | Nonnegative scattering brightness multiplier; `0` removes scattered brightness while retaining medium extinction. |
+| `volumetricLight.layerDepth` | number | `2400` | Positive volumetric layer thickness below the lowest active shadow-casting cloud base, in meters; the bottom is clamped to the rendered planet surface. |
+| `volumetricLight.maxDistance` | number | `16000` | Positive maximum viewing distance in meters, limited by terrain and planet occlusion. |
+| `volumetricLight.anisotropy` | number | `0.55` | Forward scattering preference `[0, 0.9]`; `0` is isotropic. Higher values concentrate scattering toward views facing the sun. |
+| `volumetricLight.quality` | string | `"balanced"` | `"low"`, `"balanced"`, or `"high"`; higher quality generally costs more GPU time and memory. |
+
+The default volumetric layer spans planet altitudes of 1600–4000 m and does not follow terrain elevation. `layerDepth` and `maxDistance` control the affected air volume, `density` controls its concentration, and `intensity` controls brightness. Use `mode: "off"` to disable additional volumetric light entirely. Quality changes reallocate related resources; switching to `legacy` / `off` releases the standalone volumetric light's offscreen resources.
+
+An explicit `volumetricLight.mode` takes priority in the current constructor or update call. If that call contains any `cloud.haze*` field without an explicit mode, it selects `legacy` automatically. Other partial updates retain the current mode, and mode changes preserve existing haze options.
+
+```js
+effects.update({ volumetricLight: { mode: 'volumetric', quality: 'low' } })
+effects.update({ volumetricLight: { mode: 'off' } })
+effects.update({ cloud: { hazeDensityScale: 0.000008 } }) // Switches to legacy.
+```
+
+### Legacy haze
+
+These fields control the older haze path in `legacy` mode. `cloud.maxShadowLengthRayDistance` also limits atmospheric shadow length. Prefer `volumetricLight` for new integrations.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `cloud.hazeDensityScale` | number | `0.000008` | Nonnegative medium density; 0 removes additional haze contributions. |
+| `cloud.hazeCloudAttached` | boolean | `true` | true integrates a local world-space layer below cloud bases, with optional ground fog; false uses exponential height fog. |
+| `cloud.hazeGroundDensityScale` | number | `0` | Ground density multiplier [0, 1] in local mode; 0 retains only cloud-base shafts, and 1 restores the full near-ground layer. |
+| `cloud.hazeViewDistance` | number | `16000` | Maximum viewing distance for the local layer, in positive finite meters. |
+| `cloud.hazeVolumeLength` | number | `1200` | Maximum accumulated medium path length through the local layer, in positive finite meters; gaps do not count toward the length. |
+| `cloud.hazeDirectLightScale` | number | `8` | Nonnegative direct sunlight scattering gain, separate from medium extinction. |
+| `cloud.hazeQuality` | string | `"high"` | Integration sample budget / cloud shadow filter samples: low = 16 / 1; balanced = 24 / 2; high = 32 / 4. |
+| `cloud.hazeHeightFalloff` | number | `1200` | Positive finite height scale in meters for exponential height decay or local layer thickness. |
+| `cloud.hazeAnisotropy` | number | `0.55` | Forward scattering preference [0, 0.9]; 0 is isotropic. |
+| `cloud.maxShadowLengthRayDistance` | number | `6000` | Maximum atmospheric shadow integration length, in positive finite meters; also limits the haze path in exponential mode. |
+| `cloud.hazeSunColor` | array | `[1, 0.78, 0.42]` | Three nonnegative linear RGB multipliers, not 0–255 sRGB values. |
+
+Haze is also modulated by effective cloud coverage after camera altitude fading: its contribution is zero at coverage ≤ 0.2 and increases gradually between 0.2–0.4. Local mode also requires at least one of the first two layers to be active and cast cloud shadows. Increasing haze density alone cannot bypass these conditions.
+
+### Cloud denoising
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `cloud.denoise.temporalAlpha` | number | `0.04` | Current-frame weight [0, 1]; lower values rely more on history and reduce noise more strongly. |
+| `cloud.denoise.currentFrameAlpha` | number | `0.08` | Current-frame weight [0, 1] for newly sampled pixels; higher values reveal new detail sooner but can expose more noise. |
+| `cloud.denoise.motionAlpha` | number | `0.25` | Raises the accumulation baseline during camera motion, in [0, 1]; the final blend weight still adapts. |
+| `cloud.denoise.varianceGamma` | number | `2` | Positive finite variance clipping multiplier; higher values allow a wider range of historical colors. |
+| `cloud.denoise.spatialFilterStrength` | number | `0.8` | Depth/transparency-aware reconstruction strength [0, 1]; higher values smooth more but lose more detail. |
+
+Greater reliance on history reduces noise but can increase ghosting; stronger spatial filtering softens detail. SMAA handles final-image edges and does not replace cloud denoising.
+
+`cloud.denoise` applies to clouds and legacy haze. It does not adjust denoising for standalone volumetric light.
+
+### HBAO
+
+Enabled by default with the values below and `denoise: true`. During construction, `hbao: true` uses the defaults, and an object overrides individual values. At runtime, `false` disables HBAO while retaining values, `true` re-enables it, and an object partially updates values and enables it.
+
+| Parameter | Type | Default | Meaning / range |
+| --- | --- | --- | --- |
+| `hbao.intensity` | number | `100` | Nonnegative occlusion intensity exponent; higher values deepen contact shadows. |
+| `hbao.maxRadius` | number | `30` | Nonnegative sample radius in meters; large values may cause dark halos. |
+| `hbao.bias` | number | `0.1` | Finite angular bias in radians; increasing it can reduce self-occlusion. |
+| `hbao.frustumLength` | number | `100000` | Positive maximum processing depth in meters. |
+| `hbao.blackPoint` | number | `0.05` | Input black point, `[0, 1)`. |
+| `hbao.whitePoint` | number | `0.9` | Nonnegative output brightness multiplier. |
+| `hbao.gamma` | number | `2.5` | Positive AO curve exponent, separate from scene `gamma`. |
+| `hbao.denoise` | boolean | `true` | Bilateral filtering switch, configurable only during construction; dispose and recreate to change it. |
+
+The current `BetterSkyUpdateOptions` type excludes `hbao.denoise`. JavaScript runtime validation also rejects changing it; supplying its current value does not throw.
+
+### TypeScript types
+
+Use `BetterSkyOptions` for constructor options and the current repository's `BetterSkyUpdateOptions` for partial updates. Other public types include `BetterSkyVector2`, `BetterSkyVector4`, `BetterSkyQuality`, `BetterSkyCloudType`, `BetterSkyToneMappingMode`, the Options interfaces for clouds, denoising, volumetric light, and HBAO, and `BetterSkyPass`. The current repository also provides `BetterSkyAssetStatus`, `BetterSkyAssetError`, and `BetterSkyConstructor`. Refer to the declarations bundled with the version you installed.
+
+```ts
+import { BetterSky, type BetterSkyOptions } from 'bettersky-cesium'
+
+const options: BetterSkyOptions = {
+  time: undefined,
+  cloud: { altitudes: [4000, 6000, 10000, 0] },
+}
+const sky = new BetterSky(viewer, options)
+```
+
+## Notes
+
+### Scene settings and disposal
+
+| When | Effect on the host |
 | --- | --- |
-| Missing or incorrect sky/clouds at startup | Inspect failed requests under `/cesium/BetterSkyAssets/GeospatialAssets/`, including EXR/BIN files. Verify `CESIUM_BASE_URL`, directory casing and WebGL support. Resources load asynchronously. |
-| Clouds disappear when zooming out | Check `cloud.altitudeFadeRange`; the default reaches zero at 90 km camera ellipsoid height. Use `null` to disable this fade if needed. |
-| Little or no volumetric light | Check `volumetricLight.mode`, active shadow-casting layers and sun/view direction. Look toward the sun or a cloud gap; other directions naturally scatter less light. In volumetric mode, check `density`, `intensity`, `layerDepth` and `maxDistance`; weather holes do not turn off its medium. In legacy mode, check `cloud.hazeDensityScale`, coverage gating and local distance limits. |
-| Broad haze instead of distinct shafts | Check that clouds create actual light/shadow gaps. Reduce `density`, `layerDepth` or `maxDistance` to limit the affected air; adjust `intensity` separately for brightness. Raising global exposure/Bloom also brightens other effects and does not restore missing shadow boundaries. |
-| Bright rings or ghosts around the sun | These belong to lens flare, not the cloud-gap volumetric shafts. Switching volumetric light off does not disable lens flare. |
-| Motion trails or noisy distant clouds | Adjust denoising weights incrementally, keep footprint filtering/LOD in mind and avoid continuously resetting cloud parameters. |
-| Missing cloud shadow from the third layer | The default shadow mask includes only the first two layers. |
-| SMAA has no effect immediately after startup | Its lookup textures load asynchronously; the first rendered frame is not a readiness guarantee. |
-| Sun is frozen but clouds keep moving | Pause weather motion separately from the Viewer clock. |
-| Terrain or imagery is unavailable | Check the demo credentials; empty credentials intentionally select the local imagery/ellipsoid fallbacks. |
+| Construction with `applySceneSettings: true` | Sets HDR, logarithmic depth, and gamma, and enables terrain depth testing. |
+| Construction / update with a valid `time` | Changes the Viewer clock; has no effect when only a Scene is provided. |
+| First enabled frame | Temporarily takes over the built-in sky, atmosphere, sun, fog, and some globe settings; sets the tile cache to 2000 and maximum screen-space error to 2. |
+| Disable / dispose | Restores the sky and globe settings captured when enabled. |
+| `update()` | Applies HDR, logarithmic depth, and gamma supplied in that call, unless the call explicitly includes `applySceneSettings: false`. |
 
-## Explore the implementation
+`applySceneSettings: false` does not prevent sky takeover or time changes. Setting it to `false` during construction does not automatically constrain later updates; pass it explicitly in each relevant update to preserve application scene settings.
 
-- [src/index.ts](src/index.ts): public types and SDK build entry; [src/options.js](src/options.js): defaults, normalization and validation.
-- [BetterSky.js](BetterSky.js): JavaScript runtime entry, unified updates and lifecycle.
-- [Architecture and boundaries](SDK_ARCHITECTURE.md) and [demo deployment](demo/README.md): responsibilities and GitHub Pages workflow.
-- [GeospatialPipelinePass.js](Library/GeospatialPipelinePass.js): scene integration, atmosphere and composition.
-- [CloudsMaterialPass.js](Library/geospatial/CloudsMaterialPass.js): cloud/light integration and temporal reconstruction.
-- [VolumetricLightPass.js](Library/geospatial/VolumetricLightPass.js) and [FocusedCloudShadowPass.js](Library/geospatial/FocusedCloudShadowPass.js): independent local volumetric light, temporal history and focused sunlight visibility.
-- [Volumetric-light shaders](Library/shaders/geospatial/volumetricLight.frag.glsl), [temporal resolve](Library/shaders/geospatial/volumetricLightResolve.frag.glsl) and [composition](Library/shaders/geospatial/volumetricLightComposite.glsl): medium integration, centroid reprojection and cloud/terrain edge handling.
-- [ShadowMaterialPass.js](Library/geospatial/ShadowMaterialPass.js) and [AerialPerspectiveEffect.js](Library/geospatial/AerialPerspectiveEffect.js): cloud shadow generation and application.
+Clock, HDR, gamma, logarithmic depth, and terrain depth testing are not automatically restored on disable / disposal. Save and restore their original values in the application if needed. The current repository releases rendering resources owned by the instance but leaves installed context helper methods in place. Do not continue using cached Pass or stage references.
+
+### Continuous rendering and performance
+
+Use `requestRenderMode: false` where possible. With explicit rendering, the application must continuously request new frames for cloud animation and image stabilization. The SDK does not schedule `scene.requestRender()`.
+
+First control the application's drawing buffer size. Then, as needed for the scene, reduce `volumetricLight.quality`, disable unused HBAO / SMAA, or set earlier `cloud.lodRange` thresholds. Keep an altitude fade range appropriate to the application. Disabling the master switch only pauses effects; use `dispose()` to release resources.
+
+Exposure and cloud fill lighting adjust brightness; density, layer thickness, and distance also change the apparent volume. Frequent instance recreation, tone mapping changes, or large cloud/lighting updates can affect stability and cost. Cloud denoising trades smoothness against detail and motion ghosting; it does not control standalone volumetric light history.
+
+### Compatibility and deployment
+
+Dependency ranges specify minimum supported versions, not verification of every later release. The SDK uses Cesium renderer internals. After upgrading Cesium, its engine / widgets, or three, verify initialization, parameter updates, resizing, and disposal/recreation. Retain the complete lockfile. For dependency errors such as missing exports, check the complete dependency combination first; this SDK does not require manually installing Cesium's internal components.
+
+Use only supported 3D perspective scenes. Dispose of the effects before switching to 2D / Columbus View. On SSR pages, initialize after client mounting. Screen-space reflections and subsurface scattering are not currently supported. Keep `systemLight: true`; `false` makes only some effects use a custom sun direction supplied through `scene.context.uniformState.sunDirectionWC2`, while clouds and cloud shadows still follow Cesium's sun. This is not a unified custom-light API.
+
+Asset requests must return the actual files, not the application's HTML fallback. Upgrade JS and `BetterSkyAssets/` together and invalidate old caches. Include [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) when distributing SDK runtime builds, and follow the complete license terms.
+
+### Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Sky or clouds are invisible | Check the console, WebGL capabilities, and EXR / BIN / PNG requests under `CESIUM_BASE_URL`, including directory casing and response content. |
+| Clouds disappear when zooming out | Check `cloud.altitudeFadeRange`; clouds fade out completely at a camera altitude of 90 km by default. |
+| Volumetric light is weak | Check mode, active shadow-casting cloud layers, sun/view direction, and density / intensity / layerDepth / maxDistance. Shafts are easier to see facing the sun through cloud gaps. |
+| Legacy haze is invisible | Effective coverage ≤ 0.2 gives no contribution. Local mode also requires at least one active shadow-casting layer among the first two layers. |
+| Light shafts look like widespread fog | Reduce density, layer thickness, or distance, and adjust brightness separately. Check whether the clouds leave gaps between lit and shadowed areas. |
+| A halo remains near the sun | Lens flare and volumetric light are controlled separately; disabling volumetric light does not disable lens flare. |
+| The third layer does not cast cloud shadows | Only the first two layers cast shadows by default; changing cloud types does not change this. |
+| SMAA is not active immediately after enabling | Lookup textures load asynchronously. Neither the first frame nor `assetsReady` indicates SMAA readiness. |
+| Clouds still move after pausing time | Set `localWeatherVelocity: [0, 0]` separately; handle other lower-level motion controls independently. |
+| Asset state or snapshot API calls fail | Check whether the installed package is the older npm `0.1.0`; these APIs were added in the current repository. |
+| Demo basemap or terrain differs from expectations | Without service credentials, the demo uses the local NaturalEarthII basemap and ellipsoid terrain. See the [demo guide](demo/README.md). |

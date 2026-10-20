@@ -1,136 +1,58 @@
-# BetterSky 渲染原理与 API 参考
+# BetterSky 使用指南与 API 参考
 
 [English](BetterSky.README.md) | **简体中文** · [项目介绍](README.zh-CN.md)
 
-本文是仓库内参考文档，介绍渲染原理、示例与源码接入、参数配置及生命周期管理，不随 npm 包发布。
+本文说明 SDK 的接入、配置与使用注意事项。
 
-计划中的 npm/pnpm 包接入见[使用](README.zh-CN.md#使用)。SDK 作为 CesiumJS 插件，直接使用宿主已有的 `CESIUM_BASE_URL`，将 `node_modules` 中的随包资源复制到该 Cesium 资源根目录下的 `BetterSkyAssets/` 即可。SDK 打包与这些示例尚待发布验收。下文复制源码的步骤描述当前仓库流程，不代表未来 npm 包的内容。
+[使用方式](#使用方式) · [参数说明](#参数说明) · [注意事项](#注意事项)
 
-## 环境要求
+## 使用方式
 
-| 依赖 | 仓库配置 |
-| --- | --- |
-| Node.js | 22 或更高版本 |
-| 包管理器 | pnpm 12.8.1 |
-| Cesium | 支持范围 `>=1.142.0`；仓库锁文件使用 1.142.0 作为可复现开发基线 |
-| three | 支持范围 `>=0.160.1`；仓库锁文件使用 0.160.1 作为可复现开发基线；纹理加载器与级联阴影的运行时依赖 |
-| 示例工具 | 锁文件中的 Vite 8.3.4、vite-plugin-static-copy 4.1.1、TypeScript 7.0.2（开发建议 Node 24） |
-| 浏览器 / GPU | 支持 WebGL 2、三维/数组纹理、浮点渲染目标的现代浏览器，同时需要原生 `Float16Array` 和 `structuredClone` |
+### 版本适用范围
 
-同页使用一个活动的 BetterSky 实例管理一个包含地球的 Viewer，目标场景为三维透视模式。支持范围包含更高依赖版本，锁文件则保留开发基线。渲染器内部接口对版本敏感：升级依赖后应在部署前验证兼容性，新版本发布后扩展最低版本/当前最新版本矩阵；版本范围不代表已验证所有未来版本。
+安装示例使用已发布的 npm `0.1.0`；下文参数表以当前仓库公开入口为准。当前源码尚未重新发布，不能根据仓库 `package.json` 仍为 `0.1.0` 就认为 npm 包已包含全部更新。
 
-> **兼容性提示**：SDK 支持下限仍为 `cesium@1.142.0`。它与 engine `26.0.0` / widgets `16.0.0` 的组合已通过验证；但无锁重新安装时，官方 `^` 范围可能解析到 engine `26.4.0` / widgets `16.3.0`，此组合在 Vite 8 下有可独立复现的上游缺失导出问题。请保留已验证的完整锁文件，或在遇到该错误时升级 Cesium；无需为本 SDK 配置内部组件 overrides。详见[安装提示](README.zh-CN.md#安装)。
-
-### 兼容性回归矩阵
-
-下表中的当前最新版本已于 2026-10-18 从 npm registry 核实。四组端点分别覆盖最低版本和当前最新版本，不代表覆盖所有中间版本或未来版本；SDK 打包与安装验收仍单独待实施。
-
-| Cesium | three | 源码浏览器 API 与生命周期回归（2026-10-18） |
+| 能力 | npm `0.1.0` | 当前仓库 |
 | --- | --- | --- |
-| 1.142.0 | 0.160.1 | 通过 |
-| 1.142.0 | 0.186.1 | 通过 |
-| 1.146.0 | 0.160.1 | 通过 |
-| 1.146.0 | 0.186.1 | 通过 |
+| 初始化、局部更新、效果开关、销毁及下文配置分组 | 已提供基础接入 | 保留，并以当前参数校验规则为准 |
+| `getOptions()` 配置快照 | 未提供 | 已提供 |
+| `assetStatus`、`assetErrors`、`assetsReady`、`retryAssets()`、`subscribeAssets()` | 未提供 | 已提供 |
+| 色调模式 `2` / `4`、Pass 雨雪控制 | 运行时已有，旧类型声明未完整覆盖 | 类型声明已补齐 |
+| `hbao.denoise` 与更新专用类型 | 旧类型声明未提供该字段及 `BetterSkyUpdateOptions` | 显式声明仅构造时配置，更新类型排除此字段 |
 
-同一次源码回归通过了 24 项自动测试。浏览器检查覆盖参数更新、开关、尺寸变化及销毁/重建，包括资源加载期间销毁；这些结果不代替 SDK 包的发布验收。
+标注“当前仓库”的示例请在本仓库使用，或等待包含相应能力的新版本发布；不要在 `0.1.0` 上直接调用新增方法。
 
-SSR 和 SSS 不属于 BetterSky 当前支持的功能。
+### 环境要求
 
-## 渲染功能
-
-| 功能 | 效果说明 |
+| 项目 | 要求 |
 | --- | --- |
-| 体积云 | 沿球形云层进行光线步进，结合三维云形与细节纹理、天气图移动、云体自阴影及天空/地面补光。 |
-| 大气与天体光照 | 使用预计算散射和透射率查找表，表现天空颜色、大气透视、日光、月亮及程序生成的夜间星点。 |
-| 体积光 | 在最低有效投影云层的云底下方，用薄层介质表现太阳光束；介质密度向下边界平滑淡出，聚焦云影的日光可见性塑造穿过云隙的光照。 |
-| 地面云影 | 使用级联云影贴图，将随天气移动的云影投射到场景表面；默认由前两层云投射阴影。 |
-| 泛光与镜头光晕 | HDR 亮部提取、降采样/升采样链、模糊、镜头鬼影与光环。 |
-| 色调映射 | 支持 ACES、AgX、Neutral、Linear、Reinhard、Reinhard2、Uncharted2 和 Cineon，并提供曝光及独立地表光照调节。 |
-| HBAO | 基于深度的环境光遮蔽，结合双边滤波增强地形及几何接触处的阴影；可选，默认开启。 |
-| SMAA | 在天空合成后执行三道形态学抗锯齿处理；可选，默认开启。 |
-| 底层扩展效果 | 可通过底层 pass 开启表面积雪覆盖和雨条纹/闪光叠加，默认关闭。 |
+| 应用 | 使用 ESM 构建工具的浏览器项目；在客户端创建实例 |
+| Cesium | `>=1.142.0`，与业务共用一份依赖 |
+| three | `>=0.160.1`，npm 包自动安装的运行时依赖 |
+| 场景 | 包含 `globe`，使用 `SceneMode.SCENE3D` 与 `PerspectiveFrustum` |
+| 浏览器 / GPU | WebGL 2、三维及数组纹理、浮点和半浮点纹理及对应渲染目标、线性过滤；支持 `Float16Array` 和 `structuredClone` |
+| 包安装环境 | npm 包声明 Node.js `>=22.0.0`；具体构建工具还需满足其 Node.js 要求 |
+| 仓库 Demo / 开发 | Node.js `>=22.12.0`，建议 Node.js 24；pnpm 12.8.1 |
 
-默认的独立体积光路径，以及与其互斥的 `legacy`、`off` 模式，见[体积光与旧 haze](#体积光与旧-haze)。
+同页只允许一个活动的 BetterSky 实例。请先销毁旧实例，再创建替代实例。
 
-## 渲染优化
+### 安装
 
-| 优化方向 | 实现机制与作用 |
-| --- | --- |
-| 云体采样成本 | 云体以 `ceil(width / 4) × ceil(height / 4)` 计算，通过 16 相位 Bayer 序列重建至全分辨率，主云体采样像素数约为绘制缓冲的 1/16。 |
-| 云层内有效采样 | 对有效球形云层的射线交段排序、合并，跳过云层间空隙；自适应调整步长，并在透射率足够低时提前结束。 |
-| 远景云细节 | 根据屏幕像素覆盖范围选择纹理 mip，连续淡出细节，并采用确定性的次级光照采样，减少无法分辨的细节与帧间跳变。 |
-| 云体时域稳定性 | 使用运动重投影、方差裁剪、深度/透明度检查及相机运动感知混合，平衡静止降噪与运动拖影；相机、投影、光照或云参数发生重要变化时清除历史。 |
-| 地形轮廓与距离精度 | 云重建在地形边缘参考全分辨率场景深度；云深度/速度缓冲使用 32 位浮点，避免半精度距离存储的 65,504 上限。 |
-| 云影稳定与柔化 | 结合阴影像素覆盖范围过滤和时域积累；地表着色采用固定采样方向的透射率 PCF、级联混合及最低补光，缓和阴影交界的过黑与跳动。 |
-| 独立体积光 | 使用独立采样预算、聚焦云影图及其时域历史表现局部光束，结合全分辨率地形深度与云前沿深度进行重建；介质范围、质量预算及边缘处理见[独立体积光](#独立体积光)。 |
-| 高空场景 | 默认在相机椭球高度 30–90 km 之间联动淡出云、云影与相关光束；完全淡出后跳过云体和云影绘制。 |
-| 大气与泛光 | 大气散射数据来自预计算纹理；泛光先处理逐级缩小的图像金字塔，再完成合成。 |
-
-1/16 指云体采样分辨率比例，不代表整体帧率提升倍数。实际性能取决于 GPU、绘制缓冲大小、观察视角及开启的效果。示例独立设置的绘制缓冲上限见[运行示例](#运行示例)，体积光的实测开销见[性能与验证参考](#性能与验证参考)。
-
-## 管线如何协作
-
-```text
-Cesium 场景颜色 + 深度
-  → HBAO（可选）
-  → 大气 + 体积云 + 云影 + 体积光
-  → 泛光 / 镜头光晕 + 色调映射
-  → SMAA（可选）
-```
-
-SDK 将渲染阶段接入 `scene.postProcessStages`，通过 `scene.preRender` 更新光照、天气移动及离屏处理。
-
-## 运行示例
-
-在仓库根目录执行：
+在接入项目中任选一条命令：
 
 ```bash
-pnpm install --frozen-lockfile
-cp demo/.env.example .env.local
+npm install bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
-
-按需填写 `.env.local`：
-
-```dotenv
-VITE_CESIUM_ION_TOKEN=你的_Cesium_Ion_token
-VITE_TIANDITU_TOKEN=你的_天地图_key
-```
-
-留空会使用相应的回退配置：没有天地图 key 时使用本地 NaturalEarthII 底图，没有 Ion token 时使用椭球地形。全球地形异步加载，失败后继续使用椭球地形。
-
-`.env.local` 已被 Git 忽略。`VITE_` 变量会写入浏览器代码，仅填写客户端服务凭据；修改后需重启开发服务。
 
 ```bash
-pnpm dev
+pnpm add bettersky-cesium@0.1.0 "cesium@>=1.142.0"
 ```
 
-打开 Vite 输出的地址，通常为 [http://localhost:3000/](http://localhost:3000/)。3000 端口被占用时会选择其他端口。示例包含参数控件、帮助说明、重置按钮及时间轴；可以在浏览器控制台访问 `window.viewer` 和 `window.fx`。
+包提供具名与默认导出及 `dist/index.d.ts`，无需单独安装类型包。当前仓库的声明还提供中文字段注释，可在编辑器中查看含义、单位、默认值和约束。
 
-```bash
-pnpm run build:demo # 将 demo/index.html 构建到 dist-demo/
-pnpm preview        # 预览 dist-demo/，以终端输出地址为准
-pnpm run build:sdk  # 独立 SDK 构建，入口 src/index.ts
-```
+### 资源与部署
 
-示例会调整 `viewer.resolutionScale`，将大窗口的绘制缓冲限制在约 400 万像素。自行接入 SDK 的应用需要管理自己的整体渲染分辨率。
-
-## 以源码接入其他项目
-
-当前仓库以源码模块形式提供 SDK。复制 `BetterSky.js`、完整 `src/`、`Library/` 目录及 `static/BetterSkyAssets/`，保留相对路径。公开构建入口为 `src/index.ts`，默认预设与校验位于 `src/options.js`；JavaScript 运行入口继续兼容。
-
-着色器源码位于 `Library/shaders/`，通过 Vite 的 `?raw` 导入为字符串，例如从项目根目录的模块中使用 `import shaderSource from './Library/shaders/geospatial/cloudsMaterial.frag.glsl?raw'`。接入 Vite 项目无需额外 GLSL 插件；复制库时必须包含该目录。其他构建工具需要提供等效的原文字符串导入支持。
-
-安装支持范围内的依赖：
-
-```bash
-pnpm add "cesium@>=1.142.0" "three@>=0.160.1"
-```
-
-仓库锁文件使用 Cesium 1.142.0 和 three 0.160.1 来复现开发基线。源码接入不要求固定为这两个版本，应用可在支持范围内锁定已经验证的版本。
-
-### 部署静态资源
-
-将 `CESIUM_BASE_URL` 指向部署后的 Cesium 资源根目录。仓库使用 `/cesium/`，结构如下：
+SDK 复用宿主的 `CESIUM_BASE_URL`。将 `node_modules/bettersky-cesium/dist/assets/` 内的内容部署到该根目录下的 `BetterSkyAssets/`，与 Cesium 的 `Workers/` 同级：
 
 ```text
 /cesium/
@@ -139,187 +61,271 @@ pnpm add "cesium@>=1.142.0" "three@>=0.160.1"
   ThirdParty/
   Widgets/
   BetterSkyAssets/
-    ...其他效果资源
+    snowCoverMask.png
     GeospatialAssets/
       *.exr
       *.bin
       *.png
 ```
 
-前四个目录来自 `node_modules/cesium/Build/Cesium/`；将完整 `static/BetterSkyAssets/` 复制到它们旁边。`GeospatialAssets` 的拼写及大小写必须一致，里面包含大气查找表、三维噪声和天气纹理。
+手动复制时，Vite 项目可放入 `public/cesium/`；`dist/assets/` 的内容对应 `public/cesium/BetterSkyAssets/`，不要再嵌套一层 `assets/`。
 
-本仓库的 [Vite 配置](vite.config.js) 已完成资源服务与复制。其他 Vite 项目需安装 `vite-plugin-static-copy`，并将等效设置合并到已有配置：
+推荐用 `vite-plugin-static-copy` 同步开发和生产构建资源：
+
+```bash
+npm install -D vite-plugin-static-copy@4.1.1
+```
+
+将下面配置合并到接入项目的 Vite 配置；已有 Cesium 资源部署时，仅追加 BetterSky 的复制项：
 
 ```js
-import { defineConfig } from "vite";
-import { viteStaticCopy } from "vite-plugin-static-copy";
+import { defineConfig } from 'vite'
+import { viteStaticCopy } from 'vite-plugin-static-copy'
+
+const base = '/' // 子路径部署时改为 '/app/'。
 
 export default defineConfig({
-  define: {
-    CESIUM_BASE_URL: JSON.stringify("/cesium/"),
-  },
+  base,
+  define: { CESIUM_BASE_URL: JSON.stringify(`${base}cesium/`) },
   plugins: [
     viteStaticCopy({
       targets: [
         {
-          src: "node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}",
-          dest: "cesium",
+          src: 'node_modules/cesium/Build/Cesium/{Workers,Assets,ThirdParty,Widgets}/**/*',
+          dest: 'cesium',
+          rename: { stripBase: 4 },
         },
         {
-          src: "static/BetterSkyAssets",
-          dest: "cesium",
+          src: 'node_modules/bettersky-cesium/dist/assets/**/*',
+          dest: 'cesium/BetterSkyAssets',
+          rename: { stripBase: 4 },
         },
       ],
     }),
   ],
-});
+})
 ```
 
-部署到子路径时，需要同步调整资源 URL 与服务端目录。其他打包工具也应提供等效的资源目录和基础 URL。
+`stripBase: 4` 去掉来源路径的前四段，保留 `Workers/`、`Assets/`、`GeospatialAssets/` 等内部结构。npm 与 pnpm 使用同样的路径，不访问 `.pnpm/`。开发时由插件提供资源，构建时复制至输出目录。
 
-### 接入 Viewer
+部署到 `/app/` 时，应用 `base`、服务端挂载路径和 `CESIUM_BASE_URL='/app/cesium/'` 必须一致；效果资源从 `/app/cesium/BetterSkyAssets/` 加载。使用其他服务器或 CDN 时，将 `BetterSkyAssets/` 放在已有 Cesium 资源根目录，跨域请求需允许应用访问。其他构建工具提供等效复制和基址配置即可。
 
-在应用入口引入 Cesium 控件样式。创建 Viewer 后接入：
+### 初始化与更新
 
-```js
-import "cesium/Build/Cesium/Widgets/widgets.css";
-import { BetterSky } from "./BetterSky.js";
-
-const fx = new BetterSky(viewer, {
-  time: undefined, // 保留业务当前的时钟时间。
-});
-
-fx.update({
-  coverage: 0.45,
-  volumetricLight: { quality: "balanced" },
-});
-```
-
-`new BetterSky(viewer)` 会应用完整内置预设，包括预设的固定时钟时间。也可传入 `viewer.scene`，此时时钟设置无效。
-
-建议保持 `requestRenderMode: false`，让云动画和时域重建持续获得新帧。若应用采用显式渲染模式，需要自行持续调用 `scene.requestRender()`，并在参数变化后请求一帧；SDK 不会调度这些请求。
-
-## 参数配置
-
-`new BetterSky(viewerOrScene, options?)` 将参数合并到内置默认值。嵌套对象逐字段合并，数组整项替换，只需传入想修改的字段。
-
-合并时会保留显式传入的 `false`、`null` 和 `undefined`，具体含义取决于参数。例如 `time: undefined` 保留 Viewer 时钟；下文支持空值的云参数通过 `null` 关闭对应模式。
+应用已经创建 `viewer` 后，在客户端接入：
 
 ```js
-const defaults = BetterSky.defaultOptions; // 独立的默认配置副本。
-const fx = new BetterSky(viewer, {
-  time: undefined,
+import 'cesium/Build/Cesium/Widgets/widgets.css'
+import { BetterSky } from 'bettersky-cesium'
+
+const effects = new BetterSky(viewer, {
+  time: undefined, // 保留业务时间。
   coverage: 0.5,
-  cloud: { denoise: { motionAlpha: 0.4 } },
-  hbao: false,
-});
+  cloud: { densityScales: [0.12, 0.09, 0.0015, 0] },
+})
+
+effects.update({ cloud: { heights: [1300, 1800, 650, 0] } })
+effects.enabled = false
+effects.enabled = true
 ```
 
-下列默认值来自 [src/options.js](src/options.js)，通过公开入口提供独立副本，会覆盖部分底层 pass 的默认配置。
+`new BetterSky(viewerOrScene, options?)` 接受 Viewer 或 Scene。传入 Scene 时不设置 Viewer 时钟。实例自动注册渲染阶段与逐帧更新，不需要再次添加 `effects.stage` 或手动调用底层更新。
+
+构造参数合并默认值，`update()` 合并已有配置；嵌套对象逐字段合并，数组整体替换。未传字段保持原值；当前仓库除 `time` 外会把显式 `undefined` 当作省略，`null` 仅用于明确支持它的字段。非法字段和值会在参数校验阶段拒绝。
+
+当前仓库中使用 `import { BetterSky } from './src/index.ts'`（相对仓库根目录）可体验未发布能力；仓库 Demo 已使用该入口。
+
+### 配置快照与资源加载（当前仓库）
+
+`BetterSky.defaultOptions` 返回独立的默认预设副本；`effects.getOptions()` 返回独立的已接受配置快照，修改快照不会改变实例。向量在快照中统一为数组，高级 Pass 的直接修改不会同步到快照。
+
+```js
+const current = effects.getOptions()
+console.log(current.coverage)
+
+const unsubscribe = effects.subscribeAssets(() => {
+  if (effects.assetStatus === 'error') console.error(effects.assetErrors)
+})
+
+await effects.assetsReady
+if (effects.assetStatus !== 'disposed') {
+  const errors = effects.assetErrors.filter(item => item.required)
+  if (errors.length > 0) console.error('天空资源加载失败', errors)
+}
+
+// 在界面上的重试操作中调用；完成后仍需检查 assetErrors。
+// await effects.retryAssets()
+
+// 离开页面时取消监听。
+unsubscribe()
+```
+
+读取 `assetsReady` 会启动并等待六项必需的天空资源任务，即使 `enabled: false`。成功、失败或销毁都会正常结算；加载失败不会使 Promise reject，应检查 `assetErrors`。它不等待可选雪纹理或 SMAA 查找纹理，后者不计入这些状态。
+
+`assetStatus` 可为 `idle`、`loading`、`ready`、`error`、`disposed`。可选资源失败也可能显示 `error`；每个错误包含 `id`、`url`、`required` 和原始 `error`。`retryAssets()` 显式重试已失败资源，不重新加载成功项；失败不会每帧自动重试。`subscribeAssets(listener)` 返回取消订阅函数，回调不接收参数，在回调内读取状态。
+
+### 运行时 API
+
+| API | 读写方式 / 用途 |
+| --- | --- |
+| `BetterSky.defaultOptions` | 静态 getter，返回新的默认配置副本。 |
+| `effects.update(options)` | 与便捷 setter 共用校验和应用通路；未知字段或不合法值在提交前拒绝。 |
+| `effects.getOptions()`（当前仓库） | 返回当前已接受配置的独立快照；HBAO 关闭时保留其内部参数供重开恢复。 |
+| `effects.assetStatus` / `effects.assetErrors`（当前仓库） | 天空资源的状态与只读错误快照。 |
+| `effects.assetsReady`（当前仓库） | 读取会按需启动并等待六项必需资源；失败或销毁也结算，不包含 SMAA 和可选雪任务。 |
+| `effects.retryAssets()` / `effects.subscribeAssets(listener)`（当前仓库） | 显式重试失败资源；订阅变化并获得取消订阅函数。 |
+| `effects.enabled` | 读取/设置管线总开关。 |
+| `effects.coverage` | 读取/设置天气覆盖度。 |
+| `effects.toneMappingExposure` | 读取/设置曝光倍率。 |
+| `effects.toneMappingMode` | 仅 setter，切换模式会重建天空渲染阶段。 |
+| `effects.localWeatherVelocity` | 仅 setter，接受数组或 Cartesian2。 |
+| `effects.setCloudAltitudes(value)` | 设置四分量云底高度。 |
+| `effects.setCloudHeights(value)` | 设置四分量云层厚度。 |
+| `effects.setCloudDensityScales(value)` | 设置四分量云密度。 |
+| `effects.setCloudShapeDetailAmounts(value)` | 设置四个 [0, 1] 范围内的细节侵蚀量。 |
+| `effects.hbaoEnabled` / `effects.smaaEnabled` | 读取/设置可选效果。 |
+| `effects.hbaoIntensity` / `effects.hbaoMaxRadius` | 仅 setter，设置 AO 强度/半径。 |
+| `effects.pass` | getter，获取底层 GeospatialPipelinePass，供高级操作。 |
+| `effects.stage` | getter，获取当前天空 PostProcessStageComposite；阶段重建后需重新读取。 |
+| `effects.dispose()` | 幂等移除逐帧监听和注册的阶段，恢复快照中的天空/地球字段，并清理实例拥有的 pass 资源。 |
+
+### 常用配置
+
+分别调整地表与云体补光，避免只提高全局曝光：
+
+```js
+effects.update({
+  irradianceScale: 0.15,
+  aerialPerspectiveStrength: 0.2,
+  volumetricLight: { mode: 'volumetric', intensity: 2 },
+  cloud: { skyIrradianceScale: 1.8, groundIrradianceScale: 1.3 },
+})
+```
+
+降低体积光质量、提前简化远景云并关闭 AO：
+
+```js
+effects.update({
+  volumetricLight: { mode: 'volumetric', quality: 'low' },
+  cloud: { lodRange: [120000, 300000] },
+  hbao: false,
+})
+```
+
+分别控制太阳时间和天气移动：
+
+```js
+effects.update({ time: '2026-05-01T06:00:00Z' })
+viewer.clock.shouldAnimate = false
+effects.localWeatherVelocity = [0, 0]
+```
+
+暂停 Viewer 时钟不会暂停天气图移动；天气速度单位为 UV/秒，不是米/秒。底层云形或细节的其他运动也不受此天气图开关统一控制。
+
+### 高级 Pass 控制
+
+通常优先使用 `update()`。`effects.pass` 提供以下公开高级成员，直接修改不会同步配置快照，也不保证执行顶层参数校验：
+
+| 成员 | 读写方式与用途 |
+| --- | --- |
+| `stage`、`ready`、`name` | 只读阶段引用、阶段就绪状态和名称；`ready` 不表示所有异步资源就绪。 |
+| `enabled` | 读写天空 Pass 开关；需要联动 HBAO / SMAA 时使用 `effects.enabled`。 |
+| `coverage`、`toneMappingExposure` | 读写覆盖度 / 曝光；优先使用顶层同名入口以保持配置与云历史一致。 |
+| `toneMappingMode` | 仅写，支持上方色调模式；赋值会重建阶段。 |
+| `localWeatherVelocity` | 读写 `Cartesian2`，单位 UV/秒。 |
+| `aerialPerspectiveStrength` | 读写大气透视强度，`[0, 1]`。 |
+| `cloudAltitudeFadeRange` | 读写高度范围或 `null`，单位与 `cloud.altitudeFadeRange` 一致。 |
+| `setVolumetricLightOptions(options)` | 局部更新体积光，接受 `BetterSkyVolumetricLightOptions`，优先使用顶层 `update()`。 |
+| `showSnow`、`showRain` | 仅写 boolean，默认均为 `false`；开启积雪或雨条纹 / 闪光，会重建相关阶段。 |
+| `isDestroyed()` | 返回是否已销毁。 |
+
+```js
+effects.pass.showSnow = true
+effects.pass.showRain = true
+```
+
+雨雪不属于构造 / `update()` 的顶层参数，这两个 setter 也不能用来读取当前开关状态。积雪依赖 `BetterSkyAssets/snowCoverMask.png`。
+
+### 销毁
+
+```js
+effects.dispose()
+viewer.destroy() // 仅在应用也需要销毁 Viewer 时调用。
+```
+
+先销毁效果，再销毁宿主 Viewer。`dispose()` 可重复调用；当前仓库也支持加载期间销毁，请求不会主动中止，迟到回调会跳过 GPU 创建。资源状态与配置快照仍可读取，销毁后禁止更新参数或重试加载。
+
+## 参数说明
+
+下列默认值对应当前仓库的 `BetterSky.defaultOptions`。数值均须有限，`NaN` 与无穷大无效。除 `hbao.denoise` 仅构造时设置外，下列配置均支持 `update()`；场景和时间参数按各自规则生效。
 
 ### 通用参数
 
-| 参数 | 类型 | 默认值 | 说明 |
+| 参数 | 类型 | 默认值 | 含义与范围 |
 | --- | --- | --- | --- |
-| `enabled` | boolean | `true` | 启用管线；运行时切换同时控制 HBAO 和 SMAA。 |
-| `coverage` | number | `0.34` | 天气覆盖度 [0, 1]，与云层密度分别控制。 |
-| `localWeatherVelocity` | array / Cartesian2 | `[0.0003, 0.0001]` | 天气图 UV 每秒偏移量；负值反向。 |
-| `toneMappingMode` | number | `9` | 2 Reinhard2；4 Uncharted2；7 AgX；8 Neutral；9 ACES；10 Linear；11 Reinhard；12 Cineon。切换会重建天空渲染阶段。历史模式 3 需要亮度纹理绑定，当前 SDK 未接入，不作为支持选项。 |
-| `toneMappingExposure` | number | `2.8` | 色调映射前的亮度倍率，不是 EV 档位。 |
-| `irradianceScale` | number | `0.15` | 非负地表辐照度增益。 |
-| `aerialPerspectiveStrength` | number | `0.15` | 地表大气透视混合强度 [0, 1]；0 关闭此混合。 |
-| `darkParamY` | number | `0.5` | 夜间天空辉光调制，白天通常不明显。 |
-| `bloomIntensity` | number | `0.002` | 泛光强度；0 移除此贡献，但不是关闭渲染阶段的开关。 |
-| `systemLight` | boolean | `true` | 建议保持 true 以统一使用 Cesium 太阳；false 仅切换部分管线的自定义太阳 uniform，详见高级说明。 |
-| `applySceneSettings` | boolean | `true` | 初始化时设置 HDR、对数深度、gamma 和地形深度测试，详见下方场景行为。 |
-| `highDynamicRange` | boolean | `true` | 场景 HDR，受 applySceneSettings 控制。 |
-| `logarithmicDepthBuffer` | boolean | `true` | 场景对数深度，受 applySceneSettings 控制。 |
-| `gamma` | number | `2.2` | 场景显示 gamma，受 applySceneSettings 控制。 |
-| `hbao` | boolean / object | 下方参数对象 | false 关闭 AO；对象覆盖下方 HBAO 参数。 |
+| `enabled` | boolean | `true` | 效果总开关，联动已配置的 HBAO、SMAA 和体积光；关闭后保留资源。 |
+| `coverage` | number | `0.34` | 整体天气覆盖度 `[0, 1]`，与各层密度分别控制。 |
+| `localWeatherVelocity` | 二维向量 | `[0.0003, 0.0001]` | 天气图 UV 每秒偏移量，负值反向，`[0, 0]` 停止天气图移动。 |
+| `toneMappingMode` | number | `9` | `2` Reinhard2、`4` Uncharted2、`7` AgX、`8` Neutral、`9` ACES、`10` Linear、`11` Reinhard、`12` Cineon；切换会重建天空阶段。模式 `3` 不支持。 |
+| `toneMappingExposure` | number | `2.8` | 非负亮度倍率，越大越亮；单位不是 EV。 |
+| `irradianceScale` | number | `0.15` | 非负地表辐照度增益，与云体补光分别控制。 |
+| `aerialPerspectiveStrength` | number | `0.15` | 地表大气透视混合强度 `[0, 1]`；`0` 关闭此混合。 |
+| `darkParamY` | number | `0.5` | 夜间天空辉光调制系数；允许有限数，建议 `[0, 1]`。 |
+| `bloomIntensity` | number | `0.002` | 非负泛光强度，`0` 移除此强度贡献，不释放对应阶段。 |
+| `systemLight` | boolean | `true` | 跟随 Cesium 太阳方向；建议保持 `true`，详见注意事项。 |
+| `applySceneSettings` | boolean | `true` | 控制本次调用是否应用场景设置，详见场景设置与销毁。 |
+| `highDynamicRange` | boolean | `true` | 场景 HDR，受本次 `applySceneSettings` 控制。 |
+| `logarithmicDepthBuffer` | boolean | `true` | 场景对数深度，受本次 `applySceneSettings` 控制。 |
+| `gamma` | number | `2.2` | 正数，场景显示 Gamma，与 HBAO 的 Gamma 分别控制。 |
+| `hbao` | boolean / object | 下方 HBAO 参数对象 | `false` 关闭；`true` 启用；对象覆盖指定数值并启用。重开会恢复保存的数值。 |
 | `smaa` | boolean | `true` | 最终画面的 SMAA 抗锯齿。 |
-| `time` | string / null / undefined | `"2026-05-01T06:00Z"` | 通过 ISO 8601 设置 Viewer 时钟；null 或 undefined 保留当前时间。只传 Scene 时不设置时钟。 |
+| `time` | string / null / undefined | `"2026-05-01T06:00Z"` | 有效 ISO 8601 时间；`Z` 表示 UTC。构造时省略会采用预设时间，显式 `null` / `undefined` 保留业务时钟；`update()` 省略也保留时钟。只传 Scene 时无效。 |
 
 ### 云层与可见性
 
-四分量云参数采用 `[第一层, 第二层, 第三层, 预留]`，第四项保持为 0。云底以渲染行星表面为基准，不是相对各处地形的离地高度。默认只有前两层投射云影，更改云型不会改变该阴影掩码。
+二维向量接受 `[x, y]` 或 Cesium `Cartesian2`；四维向量接受 `[第一层, 第二层, 第三层, 预留]` 或 `Cartesian4`，第四项约定保持 `0`。云底相对渲染行星表面，不是相对各处地形的离地高度。默认前两层投射云影，云型选择不改变投影层。
 
-| 参数 | 类型 | 默认值 | 说明 |
+| 参数 | 类型 | 默认值 | 含义与范围 |
 | --- | --- | --- | --- |
-| `cloud.layerTypes` | array / null | `["cumulus", "altocumulus", "cirrus"]` | 必须为三个云型，每项可选 cumulus、altocumulus、cirrus；null 使用通用噪声云形。 |
-| `cloud.altitudes` | array / Cartesian4 | `[4000, 6000, 10000, 0]` | 相对渲染行星的云底高度，单位米。 |
-| `cloud.heights` | array / Cartesian4 | `[1300, 1800, 650, 0]` | 云层厚度，单位米；云顶 = 云底 + 厚度。 |
-| `cloud.densityScales` | array / Cartesian4 | `[0.12, 0.09, 0.0015, 0]` | 云层密度倍率；0 移除对应层介质。 |
-| `cloud.shapeDetailAmounts` | array / Cartesian4 | `[0.18, 0.12, 0, 0]` | 四个 [0, 1] 数值；越大细节侵蚀越强。 |
-| `cloud.lodRange` | array / null | `[200000, 500000]` | 距相机的近/远阈值，单位米，0 ≤ 近 < 远；null 禁用距离 LOD，不改变云的位置。 |
-| `cloud.altitudeFadeRange` | array / null | `[30000, 90000]` | 相机椭球高度淡出范围，单位米，0 ≤ 开始 < 结束；null 禁用。 |
-| `cloud.skyIrradianceScale` | number | `1.8` | 非负天空补光增益，作用于云体及旧 haze；独立体积光使用太阳直射光。 |
-| `cloud.groundIrradianceScale` | number | `1.3` | 非负的云体地面反射补光增益，与 irradianceScale 分别控制。 |
+| `cloud.layerTypes` | 三项数组 / null | `["cumulus", "altocumulus", "cirrus"]` | 每项可选 `cumulus` 积云、`altocumulus` 高积云、`cirrus` 卷云；`null` 使用通用云形。 |
+| `cloud.altitudes` | 四维向量 | `[4000, 6000, 10000, 0]` | 云底高度，单位米，各分量为有限数。 |
+| `cloud.heights` | 四维向量 | `[1300, 1800, 650, 0]` | 非负云层厚度，单位米；云顶 = 云底 + 厚度。 |
+| `cloud.densityScales` | 四维向量 | `[0.12, 0.09, 0.0015, 0]` | 非负云密度倍率；`0` 移除对应层介质。 |
+| `cloud.shapeDetailAmounts` | 四维向量 | `[0.18, 0.12, 0, 0]` | 各分量 `[0, 1]`，越大云边缘越破碎。 |
+| `cloud.lodRange` | 两项数组 / null | `[200000, 500000]` | 距相机的细节近、远阈值，单位米，`0 ≤ near < far`；`null` 关闭距离细节分级。 |
+| `cloud.altitudeFadeRange` | 两项数组 / null | `[30000, 90000]` | 相机椭球高度淡出范围，单位米，`0 ≤ start < end`；联动云、云影及相关光束，`null` 关闭淡出。 |
+| `cloud.skyIrradianceScale` | number | `1.8` | 非负天空补光倍率，影响云体及 legacy haze。 |
+| `cloud.groundIrradianceScale` | number | `1.3` | 非负云体地面反射补光倍率，与 `irradianceScale` 分别控制。 |
 
-距离 LOD 调整采样与细节质量；相机高度淡出则联动改变云、云影及相关光束的可见性，到结束高度后还会跳过云体和云影绘制。两者分别生效，关闭距离 LOD 也不会关闭所有基于像素覆盖范围的纹理过滤。
+距离细节分级不移动云层，也不关闭相机高度淡出。默认在相机高度达到 90 km 时云完全淡出；需要高空仍显示云时可调整范围或传 `null`。
 
-### 体积光与旧 haze
+### 体积光
 
-`volumetricLight.mode` 选择两条互斥路径之一：默认 `"volumetric"` 使用独立的低分辨率体积光 pass 及其时域历史；`"legacy"` 使用现有 `cloud.haze*` 积分；`"off"` 关闭两条额外体积光路径。全局 `enabled` 开关也会控制体积光渲染。
+`volumetricLight.mode` 可选 `volumetric`（默认独立体积光）、`legacy`（旧 haze 参数）或 `off`（关闭这两种额外体积光）。大气、云体光照、泛光与镜头光晕仍分别控制。
 
-#### 独立体积光
-
-介质分布在最低有效投影云层云底下方的世界空间高度包络中，底部最低到渲染行星表面，不跟随各处地形。默认云底为 4000 m、体积层厚度为 2400 m 时，包络高度范围为 1600–4000 m。底部介质逐渐变稀，最大观察距离末段也会淡出；此模式不额外叠加独立近地雾层。天气纹理的孔洞不会关闭介质：云隙中仍有空气承接阳光，真实云透射率决定亮区与暗带。
-
-积分覆盖 `maxDistance` 内所有有效介质区间，并由地形深度和行星裁剪；旧模式累计 1200 m 的光路上限不适用于新模式。独立聚焦云影图覆盖这个局部范围，保留地表原有的大范围级联云影。阴影图按世界像素对齐，并依据太阳角半径过滤，以保留云隙边界。散射按云前、云后分别记录，使半透明云能露出后方光束，不透明云和地形则遮挡后方散射。
-
-该 pass 独立记录散射质心深度和历史帧，使用深度、亮度感知重建与历史拒绝处理地形边缘、云轮廓和光照变化。它不使用云的 16 相位 Bayer 重建，也不给太阳直射项添加统一亮度底色。光束跟随真实云分布和太阳方向，不针对特定时刻生成。
-
-| 参数 | 类型 | 默认值 | 含义 |
+| 参数 | 类型 | 默认值 | 含义与范围 |
 | --- | --- | --- | --- |
-| `volumetricLight.mode` | string | `"volumetric"` | 支持 `"volumetric"`、`"legacy"` 或 `"off"`。 |
-| `volumetricLight.density` | number | `0.000008` | 非负有限消光密度，单位为米的倒数；0 移除此介质。 |
-| `volumetricLight.intensity` | number | `2` | 非负有限散射亮度倍率；不改变密度或消光。 |
-| `volumetricLight.layerDepth` | number | `2400` | 最低有效投影云层云底向下延伸的体积层厚度，正有限米数。 |
-| `volumetricLight.maxDistance` | number | `16000` | 最大观察/积分距离，正有限米数；由场景深度与行星裁剪，同时决定聚焦云影的接收范围。 |
-| `volumetricLight.anisotropy` | number | `0.55` | 有限前向散射偏好 [0, 0.9]；0 为各向同性。 |
-| `volumetricLight.quality` | string | `"balanced"` | 支持 `"low"`、`"balanced"` 或 `"high"`，对应下表预算。 |
+| `volumetricLight.mode` | string | `"volumetric"` | `"volumetric"`、`"legacy"` 或 `"off"`。 |
+| `volumetricLight.density` | number | `0.000008` | 非负消光密度，单位为米的倒数；`0` 移除此介质。 |
+| `volumetricLight.intensity` | number | `2` | 非负散射亮度倍率；`0` 移除散射亮度，仍保留介质消光。 |
+| `volumetricLight.layerDepth` | number | `2400` | 最低有效投影云层云底向下的体积层厚度，正数，单位米；底部最低到渲染行星表面。 |
+| `volumetricLight.maxDistance` | number | `16000` | 最大观察距离，正数，单位米，受地形与行星遮挡限制。 |
+| `volumetricLight.anisotropy` | number | `0.55` | 前向散射偏好 `[0, 0.9]`；`0` 为各向同性，越大越集中于朝太阳的视角。 |
+| `volumetricLight.quality` | string | `"balanced"` | `"low"`、`"balanced"` 或 `"high"`；质量越高，GPU 与显存开销通常越大。 |
 
-| 质量 | 宽/高分辨率比例 | 每像素积分步数 | 聚焦云影图尺寸 |
-| --- | --- | --- | --- |
-| `low` | 0.25 | 24 | 512 × 512 |
-| `balanced` | 0.5 | 48 | 1024 × 1024 |
-| `high` | 0.5 | 64 | 2048 × 2048 |
+体积层默认位于 1600–4000 m 的行星高度范围，不跟随地形起伏。`layerDepth` 和 `maxDistance` 控制受影响的空气范围，`density` 控制浓度，`intensity` 控制亮度。需要完全关闭额外体积光时使用 `mode: "off"`。切换质量会重新分配相关资源；切至 `legacy` / `off` 会释放独立体积光的离屏资源。
 
-比例分别作用于绘图缓冲的宽和高，并向上取整：`balanced` 使用 `ceil(width / 2) × ceil(height / 2)`。更高预算会增加 GPU 工作，这些设置不代表固定帧耗时。体积光参数值变化会清除其独立历史，切换质量会重建对应目标。切换到 `legacy` 或 `off` 会释放新路径的离屏纹理和帧缓冲，切回 `volumetric` 时按需重新分配。
-
-`density: 0` 移除此介质；`intensity: 0` 只移除新增散射亮度，仍保留消光。需要关闭两条额外体积光路径时，使用 `mode: "off"`。大气散射、云体光照和镜头光晕分别控制。
-
-#### 模式与旧调用兼容
-
-兼容判断以每次构造或 `update()` 调用为准：显式传入的 `volumetricLight.mode` 优先，即使同一次调用也包含旧 haze 字段；仅传任意 `cloud.haze*` 字段且没有新 mode 时，自动选择 `"legacy"`。其他局部更新保留当前模式；无参数初始化默认使用 `"volumetric"`。模式切换保留已有 haze 参数值。
+显式传入的 `volumetricLight.mode` 在本次构造或更新中优先。若同次调用含任意 `cloud.haze*` 字段且未指定 mode，会自动选择 `legacy`；其他局部更新保留当前模式，切换模式保留原有 haze 参数。
 
 ```js
-fx.update({ volumetricLight: { mode: "volumetric", intensity: 2, quality: "balanced" } });
-fx.update({ volumetricLight: { mode: "off" } });
-fx.update({ cloud: { hazeDensityScale: 0.000008 } }); // 自动选择 legacy。
-fx.update({ volumetricLight: { mode: "legacy" } });  // 使用保留的旧参数。
+effects.update({ volumetricLight: { mode: 'volumetric', quality: 'low' } })
+effects.update({ volumetricLight: { mode: 'off' } })
+effects.update({ cloud: { hazeDensityScale: 0.000008 } }) // 切换至 legacy。
 ```
 
-示例 Godray 区域显示当前路径的控制项；`off` 禁用两组数值但保留它们的值。恢复默认值会读取完整内置预设，包括默认体积光模式。
+### Legacy haze
 
-#### 性能与验证参考
-
-2026-10-18 的一次本机检查使用 RTX 3080、ANGLE/Direct3D11、1920 × 1080 绘图缓冲及 `balanced` 默认参数。演示日期为 2026-05-01，各时刻朝向太阳，并固定机位和天气。通过 `EXT_disjoint_timer_query_webgl2` 测量 64 组相邻配对帧，交替反转顺序并固定云重建相位；基线保留已分配目标，跳过新 pass 及其合成，disjoint 标记为 false。
-
-| 演示 UTC | 新增 GPU 耗时中位数 | 新增 GPU 耗时 P95 |
-| --- | --- | --- |
-| 10:30 | 1.621 ms | 1.989 ms |
-| 23:00 | 1.467 ms | 2.279 ms |
-
-新增纹理分配为 58,155,008 字节（55.46 MiB）：散射/深度/历史占 47.46 MiB，聚焦云影占 8 MiB。这是纹理分配统计，未独立测量驱动层总显存增量。上述结果只代表该设备和场景，不保证固定帧耗时；常规分批开启/关闭的差值有波动，因此采用逐帧配对 GPU 计时，没有用后台 FPS 代替。
-
-实现检查覆盖七项 WebGL2 MRT/像素读取场景：完整区间积分、太阳可见性为零时无直射底色、不透明与半透明前景云、地形裁剪、距离淡出及云可见性淡出。另检查了模式/质量切换、奇数尺寸视口、相机移动、穿越雾层和天气变化。连续五次开启/关闭中，50 张纹理和 20 个帧缓冲均创建/删除配对；这验证新路径的资源生命周期，不代表覆盖所有场景的长期显存测试。
-
-#### 旧 haze
-
-以下参数在 `"legacy"` 模式生效，原有算法及默认值继续兼容旧调用。
-
-局部 haze 分布在前两层有效投影云层云底下方的世界空间区域。默认关闭独立的近地薄雾层，并把累计散射光路限制为 1.2 km。云底区域沿太阳方向投影到云层天气纹理，使低太阳角度的光束仍与云隙对齐。距离参数限制实际采样的介质范围，不会把雾放在相机周围。指数模式则使用随渲染行星表面高度衰减的介质密度。
+以下字段在 `legacy` 模式控制旧 haze；`cloud.maxShadowLengthRayDistance` 同时用于大气阴影长度限制。新接入优先使用 `volumetricLight`。
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -337,193 +343,96 @@ fx.update({ volumetricLight: { mode: "legacy" } });  // 使用保留的旧参数
 
 Haze 还受相机高度淡出后的有效云覆盖度调制：覆盖度 ≤ 0.2 时贡献为零，0.2–0.4 之间逐步增强。局部模式要求前两层中至少有一层有效且参与云影投射，单纯增加 haze 密度不能绕过这些条件。
 
-质量档位表示预算，不是固定纹理读取次数；提前退出及级联重叠会影响实际开销。
 
 ### 云体降噪
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `cloud.denoise.temporalAlpha` | number | `0.04` | 当前帧权重 [0, 1]；越小越依赖历史，降噪更强。 |
-| `cloud.denoise.currentFrameAlpha` | number | `0.08` | 新采样 Bayer 相位的当前帧权重 [0, 1]。 |
+| `cloud.denoise.currentFrameAlpha` | number | `0.08` | 新采样像素的当前帧权重 [0, 1]；越大新细节越快生效，也更易显露噪声。 |
 | `cloud.denoise.motionAlpha` | number | `0.25` | 相机运动时用于提高积累基值，范围 [0, 1]；最终混合权重仍会自适应调整。 |
 | `cloud.denoise.varianceGamma` | number | `2` | 正有限方差裁剪倍率；越大允许保留的历史颜色范围越宽。 |
 | `cloud.denoise.spatialFilterStrength` | number | `0.8` | 深度/透明度感知重建强度 [0, 1]；越大越平滑，也会损失更多细节。 |
 
-这些是基础控制值，渲染器还会根据历史帧数量、距离、相机运动和地形边界调整混合。增强历史依赖可以减少噪点，但可能增加滞后；增强空间过滤会柔化细节。SMAA 负责最终画面的边缘，不能替代云体时域重建。
+增强历史依赖可以减少噪点，但可能增加拖影；增强空间过滤会柔化细节。SMAA 负责最终画面的边缘，不替代云体降噪。
 
-`cloud.denoise` 控制云的重建，也包含通过旧路径渲染的 haze。独立体积光使用自身的深度/亮度拒绝和自适应历史权重，这组云参数不控制其历史。
+`cloud.denoise` 作用于云体与 legacy haze，不调节独立体积光的降噪。
 
 ### HBAO
 
-默认 `hbao` 是包含下方七个数值参数的对象，底层 pass 默认启用双边滤波。`hbao: false` 关闭效果，`hbao: true` 在构造时采用底层默认参数，传对象则覆盖指定字段。
+默认开启，使用下表数值和 `denoise: true`。构造时 `hbao: true` 使用默认值，对象局部覆盖；运行时 `false` 关闭并保留数值，`true` 重开，对象局部更新并启用。
 
-| 参数 | 类型 | 默认值 | 说明 |
+| 参数 | 类型 | 默认值 | 含义与范围 |
 | --- | --- | --- | --- |
-| `hbao.intensity` | number | `100` | AO 强度指数；越大接触遮蔽越深。 |
-| `hbao.maxRadius` | number | `30` | 视空间最大采样半径，单位米。 |
-| `hbao.bias` | number | `0.1` | 角度偏移，单位弧度；增大可减少自遮蔽。 |
-| `hbao.frustumLength` | number | `100000` | AO 处理的最大视空间深度，单位米。 |
-| `hbao.blackPoint` | number | `0.05` | 输入黑点，应小于 1。 |
-| `hbao.whitePoint` | number | `0.9` | AO 调制输出亮度倍率。 |
-| `hbao.gamma` | number | `2.5` | 正的 AO 曲线幂指数，与场景 gamma 分开。 |
-| `hbao.denoise` | boolean | `true` | 双边滤波，仅构造时生效；update() 不会重建此配置。 |
+| `hbao.intensity` | number | `100` | 非负遮蔽强度指数，越大接触阴影越深。 |
+| `hbao.maxRadius` | number | `30` | 非负采样半径，单位米，过大可能出现暗边。 |
+| `hbao.bias` | number | `0.1` | 有限角度偏移，单位弧度；增大可减轻自遮蔽。 |
+| `hbao.frustumLength` | number | `100000` | 正数，最大处理深度，单位米。 |
+| `hbao.blackPoint` | number | `0.05` | 输入黑点，`[0, 1)`。 |
+| `hbao.whitePoint` | number | `0.9` | 非负输出亮度倍率。 |
+| `hbao.gamma` | number | `2.5` | 正数，AO 曲线幂指数，与场景 `gamma` 分别控制。 |
+| `hbao.denoise` | boolean | `true` | 双边滤波开关，仅构造时配置；运行时更改需销毁并重建。 |
 
-七个数值字段支持 `update()`；`hbao.denoise` 仅构造时生效，运行时改变会明确抛错，需销毁并重建；传入相同值保持幂等。
+当前 `BetterSkyUpdateOptions` 从类型上排除 `hbao.denoise`；JavaScript 运行时也会拒绝更改它，重复当前值不会报错。
 
-## 运行时 API
+### TypeScript 类型
 
-通过 `update()` 局部更新配置：
+`BetterSkyOptions` 用于构造参数；当前仓库提供的 `BetterSkyUpdateOptions` 用于局部更新。其他公开类型包括 `BetterSkyVector2`、`BetterSkyVector4`、`BetterSkyQuality`、`BetterSkyCloudType`、`BetterSkyToneMappingMode`，以及云、降噪、体积光、HBAO 的 Options 接口和 `BetterSkyPass`。当前仓库还提供 `BetterSkyAssetStatus`、`BetterSkyAssetError` 与 `BetterSkyConstructor`。以所安装包附带的声明为准。
 
-```js
-fx.update({
-  coverage: 0.4,
-  cloud: {
-    layerTypes: ["cumulus", "altocumulus", "cirrus"],
-    altitudes: [4000, 6000, 10000, 0],
-    heights: [1300, 1800, 650, 0],
-    densityScales: [0.12, 0.09, 0.0015, 0],
-  },
-});
+```ts
+import { BetterSky, type BetterSkyOptions } from 'bettersky-cesium'
 
-fx.update({
-  time: "2026-05-01T10:00:00Z",
-  toneMappingExposure: 2.5,
-});
+const options: BetterSkyOptions = {
+  time: undefined,
+  cloud: { altitudes: [4000, 6000, 10000, 0] },
+}
+const sky = new BetterSky(viewer, options)
 ```
 
-改变云形、密度、覆盖度、云照明或可见性参数时，会按需清除云历史。体积光参数会清除其独立历史。频繁大幅修改可能让时域积累反复重新开始。
+## 注意事项
 
-| API | 读写方式 / 用途 |
+### 场景设置与销毁
+
+| 时机 | 对宿主的影响 |
 | --- | --- |
-| `BetterSky.defaultOptions` | 静态 getter，返回新的默认配置副本。 |
-| `fx.update(options)` | 与便捷 setter 共用校验和应用通路；未知字段或不合法值在提交前拒绝。 |
-| `fx.getOptions()` | 返回当前已接受配置的独立快照；HBAO 关闭时保留其内部参数供重开恢复。 |
-| `fx.assetStatus` / `fx.assetErrors` | 天空资源的状态与只读错误快照。 |
-| `fx.assetsReady` | 读取会按需启动并等待六项必需资源；失败或销毁也结算，不包含 SMAA 和可选雪任务。 |
-| `fx.retryAssets()` / `fx.subscribeAssets(listener)` | 显式重试失败资源；订阅变化并获得取消订阅函数。 |
-| `fx.enabled` | 读取/设置管线总开关。 |
-| `fx.coverage` | 读取/设置天气覆盖度。 |
-| `fx.toneMappingExposure` | 读取/设置曝光倍率。 |
-| `fx.toneMappingMode` | 仅 setter，切换模式会重建天空渲染阶段。 |
-| `fx.localWeatherVelocity` | 仅 setter，接受数组或 Cartesian2。 |
-| `fx.setCloudAltitudes(value)` | 设置四分量云底高度。 |
-| `fx.setCloudHeights(value)` | 设置四分量云层厚度。 |
-| `fx.setCloudDensityScales(value)` | 设置四分量云密度。 |
-| `fx.setCloudShapeDetailAmounts(value)` | 设置四个 [0, 1] 范围内的细节侵蚀量。 |
-| `fx.hbaoEnabled` / `fx.smaaEnabled` | 读取/设置可选效果。 |
-| `fx.hbaoIntensity` / `fx.hbaoMaxRadius` | 仅 setter，设置 AO 强度/半径。 |
-| `fx.pass` | getter，获取底层 GeospatialPipelinePass，供高级操作。 |
-| `fx.stage` | getter，获取当前天空 PostProcessStageComposite；阶段重建后需重新读取。 |
-| `fx.dispose()` | 幂等移除逐帧监听和注册的阶段，恢复快照中的天空/地球字段，并清理实例拥有的 pass 资源。 |
+| 构造且 `applySceneSettings: true` | 设置 HDR、对数深度、Gamma，并启用地形深度测试。 |
+| 构造 / 更新且提供有效 `time` | 修改 Viewer 时钟；仅传 Scene 不生效。 |
+| 首次启用的帧 | 暂时接管内置天空、大气、太阳、雾及部分地球设置；设置瓦片缓存为 2000、最大屏幕空间误差为 2。 |
+| 关闭 / 销毁 | 恢复启用时记录的天空与地球设置。 |
+| `update()` | 除非本次显式带 `applySceneSettings: false`，否则应用本次提供的 HDR、对数深度与 Gamma。 |
 
-## 常用调整
+`applySceneSettings: false` 不阻止天空接管，也不阻止修改时间。构造时设置为 `false` 不会自动约束后续更新；需要保持业务场景设置时，每次相关更新都应显式传入。
 
-### 分别调整云光照与地表亮度
+时钟、HDR、Gamma、对数深度及地形深度测试不会在关闭 / 销毁时自动还原，业务若需要恢复，应自行保存原值。当前仓库会释放实例拥有的渲染资源，但不移除已安装的上下文辅助方法；不要继续使用缓存的 Pass 或阶段引用。
 
-```js
-fx.update({
-  irradianceScale: 0.15,
-  aerialPerspectiveStrength: 0.2,
-  volumetricLight: { mode: "volumetric", intensity: 2 },
-  cloud: {
-    skyIrradianceScale: 1.8,
-    groundIrradianceScale: 1.3,
-  },
-});
-```
+### 持续渲染与性能
 
-`irradianceScale` 影响地表；两个云体辐照度参数影响云的补光。`volumetricLight.intensity` 调整独立体积光散射；legacy 模式仍通过 `cloud.hazeDirectLightScale` 和 `cloud.hazeSunColor` 控制 haze 日光。曝光改变最终色调映射后的画面。
+建议使用 `requestRenderMode: false`。采用显式渲染模式时，业务必须持续请求新帧以驱动云动画与画面稳定；SDK 不会调度 `scene.requestRender()`。
 
-### 降低渲染开销
+先控制业务绘制缓冲大小，再按场景降低 `volumetricLight.quality`、关闭不需要的 HBAO / SMAA，或提前设置 `cloud.lodRange`。保留适合业务的高度淡出范围。关闭总开关仅暂停效果，释放资源需要 `dispose()`。
 
-```js
-fx.update({
-  volumetricLight: { mode: "volumetric", quality: "low" },
-  cloud: {
-    lodRange: [120000, 300000],
-  },
-  hbao: false,
-});
-```
+曝光和云补光调整亮度；密度、层厚与距离会同时改变体积感。频繁重建实例、切换色调模式或大幅更新云 / 光照参数会影响画面稳定性与开销。云体降噪参数在平滑、细节与运动拖影之间取舍，不控制独立体积光的历史。
 
-此示例让距离简化更早开始，降低独立体积光预算并关闭 AO。应在实际场景中观察细节和明暗变化；包含高空视角的应用可保留相机高度淡出。
+### 兼容性与部署
 
-### 控制太阳时间与天气移动
+依赖版本范围表示支持下限，不表示已验证所有后续版本。SDK 使用 Cesium 渲染器内部接口，升级 Cesium、其 engine / widgets 或 three 后，应验证初始化、参数更新、尺寸变化和销毁重建；保留完整锁文件。遇到缺失导出等依赖错误时先核对完整依赖组合，不必为本 SDK 手动安装 Cesium 内部组件。
 
-```js
-fx.update({ time: "2026-05-01T06:00:00Z" });
-viewer.clock.shouldAnimate = false;
-fx.localWeatherVelocity = [0, 0];
-```
+仅在受支持的三维透视场景使用，切换到 2D / Columbus View 前先销毁效果；SSR 页面应在客户端挂载后初始化。屏幕空间反射与次表面散射不属于当前支持功能。保持 `systemLight: true`；`false` 仅让部分效果采用业务写入 `scene.context.uniformState.sunDirectionWC2` 的自定义太阳方向，云和云影仍跟随 Cesium 太阳。该开关不提供统一的业务光照 API。
 
-Viewer 时钟控制天体时间，天气偏移使用真实经过时间，因此暂停时钟不会自动停止天气移动。最后一行停止天气图偏移；底层 pass 的云形/细节移动速度是另外的高级参数。
+资源请求应返回实际文件，不能被单页应用的 HTML 回退覆盖。升级时同步更新 JS 与 `BetterSkyAssets/` 并刷新旧缓存。对外分发 SDK 运行产物时附带 [LICENSE](LICENSE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，遵循完整许可条款。
 
-## 高级 pass 操作
-
-底层 pass 提供可选的表面积雪覆盖和雨条纹/闪光叠加：
-
-```js
-fx.pass.showSnow = true;
-fx.pass.showRain = true;
-```
-
-这些 setter 会重建相关阶段。积雪使用 `BetterSkyAssets/snowCoverMask.png`；`showRain` 在场景表面叠加闪光和屏幕雨条纹。它们属于底层 pass 控制，不是 BetterSky 的构造参数。
-
-建议保持 `systemLight: true`，让效果使用一致的太阳光源。设为 `false` 后，大气/合成路径会使用自定义太阳 uniform，但云体与云影仍读取 Cesium 系统太阳；这不是统一的自定义光源 API。
-
-## 场景行为与生命周期
-
-管线会应用以下场景设置：
-
-| 时机 | 行为 |
-| --- | --- |
-| 构造时 `applySceneSettings: true` | 设置 HDR、对数深度与 gamma，并开启 `globe.depthTestAgainstTerrain`。 |
-| 构造/更新时传入有效 `time`，且持有 Viewer | 设置 `viewer.clock.currentTime`。 |
-| 第一个启用帧 | 快照并接管内置大气、天空盒、太阳、雾、地表大气和地球光照；将地球瓦片缓存设为 2000，最大屏幕空间误差设为 2。 |
-| 关闭或销毁 | 恢复上述启用帧快照中记录的天空/地球字段。 |
-| `update()` | 应用本次提供的 HDR/对数深度/gamma，除非本次同时传入 `applySceneSettings: false`。 |
-
-`applySceneSettings: false` 不会取消天空/地球接管，也不会阻止设置 `time`；保留时钟需用 `time: undefined`。后续更新若希望跳过本次提供的场景设置，还需在该次更新中传入 `applySceneSettings: false`。
-
-HDR、对数深度、gamma、地形深度测试和时钟不会自动恢复。应用需要时应自行保存和恢复这些值。
-
-```js
-fx.enabled = false; // 暂时关闭。
-fx.enabled = true;  // 重新开启，云历史会刷新。
-
-// 离开场景时：
-fx.dispose();
-viewer.destroy();
-```
-
-在 `viewer.destroy()` 之前调用 `dispose()`，之后不再使用该实例。销毁是幂等的，会通过各 pass 清理实例拥有的效果纹理、帧缓冲、阴影资源及 shader cache 引用。宿主默认纹理和共享全屏几何仍由宿主或共享代码管理。
-
-可以在初始资源加载期间销毁实例，并在销毁返回后创建替代实例。请求不会主动中止。读取 assetsReady 会按需启动并等待六项必需天空资源，失败后检查 assetErrors；可选雪和 SMAA 不在此等待范围。迟到的完成回调会检查销毁状态，跳过 GPU 资源创建。SMAA 避免同一 stage 重复并发加载查找纹理，其回调也会检查销毁状态。
-
-销毁不会移除已安装的 context 辅助方法或 `context.uniformState` 上新增的太阳字段。数学便捷方法使用内部专用类型，不修改 Cesium 共享原型；HBAO 的阶段与相机缓存属于实例。渲染器私有接口集中于内部适配层，仍须在升级 Cesium 后验证。同页一个活动实例的公开限制继续保留。
-
-## 常见问题
+### 常见问题
 
 | 现象 | 检查项 |
 | --- | --- |
-| 启动时天空或云缺失、显示异常 | 检查 `/cesium/BetterSkyAssets/GeospatialAssets/` 下 EXR/BIN 等资源请求、`CESIUM_BASE_URL`、目录大小写及 WebGL 能力；资源异步加载。 |
-| 拉远后云消失 | 检查 `cloud.altitudeFadeRange`，默认在相机椭球高度 90 km 时完全淡出；需要时可设为 `null`。 |
-| 穿云光很弱或看不到 | 检查 `volumetricLight.mode`、有效投影云层及太阳与观察方向。朝太阳或云隙观察，其他方向的散射自然较弱。volumetric 模式检查 `density`、`intensity`、`layerDepth` 和 `maxDistance`，天气孔洞不会关闭其介质；legacy 模式检查 `cloud.hazeDensityScale`、覆盖度门控和局部距离范围。 |
-| 空气大片泛白，光束轮廓不明显 | 先确认云分布形成了实际的亮区和暗带。减小 `density`、`layerDepth` 或 `maxDistance` 限制受影响空气，再单独调整 `intensity` 控制亮度。提高全局曝光/Bloom 会同时提亮其他效果，不能恢复缺失的阴影边界。 |
-| 太阳周围出现亮环或重影 | 这是镜头光晕，与云隙体积光束分别渲染；关闭体积光不会关闭镜头光晕。 |
-| 运动拖影或远景云噪点 | 小幅调整降噪权重，结合像素覆盖范围过滤/LOD，并避免持续重设云参数。 |
-| 第三层没有地面云影 | 默认阴影掩码只包含前两层。 |
-| 启动后 SMAA 没有立即生效 | 查找纹理异步加载，首个渲染帧不代表资源已经就绪。 |
-| 太阳时间暂停但云还在移动 | 天气移动需要与 Viewer 时钟分别控制。 |
-| 地形或影像不可用 | 检查示例凭据；凭据留空时会按设计使用本地底图/椭球地形。 |
-
-## 源码导览
-
-- [src/index.ts](src/index.ts)：公开类型与 SDK 构建入口；[src/options.js](src/options.js)：默认值、归一化和校验。
-- [BetterSky.js](BetterSky.js)：JavaScript 运行入口、统一参数更新和生命周期。
-- [架构与边界](SDK_ARCHITECTURE.md)和[demo 部署](demo/README.md)：职责划分及 GitHub Pages 流程。
-- [GeospatialPipelinePass.js](Library/GeospatialPipelinePass.js)：场景接入、大气与效果合成。
-- [CloudsMaterialPass.js](Library/geospatial/CloudsMaterialPass.js)：云体/光照积分与时域重建。
-- [VolumetricLightPass.js](Library/geospatial/VolumetricLightPass.js) 和 [FocusedCloudShadowPass.js](Library/geospatial/FocusedCloudShadowPass.js)：独立局部体积光、时域历史与聚焦日光可见性。
-- [体积光着色器](Library/shaders/geospatial/volumetricLight.frag.glsl)、[时域重建](Library/shaders/geospatial/volumetricLightResolve.frag.glsl)与[合成](Library/shaders/geospatial/volumetricLightComposite.glsl)：介质积分、质心重投影及云/地形边缘处理。
-- [ShadowMaterialPass.js](Library/geospatial/ShadowMaterialPass.js) 和 [AerialPerspectiveEffect.js](Library/geospatial/AerialPerspectiveEffect.js)：云影生成与应用。
+| 天空或云不显示 | 检查控制台、WebGL 能力，以及 `CESIUM_BASE_URL` 下的 EXR / BIN / PNG 请求、目录大小写和响应内容。 |
+| 拉远后云消失 | 检查 `cloud.altitudeFadeRange`；默认相机高度到 90 km 时完全淡出。 |
+| 体积光很弱 | 检查 mode、有效投影云层、太阳与视角，以及 density / intensity / layerDepth / maxDistance。面向太阳和云隙更易看到光束。 |
+| Legacy haze 不出现 | 有效覆盖度 ≤ 0.2 时无贡献；局部模式还需前两层中至少有一个有效投影云层。 |
+| 光束变成大范围雾感 | 降低密度、层厚或距离，单独调整亮度；检查云是否形成明暗间隙。 |
+| 太阳附近的光环仍存在 | 镜头光晕与体积光分别控制，关闭体积光不关闭镜头光晕。 |
+| 第三层不投射云影 | 默认只有前两层参与投影，更改云型不改变该设置。 |
+| 初次启用时 SMAA 尚未生效 | 查找纹理异步加载，首帧和 `assetsReady` 都不能代表 SMAA 就绪。 |
+| 暂停时间后云仍移动 | 单独设置 `localWeatherVelocity: [0, 0]`，其他底层运动控制分别处理。 |
+| 调用资源状态或快照 API 报错 | 先确认是否安装了旧 npm `0.1.0`，这些接口是当前仓库新增能力。 |
+| Demo 底图或地形不符合预期 | 未配置服务凭据时使用本地 NaturalEarthII 底图和椭球地形，详见 [Demo 说明](demo/README.md)。 |
