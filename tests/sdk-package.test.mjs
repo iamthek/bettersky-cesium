@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { build } from 'vite';
 import { compactShader, validateShaderAssembly } from '../scripts/sdk/build.mjs';
-import { inspectJavaScript, readTarEntries } from '../scripts/sdk/shared.mjs';
+import { inspectJavaScript, inspectPublicDeclarations, readTarEntries, repoRoot, validatePackageEntries } from '../scripts/sdk/shared.mjs';
 
 function tarEntry(name, { type = '0', data = Buffer.from('ok') } = {}) {
   const header = Buffer.alloc(512);
@@ -28,6 +30,46 @@ test('tar reader retains bytes without extracting and rejects traversal, links a
   const corrupt = tarEntry('package/index.js');
   corrupt[0] ^= 1;
   assert.throws(() => readTarEntries(corrupt), /checksum/);
+});
+
+test('reviewed public declarations document every member and parameter and retain UTF-8 archive bytes', async () => {
+  const bytes = await readFile(join(repoRoot, 'scripts/sdk/public-api.d.ts'));
+  assert.ok(inspectPublicDeclarations(bytes.toString('utf8')).declarations > 0);
+  const [entry] = readTarEntries(tarEntry('package/dist/index.d.ts', { data: bytes }));
+  assert.deepEqual(entry.data, bytes);
+});
+
+test('declaration checks reject removed or empty JSDoc and parameter descriptions before packing', async () => {
+  const source = await readFile(join(repoRoot, 'scripts/sdk/public-api.d.ts'), 'utf8');
+  const mutations = [
+    [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '$1'), /Missing JSDoc.*BetterSkyOptions.enabled/],
+    [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '/** @default true */\n  $1'), /Empty JSDoc description.*BetterSkyOptions.enabled/],
+    [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '/** */\n  $1'), /Empty JSDoc description.*BetterSkyOptions.enabled/],
+    [source.replace(/^[\t ]*\* @param viewerOrScene[^\r\n]*(?:\r?\n|$)/m, ''), /Missing @param.*BetterSky.constructor.viewerOrScene/],
+    [source.replace(/(@param viewerOrScene)[^\r\n]*/, '$1'), /Missing @param.*BetterSky.constructor.viewerOrScene/],
+    [source.replace(/\/\*\*[\s\S]*?\*\//g, ''), /Missing JSDoc/],
+  ];
+  for (const [modified, expected] of mutations) {
+    assert.notEqual(modified, source, 'The fixture mutation must remove a reviewed comment.');
+    assert.throws(() => inspectPublicDeclarations(modified), expected);
+    await assert.rejects(validatePackageEntries([{ path: 'dist/index.d.ts', data: Buffer.from(modified) }]), expected);
+    const entries = readTarEntries(tarEntry('package/dist/index.d.ts', { data: Buffer.from(modified) }));
+    await assert.rejects(validatePackageEntries(entries), expected);
+  }
+});
+
+test('declaration checks distinguish method parameters from punctuation inside field types', () => {
+  const source = `/** Fixture options. */
+export interface Options {
+  /** Callback type. */
+  callback?: (value: [number, number]) => void;
+  /** Update options.\n   * @param options Updated values.\n   * @param amount Update amount.\n   */
+  update(options: Map<string, [number, number]>, amount?: number): void;
+}
+`;
+  assert.doesNotThrow(() => inspectPublicDeclarations(source));
+  assert.throws(() => inspectPublicDeclarations(source.replace(' @param amount Update amount.', '')), /Missing @param.*Options.update.amount/);
+  assert.throws(() => inspectPublicDeclarations(source.replace('callback?: (value: [number, number]) => void;', 'callback?: (value: [number, number]) => void; undocumented: number;')), /must use its own line/);
 });
 
 test('ESM validation requires external dependencies and blocks dynamic code execution', () => {

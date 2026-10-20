@@ -118,6 +118,36 @@ viewer.destroy()
 
 效果未显示时，先检查 `CESIUM_BASE_URL + 'BetterSkyAssets/'` 下的资源请求、浏览器控制台及 WebGL 能力；请求应返回真实文件，不能是 HTML 回退页。
 
+### 参数提示与 TypeScript
+
+SDK 随包提供 `dist/index.d.ts`，无需另装类型包。公开声明中的中文 JSDoc 解释各配置项的含义、单位、范围、默认值和联动规则，并为构造器、方法及 setter 提供参数说明。在 VS Code 等支持 TypeScript 语言服务的编辑器中，悬停配置项或查看函数签名即可阅读；JavaScript 项目也可使用这些提示。
+
+```ts
+import { BetterSky, type BetterSkyOptions } from 'bettersky-cesium'
+
+const options: BetterSkyOptions = {
+  time: undefined, // 显式保留宿主时间；构造时省略此字段会使用内置日期。
+  coverage: 0.5, // 云量覆盖度 [0, 1]，与每层云密度分别控制。
+  localWeatherVelocity: [0.0003, 0.0001], // 天气纹理 UV/秒，不是米/秒。
+  cloud: {
+    altitudes: [4000, 6000, 10000, 0], // 三层云底高度（米）及预留项，相对渲染行星表面。
+  },
+}
+
+const effects = new BetterSky(viewer, options)
+effects.update({ cloud: { heights: [1300, 1800, 650, 0] } }) // 局部更新；嵌套对象深合并，数组整体替换。
+```
+
+可读取 `BetterSky.defaultOptions` 获取完整默认预设的独立副本。旧 `cloud.haze*` 参数与独立体积光的模式联动、场景设置及销毁约束也在对应声明中说明。
+
+类型声明覆盖以下已有控制，默认设置保持不变：
+
+| 控制项 | 用法与默认值 |
+| --- | --- |
+| `toneMappingMode` | `2` Reinhard2、`4` Uncharted2、`7` AgX、`8` Neutral、`9` ACES、`10` Linear、`11` Reinhard、`12` Cineon；默认 `9`。历史模式 `3` 当前不支持。 |
+| `hbao.denoise` | HBAO 双边滤波，默认 `true`；只在构造时可配置，`update()` 不改变此设置。 |
+| `effects.pass.showSnow` / `showRain` | 底层 Pass 的设置入口，默认均为 `false`，显式赋值才开启；设置会重建相关阶段，不作为构造或 `update()` 参数，也不能通过这些访问器读取状态。 |
+
 ## 许可
 
 [专有试用许可](https://cdn.jsdelivr.net/npm/bettersky-cesium@0.1.0/LICENSE)。目前所有个人和组织均可零费用试用，包括商业项目和生产上线，无须逐一申请。SDK 和接入项目均可闭源。暂未设定收费日期；权利人可提前至少 30 个日历日公布通知，结束指定版本或用途的免费试用，此后继续相应用途须另获授权，授权可以收费。此前合法试用不追溯收费，已有单独授权继续按原约定执行。

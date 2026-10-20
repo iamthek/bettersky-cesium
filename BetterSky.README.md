@@ -221,7 +221,7 @@ These defaults come from the public entry point in [BetterSky.js](BetterSky.js),
 | `enabled` | boolean | `true` | Enable the pipeline; runtime changes also gate HBAO and SMAA. |
 | `coverage` | number | `0.34` | Weather coverage in [0, 1], separate from layer density. |
 | `localWeatherVelocity` | array / Cartesian2 | `[0.0003, 0.0001]` | Weather-map UV offset per second. Negative values reverse direction. |
-| `toneMappingMode` | number | `9` | 2/3 Reinhard2; 4 Uncharted2; 7 AgX; 8 Neutral; 9 ACES; 10 Linear; 11 Reinhard; 12 Cineon. Changing the mode rebuilds sky stages. |
+| `toneMappingMode` | number | `9` | 2 Reinhard2; 4 Uncharted2; 7 AgX; 8 Neutral; 9 ACES; 10 Linear; 11 Reinhard; 12 Cineon. Changing the mode rebuilds sky stages. Historical mode 3 requires a luminance-texture binding that the current SDK does not provide, so it is not a supported option. |
 | `toneMappingExposure` | number | `2.8` | Brightness multiplier before tone mapping; not EV stops. |
 | `irradianceScale` | number | `0.15` | Nonnegative ground irradiance gain. |
 | `aerialPerspectiveStrength` | number | `0.15` | Ground atmospheric-perspective strength in [0, 1]. Zero removes this blend. |

@@ -221,7 +221,7 @@ const fx = new BetterSky(viewer, {
 | `enabled` | boolean | `true` | 启用管线；运行时切换同时控制 HBAO 和 SMAA。 |
 | `coverage` | number | `0.34` | 天气覆盖度 [0, 1]，与云层密度分别控制。 |
 | `localWeatherVelocity` | array / Cartesian2 | `[0.0003, 0.0001]` | 天气图 UV 每秒偏移量；负值反向。 |
-| `toneMappingMode` | number | `9` | 2/3 Reinhard2；4 Uncharted2；7 AgX；8 Neutral；9 ACES；10 Linear；11 Reinhard；12 Cineon。切换会重建天空渲染阶段。 |
+| `toneMappingMode` | number | `9` | 2 Reinhard2；4 Uncharted2；7 AgX；8 Neutral；9 ACES；10 Linear；11 Reinhard；12 Cineon。切换会重建天空渲染阶段。历史模式 3 需要亮度纹理绑定，当前 SDK 未接入，不作为支持选项。 |
 | `toneMappingExposure` | number | `2.8` | 色调映射前的亮度倍率，不是 EV 档位。 |
 | `irradianceScale` | number | `0.15` | 非负地表辐照度增益。 |
 | `aerialPerspectiveStrength` | number | `0.15` | 地表大气透视混合强度 [0, 1]；0 关闭此混合。 |

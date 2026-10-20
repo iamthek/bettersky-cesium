@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {
-  copyrightLine, distDirectory, inspectJavaScript, listDirectoryEntries, packageDirectory, readAssetManifest,
+  copyrightLine, distDirectory, inspectJavaScript, inspectPublicDeclarations, listDirectoryEntries, packageDirectory, readAssetManifest,
   readJson, removeOwnedDirectory, repoRoot, sha256, validatePackageEntries,
 } from './shared.mjs';
 
@@ -84,6 +84,8 @@ export async function buildSdk() {
   const startedAt = performance.now();
   const root = await readJson(join(repoRoot, 'package.json'));
   if (root.private !== true || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(root.version || '')) throw new Error('Root package must remain private with an explicit SDK version.');
+  const publicDeclarations = await readFile(join(repoRoot, 'scripts/sdk/public-api.d.ts'));
+  inspectPublicDeclarations(publicDeclarations.toString('utf8'));
   const assetManifest = await readAssetManifest();
   const notices = new Set();
   const shaders = new Map();
@@ -141,7 +143,8 @@ export async function buildSdk() {
   await removeOwnedDirectory(packageDirectory);
   await mkdir(join(distDirectory, 'assets'), { recursive: true });
   await writeFile(join(distDirectory, 'index.js'), finalBundle);
-  await copyFile(join(repoRoot, 'scripts/sdk/public-api.d.ts'), join(distDirectory, 'index.d.ts'));
+  // Retain the reviewed UTF-8 JSDoc bytes for editor hover and parameter hints.
+  await writeFile(join(distDirectory, 'index.d.ts'), publicDeclarations);
   for (const asset of assetManifest.assets) {
     const sourcePath = join(repoRoot, 'static/BetterSkyAssets', asset.path);
     const data = await readFile(sourcePath);

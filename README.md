@@ -118,6 +118,36 @@ viewer.destroy()
 
 If effects are missing, first check resource requests under `CESIUM_BASE_URL + 'BetterSkyAssets/'`, the browser console and WebGL capabilities. Requests must return actual files rather than an HTML fallback.
 
+### Parameter hints and TypeScript
+
+The SDK includes `dist/index.d.ts`; no separate types package is needed. Its Chinese JSDoc explains configuration meanings, units, ranges, defaults and interactions, with parameter descriptions for constructors, methods and setters. Hover over a field or inspect a call signature in an editor with TypeScript language services, such as VS Code. JavaScript projects can use these hints too.
+
+```ts
+import { BetterSky, type BetterSkyOptions } from 'bettersky-cesium'
+
+const options: BetterSkyOptions = {
+  time: undefined, // Explicitly keep the host time; omitting this field in the constructor uses the preset date.
+  coverage: 0.5, // Cloud coverage [0, 1], controlled separately from per-layer density.
+  localWeatherVelocity: [0.0003, 0.0001], // Weather texture UV per second, rather than metres per second.
+  cloud: {
+    altitudes: [4000, 6000, 10000, 0], // Three cloud base heights in metres above the rendered planet, then a reserved zero.
+  },
+}
+
+const effects = new BetterSky(viewer, options)
+effects.update({ cloud: { heights: [1300, 1800, 650, 0] } }) // Partial update: nested objects merge, arrays are replaced.
+```
+
+Read `BetterSky.defaultOptions` for an independent copy of the complete preset. The declarations also describe interactions between legacy `cloud.haze*` settings and volumetric light modes, scene settings and disposal constraints.
+
+The declarations cover these existing controls with their defaults unchanged:
+
+| Control | Usage and default |
+| --- | --- |
+| `toneMappingMode` | `2` Reinhard2, `4` Uncharted2, `7` AgX, `8` Neutral, `9` ACES, `10` Linear, `11` Reinhard, `12` Cineon; default `9`. Historical mode `3` is currently unsupported. |
+| `hbao.denoise` | HBAO bilateral filtering, default `true`; configurable only during construction. `update()` does not change it. |
+| `effects.pass.showSnow` / `showRain` | Pass setters, both `false` by default. Assign explicitly to enable; assignments rebuild related stages. These are neither constructor/update options nor getters for the current state. |
+
 ## License
 
 [Proprietary trial license](https://cdn.jsdelivr.net/npm/bettersky-cesium@0.1.0/LICENSE). All individuals and organizations may currently try the SDK at no charge, including commercial projects and production deployments, without individual approval. The SDK and applications using it may remain closed source. There is no fixed charging date. The licensor may end the free trial for specified versions or uses with at least 30 calendar days' published notice; continued affected use then requires separate authorization, which may be paid. Lawful trial use is not charged retroactively, and existing separate authorizations retain their agreed terms.
