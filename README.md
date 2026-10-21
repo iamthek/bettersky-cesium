@@ -2,7 +2,7 @@
 
 **English** | [简体中文](https://github.com/iamthek/bettersky-cesium/blob/main/README.zh-CN.md)
 
-Bring your Cesium globe to life with layered clouds, moving cloud shadows and sunlight streaming through the sky. BetterSky plugs into an existing, official CesiumJS Viewer and brings atmosphere, lighting and image effects together in one SDK.
+Add rich, layered sky effects to Cesium, including volumetric clouds, volumetric lighting, lens flare and sunbeams from the Tyndall effect. BetterSky plugs into an existing, official CesiumJS Viewer and brings atmosphere, lighting and image effects together in one SDK.
 
 [Live demo](https://iamthek.github.io/bettersky-cesium/) · [User guide & API](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md) · [npm](https://www.npmjs.com/package/bettersky-cesium)
 

@@ -2,7 +2,7 @@
 
 [English](https://github.com/iamthek/bettersky-cesium/blob/main/README.md) | **简体中文**
 
-为 Cesium 地球加入层次丰富的云、随天气移动的云影，以及穿过云隙的阳光。BetterSky 以插件方式接入已有的官方原版 CesiumJS Viewer，将大气、光照和画面增强整合到一个 SDK 中。
+为 Cesium 加入体积云、体积光、镜头光晕、丁达尔效应等层次丰富的天空效果。BetterSky 以插件方式接入已有的官方原版 CesiumJS Viewer，将大气、光照和画面增强整合到一个 SDK 中。
 
 [在线演示](https://iamthek.github.io/bettersky-cesium/) · [使用指南与 API](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.zh-CN.md) · [npm](https://www.npmjs.com/package/bettersky-cesium)
 
