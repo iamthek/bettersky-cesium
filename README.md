@@ -6,7 +6,7 @@ Bring your Cesium globe to life with layered clouds, moving cloud shadows and su
 
 [Live demo](https://iamthek.github.io/bettersky-cesium/) · [User guide & API](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md) · [npm](https://www.npmjs.com/package/bettersky-cesium)
 
-![BetterSky clouds, atmosphere and lighting in the Cesium demo](https://raw.githubusercontent.com/iamthek/bettersky-cesium/main/docs/images/demo.gif)
+![BetterSky clouds, atmosphere and lighting in the Cesium demo](https://raw.githubusercontent.com/iamthek/bettersky-cesium/main/docs/images/demo.png)
 
 ## Highlights
 
