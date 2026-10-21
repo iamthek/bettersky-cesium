@@ -6,7 +6,7 @@
 
 [在线演示](https://iamthek.github.io/bettersky-cesium/) · [使用指南与 API](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.zh-CN.md) · [npm](https://www.npmjs.com/package/bettersky-cesium)
 
-![BetterSky 在 Cesium 演示中的云、大气与光照效果](https://raw.githubusercontent.com/iamthek/bettersky-cesium/main/docs/images/demo.png)
+![BetterSky 在 Cesium 演示中的云、大气与光照效果](https://raw.githubusercontent.com/iamthek/bettersky-cesium/main/docs/images/demo.gif)
 
 ## 项目亮点
 
