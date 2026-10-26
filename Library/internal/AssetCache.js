@@ -1,5 +1,6 @@
 // Keep original bytes for the page lifetime, independently of instance/GPU ownership.
 const entries = new Map();
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 
 function absoluteUrl(url) {
     const base = globalThis.document?.baseURI ?? globalThis.location?.href;
@@ -19,27 +20,45 @@ export function loadAssetBuffer(url, onProgress, { requestHeader, withCredential
         entry = { listeners: new Set() };
         entries.set(key, entry);
         entry.promise = (async () => {
+            let timeout;
             try {
+                const controller = new AbortController();
+                const resetTimeout = () => {
+                    clearTimeout(timeout);
+                    // Bound stalled headers/body reads without rejecting a slow download
+                    // that is still making progress. All consumers share this deadline.
+                    timeout = setTimeout(() => controller.abort(new Error(
+                        `Asset download timed out after ${DOWNLOAD_IDLE_TIMEOUT_MS} ms without progress.`
+                    )), DOWNLOAD_IDLE_TIMEOUT_MS);
+                };
+                resetTimeout();
                 const response = await fetch(key, {
                     headers: requestHeader,
                     credentials: withCredentials ? "include" : "same-origin",
+                    signal: controller.signal,
                 });
                 if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+                resetTimeout();
                 let buffer;
                 if (response.body?.getReader) {
                     const reader = response.body.getReader();
                     const chunks = [];
                     const total = Number(response.headers.get("Content-Length")) || 0;
                     let loaded = 0;
-                    for (;;) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        chunks.push(value);
-                        loaded += value.byteLength;
-                        for (const listener of entry.listeners) {
-                            try { listener({ lengthComputable: total > 0, loaded, total }); }
-                            catch (error) { console.error(error); }
+                    try {
+                        for (;;) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            if (value.byteLength > 0) resetTimeout();
+                            chunks.push(value);
+                            loaded += value.byteLength;
+                            for (const listener of entry.listeners) {
+                                try { listener({ lengthComputable: total > 0, loaded, total }); }
+                                catch (error) { console.error(error); }
+                            }
                         }
+                    } finally {
+                        reader.releaseLock();
                     }
                     const bytes = new Uint8Array(loaded);
                     let offset = 0;
@@ -57,6 +76,7 @@ export function loadAssetBuffer(url, onProgress, { requestHeader, withCredential
                 if (entries.get(key) === entry) entries.delete(key);
                 throw new Error(`[BetterSky] Failed to download asset: ${key}`, { cause });
             } finally {
+                clearTimeout(timeout);
                 entry.listeners.clear();
             }
         })();

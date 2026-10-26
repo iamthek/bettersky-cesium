@@ -21,15 +21,28 @@ const response = buffer => ({ ok: true, arrayBuffer: async () => buffer });
 async function createHarness() {
     const requests = [];
     const errors = [];
+    const timers = new Map();
+    let now = 0;
+    let timerId = 0;
     let assetBase = "https://cdn.example/sdk/v1/";
     let renderingConstructions = 0;
     const context = vm.createContext({
         URL, ArrayBuffer, Uint8Array, Uint16Array, Uint32Array, Int8Array, Int16Array, Int32Array,
         Float32Array, Float64Array, DataView, TextDecoder, Error, AggregateError,
+        AbortController,
+        setTimeout(callback, delay) {
+            const id = ++timerId;
+            timers.set(id, { callback, deadline: now + delay });
+            return id;
+        },
+        clearTimeout(id) { timers.delete(id); },
         Float16Array: globalThis.Float16Array ?? Uint16Array,
         document: { baseURI: "https://app.example/view/index.html" },
         console: { error: error => errors.push(error) },
-        fetch: (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
+        fetch: (url, options) => new Promise((resolve, reject) => {
+            options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+            requests.push({ url, options, resolve, reject });
+        }),
     });
     class RenderingResource {
         constructor() { renderingConstructions++; assert.fail("preloading must not construct rendering resources"); }
@@ -73,6 +86,16 @@ async function createHarness() {
         ...entry.namespace,
         requests,
         errors,
+        advanceTime(milliseconds) {
+            now += milliseconds;
+            for (const [id, { callback, deadline }] of [...timers]) {
+                if (deadline <= now) {
+                    timers.delete(id);
+                    callback();
+                }
+            }
+        },
+        get pendingTimeouts() { return timers.size; },
         setAssetBase(value) { assetBase = value; },
         get renderingConstructions() { return renderingConstructions; },
     };
@@ -98,6 +121,74 @@ test("preloading downloads the eight required files once across concurrent calls
     assert.equal(harness.requests.length, 8, "completed raw buffers remain available to ordinary initialization");
     assert.equal(harness.renderingConstructions, 0);
     assert.equal(harness.errors.length, 0);
+    assert.equal(harness.pendingTimeouts, 0);
+});
+
+test("a stalled download aborts every shared consumer and a preload retry replaces only that request", async () => {
+    const harness = await createHarness();
+    const urls = requiredUrls("https://cdn.example/sdk/v1/");
+    const first = assert.rejects(harness.preloadAssets(), error => {
+        assert(error instanceof AggregateError);
+        assert.equal(error.errors.length, 1);
+        assert(error.errors[0].message.includes(urls[2]));
+        assert.match(error.errors[0].cause.message, /timed out.*60000 ms without progress/);
+        return true;
+    });
+    const concurrent = assert.rejects(harness.preloadAssets(), AggregateError);
+    const normalLoad = assert.rejects(new harness.ArrayBufferLoader().loadAsync(urls[2]), /Failed to download asset/);
+    for (const [index, request] of harness.requests.entries()) {
+        if (index !== 2) request.resolve(response(bytes(index)));
+    }
+    await nextTurn();
+    assert.equal(harness.pendingTimeouts, 1);
+    harness.advanceTime(59_999);
+    assert.equal(harness.requests[2].options.signal.aborted, false);
+    harness.advanceTime(1);
+    await Promise.all([first, concurrent, normalLoad]);
+    assert.equal(harness.requests[2].options.signal.aborted, true);
+    assert.equal(harness.pendingTimeouts, 0);
+
+    const retry = harness.preloadAssets();
+    const normalRetry = new harness.ArrayBufferLoader().loadAsync(urls[2]);
+    assert.deepEqual(harness.requests.slice(8).map(request => request.url), [urls[2]]);
+    const buffer = bytes(1, 2);
+    harness.requests[8].resolve(response(buffer));
+    await retry;
+    assert.equal(await normalRetry, buffer);
+    assert.equal(harness.pendingTimeouts, 0);
+});
+
+test("response headers and streamed bytes renew the idle deadline, and a stalled body can be retried", async () => {
+    const harness = await createHarness();
+    const url = "https://cdn.example/slow-stream.bin";
+    const downloading = harness.loadAssetBuffer(url);
+    const rejected = assert.rejects(downloading, error => /timed out/.test(error.cause.message));
+    const signal = harness.requests[0].options.signal;
+    let stream;
+    harness.advanceTime(59_999);
+    harness.requests[0].resolve(new Response(new ReadableStream({
+        start(controller) {
+            stream = controller;
+            signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+        },
+    })));
+    await nextTurn();
+    harness.advanceTime(59_999);
+    assert.equal(signal.aborted, false, "receiving headers resets the initial connection deadline");
+    stream.enqueue(Uint8Array.from([1, 2]));
+    await nextTurn();
+    harness.advanceTime(59_999);
+    assert.equal(signal.aborted, false, "active downloads can take longer than 60 seconds in total");
+    assert.equal(harness.loadAssetBuffer(url), downloading);
+    harness.advanceTime(1);
+    await rejected;
+    assert.equal(signal.aborted, true);
+    assert.equal(harness.pendingTimeouts, 0);
+    const retry = harness.loadAssetBuffer(url);
+    const buffer = bytes(3, 4);
+    harness.requests[1].resolve(response(buffer));
+    assert.equal(await retry, buffer);
+    assert.equal(harness.pendingTimeouts, 0);
 });
 
 test("preload failures aggregate every failed URL and retry only missing downloads", async () => {
@@ -122,6 +213,7 @@ test("preload failures aggregate every failed URL and retry only missing downloa
     assert.equal(error.errors[0].cause, networkError);
     assert(error.errors[1].message.includes(urls[5]));
     assert.match(error.errors[1].cause.message, /HTTP 503/);
+    assert.equal(harness.pendingTimeouts, 0, "network and HTTP failures clear their timeout");
 
     const retry = harness.preloadAssets();
     assert.deepEqual(harness.requests.slice(8).map(request => request.url), [urls[0], urls[5]]);
@@ -129,6 +221,7 @@ test("preload failures aggregate every failed URL and retry only missing downloa
     assert.equal(await retry, undefined);
     assert.equal(await harness.preloadAssets(), undefined);
     assert.equal(harness.requests.length, 10);
+    assert.equal(harness.pendingTimeouts, 0);
 });
 
 test("cache keys normalize relative URLs and keep different asset base URLs independent", async () => {
@@ -187,6 +280,7 @@ test("shared streaming downloads retain progress and loader request options", as
     assert.equal(first, shared);
     assert.deepEqual({ ...harness.requests[0].options }, {
         headers: { "X-Asset-Version": "2" }, credentials: "include",
+        signal: harness.requests[0].options.signal,
     });
     harness.requests[0].resolve(new Response(new ReadableStream({
         start(controller) {
@@ -201,6 +295,9 @@ test("shared streaming downloads retain progress and loader request options", as
         { loaded: 5, total: 5, lengthComputable: true },
     ]);
     assert.deepEqual(harness.errors, [observerError, observerError]);
+    assert.equal(harness.pendingTimeouts, 0);
+    harness.advanceTime(60_000);
+    assert.equal(harness.requests[0].options.signal.aborted, false, "successful downloads clear their timeout");
 });
 
 test("a corrupt EXR is evicted and a later load parses a fresh real asset", async () => {

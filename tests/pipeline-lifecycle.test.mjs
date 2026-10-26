@@ -59,6 +59,7 @@ async function createHarness({ realPrecomputed = false, realAssetCache = false, 
         console: { error: error => errors.push(error), log() {} },
         Blob: AssetBlob,
         URL: AssetUrl,
+        AbortController, setTimeout, clearTimeout,
         fetch: async url => {
             rawRequests.push(url);
             return { ok: true, arrayBuffer: async () => assetBuffer(url) };

@@ -148,7 +148,11 @@ const viewer = new Viewer(container)
 const effects = new BetterSky(viewer)
 ```
 
-命名导出的 `BetterSky` 也提供此方法。同一页面内的并发调用会与彼此及运行时资源请求共享下载。已下载的原始数据仅缓存在当前页面，实例销毁后仍保留；刷新后的复用依赖浏览器 HTTP 缓存。再次调用 `preloadAssets()` 会重试之前下载失败的资源。Promise 成功只表示下载完成：`effects.assetsReady` 仍负责实例所需资源的解码和 GPU 上传，并在所有必需任务结束后结算。预下载不包含雪纹理或 SMAA 查找纹理。
+命名导出的 `BetterSky` 也提供此方法。同一 SDK 模块副本内的并发调用会彼此去重，并与运行时资源请求共享下载。成功下载的原始数据缓存在当前页面，实例销毁后仍保留；刷新后的复用依赖浏览器 HTTP 缓存。独立 bundle 或 SDK 副本各自使用独立缓存。
+
+每项共享下载在 60 秒没有进展时超时，等待响应头和读取响应体期间均适用；收到响应头或非空的响应体数据会重置计时器。超时会中止请求。失败或超时的资源会从缓存中移除，再次显式调用 `preloadAssets()` 会重试；不会自动重试。
+
+Promise 成功只表示下载完成：`effects.assetsReady` 仍负责实例所需资源的解码和 GPU 上传，并在所有必需任务结束后结算。预下载不包含雪纹理或 SMAA 查找纹理。
 
 ```js
 const current = effects.getOptions()

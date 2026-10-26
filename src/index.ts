@@ -520,9 +520,10 @@ export interface BetterSkyConstructor extends Function {
   readonly defaultOptions: BetterSkyOptions;
   /**
    * 在创建 Viewer 前预下载八项必需的 BIN/EXR/PNG 原始资源；无需 Viewer 或 GPU。
-   * 同页并发调用与运行时资源请求会去重；成功仅表示原始资源下载完成，不表示实例已解码或上传 GPU。
-   * 雪纹理与 SMAA 查找纹理不在范围内。失败时以包含失败资源 URL 的 AggregateError 拒绝，再次调用会重试缺失资源。
-   * 缓存仅在当前页面内有效，并在实例 dispose() 后保留。
+   * 同一 SDK 模块副本内的并发调用与运行时资源请求会去重；独立 bundle / SDK 副本使用独立缓存。
+   * 每项共享下载有 60 秒无进展超时，覆盖等待响应头与读取响应体；收到响应头或非空数据会重置计时器。超时会中止请求。
+   * 失败或超时的资源会清除缓存；Promise 以包含失败资源 URL 的 AggregateError 拒绝，需再次显式调用以重试，不会自动重试。
+   * 成功仅表示原始资源下载完成，不表示实例已解码或上传 GPU。缓存会在实例 dispose() 后保留；雪纹理与 SMAA 查找纹理不在范围内。
    */
   preloadAssets(): Promise<void>;
   /**

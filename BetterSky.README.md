@@ -148,7 +148,11 @@ const viewer = new Viewer(container)
 const effects = new BetterSky(viewer)
 ```
 
-The same method is available on the named `BetterSky` export. Calls made concurrently on the page share downloads with each other and with runtime asset requests. Successfully downloaded raw data stays cached for the current page, including after an instance is disposed; reuse after a page reload depends on the browser's HTTP cache. Failed resources are retried by the next `preloadAssets()` call. A resolved preload means only that downloads succeeded: `effects.assetsReady` still tracks the instance's required asset tasks through decoding and GPU upload, and settles after all required tasks finish. Snow and SMAA lookup textures are excluded from preloading.
+The same method is available on the named `BetterSky` export. Concurrent calls within the same SDK module copy share downloads with each other and with runtime asset requests. Successfully downloaded raw data stays cached for the current page, including after an instance is disposed; reuse after a page reload depends on the browser's HTTP cache. Independent bundles or SDK copies have separate caches.
+
+Each shared download times out after 60 seconds without progress, including while waiting for response headers or reading the body. Receiving headers or nonempty body data resets the timer. A timeout aborts the request. Failed or timed-out resources are removed from the cache, and the next explicit `preloadAssets()` call retries them; there is no automatic retry.
+
+A resolved preload means only that downloads succeeded: `effects.assetsReady` still tracks the instance's required asset tasks through decoding and GPU upload, and settles after all required tasks finish. Snow and SMAA lookup textures are excluded from preloading.
 
 ```js
 const current = effects.getOptions()
