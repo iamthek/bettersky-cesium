@@ -48,6 +48,7 @@ const defaultValue = (a, b) => a ?? b; // 官方 Cesium 不导出 defaultValue
 defaultValue.EMPTY_OBJECT = Object.freeze({});
 import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from "./internal/MathTypes.js";
 import AssetManager from "./internal/AssetManager.js";
+import { invalidateAssetBuffer, loadAssetBuffer } from "./internal/AssetCache.js";
 import SceneStateLease from "./internal/SceneStateLease.js";
 import { getWebGLContext, getCameraPosition, getStageIndex, restoreStageOrder } from "./internal/CesiumAdapter.js";
 import { runCleanup } from "./internal/cleanup.js";
@@ -1012,26 +1013,60 @@ export default class GeospatialPipelinePass {
     _registerImageAsset(id, assetPath, key, required = true, mipmaps = false) {
         const url = buildModuleUrl(assetPath);
         this._assets.add({ id, url, required, load: async () => {
-            const image = await Resource.createIfNeeded(url).fetchImage();
+            const buffer = await loadAssetBuffer(url);
             if (this._destroyed) return;
-            this._publishTexture(key, () => new Texture({
-                context: this._scene.context,
-                source: image,
-                width: image.width,
-                height: image.height,
-                sampler: new Sampler({
-                    wrapS: WebGLConstants.REPEAT,
-                    wrapT: WebGLConstants.REPEAT,
-                    minificationFilter: mipmaps ? WebGLConstants.LINEAR_MIPMAP_LINEAR : WebGLConstants.LINEAR,
-                    magnificationFilter: WebGLConstants.LINEAR,
-                }),
-            }), mipmaps);
+            let image;
+            try {
+                const blob = new Blob([buffer], { type: "image/png" });
+                if (typeof globalThis.createImageBitmap === "function") {
+                    // Decode bytes directly so hosts do not need img-src blob:.
+                    // WebGL ignores UNPACK_FLIP_Y_WEBGL for ImageBitmap sources;
+                    // flip here to match Texture's default HTML image upload.
+                    image = await createImageBitmap(blob, {
+                        imageOrientation: "flipY",
+                        premultiplyAlpha: "none",
+                        colorSpaceConversion: "default",
+                    });
+                } else {
+                    const objectUrl = URL.createObjectURL(blob);
+                    try { image = await Resource.createIfNeeded(objectUrl).fetchImage(); }
+                    finally { URL.revokeObjectURL(objectUrl); }
+                }
+            } catch (error) {
+                invalidateAssetBuffer(url, buffer);
+                throw error;
+            }
+            try {
+                if (this._destroyed) return;
+                this._publishTexture(key, () => new Texture({
+                    context: this._scene.context,
+                    source: image,
+                    width: image.width,
+                    height: image.height,
+                    sampler: new Sampler({
+                        wrapS: WebGLConstants.REPEAT,
+                        wrapT: WebGLConstants.REPEAT,
+                        minificationFilter: mipmaps ? WebGLConstants.LINEAR_MIPMAP_LINEAR : WebGLConstants.LINEAR,
+                        magnificationFilter: WebGLConstants.LINEAR,
+                    }),
+                }), mipmaps);
+            } finally {
+                image.close?.();
+            }
         } });
     }
 
     _registerVolumeAsset(id, file, key, width, height, depth, { levels, nearest = false } = {}) {
         const url = buildModuleUrl("BetterSkyAssets/GeospatialAssets/" + file);
         this._assets.add({ id, url, load: async () => {
+            const buffer = await loadAssetBuffer(url);
+            if (this._destroyed) return;
+            // A successful HTTP response can still contain an HTML fallback or
+            // a truncated BIN; do not retain such data across explicit retries.
+            if (buffer.byteLength !== width * height * depth) {
+                invalidateAssetBuffer(url, buffer);
+                throw new Error(`[BetterSky] Invalid volume asset size: ${url}`);
+            }
             const Loader = createData3DTextureLoaderClass(parseUint8Array, {
                 width, height, depth,
                 format: RedFormat,

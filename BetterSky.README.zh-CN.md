@@ -127,6 +127,29 @@ effects.enabled = true
 
 `BetterSky.defaultOptions` 返回独立的默认预设副本；`effects.getOptions()` 返回独立的已接受配置快照，修改快照不会改变实例。向量在快照中统一为数组，高级 Pass 的直接修改不会同步到快照。
 
+#### 创建 Viewer 前预下载资源
+
+如果希望在创建 Viewer 前下载八项必需的 BIN、EXR 和 PNG 文件，可在客户端启动时调用静态方法。请先配置应用的 `CESIUM_BASE_URL`；该方法不需要 Viewer 或 GPU：
+
+```js
+import BetterSky from 'bettersky-cesium'
+
+try {
+  await BetterSky.preloadAssets()
+} catch (error) {
+  if (error instanceof AggregateError) {
+    // 聚合错误包含下载失败的资源 URL。
+    console.error('BetterSky 资源下载失败：', error.errors)
+  }
+  throw error
+}
+
+const viewer = new Viewer(container)
+const effects = new BetterSky(viewer)
+```
+
+命名导出的 `BetterSky` 也提供此方法。同一页面内的并发调用会与彼此及运行时资源请求共享下载。已下载的原始数据仅缓存在当前页面，实例销毁后仍保留；刷新后的复用依赖浏览器 HTTP 缓存。再次调用 `preloadAssets()` 会重试之前下载失败的资源。Promise 成功只表示下载完成：`effects.assetsReady` 仍负责实例所需资源的解码和 GPU 上传，并在所有必需任务结束后结算。预下载不包含雪纹理或 SMAA 查找纹理。
+
 ```js
 const current = effects.getOptions()
 console.log(current.coverage)
@@ -157,6 +180,7 @@ unsubscribe()
 | API | 读写方式 / 用途 |
 | --- | --- |
 | `BetterSky.defaultOptions` | 静态 getter，返回新的默认配置副本。 |
+| `BetterSky.preloadAssets()` | 创建 Viewer 前下载八项必需原始资源；失败时以包含失败资源 URL 的 `AggregateError` 拒绝。 |
 | `effects.update(options)` | 与便捷 setter 共用校验和应用通路；未知字段或不合法值在提交前拒绝。 |
 | `effects.getOptions()` | 返回当前已接受配置的独立快照；HBAO 关闭时保留其内部参数供重开恢复。 |
 | `effects.assetStatus` / `effects.assetErrors` | 天空资源的状态与只读错误快照。 |

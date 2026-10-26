@@ -30,6 +30,7 @@ export interface Options {
 test('TypeScript emits only the documented public facade without implementation paths or maps', async () => {
   const source = (await emitPublicDeclarations()).toString('utf8');
   assert.match(source, /export declare const BetterSky: BetterSkyConstructor/);
+  assert.match(source, /preloadAssets\(\): Promise<void>/);
   assert.match(source, /new \(viewerOrScene: Viewer \| Scene, options\?: BetterSkyOptions\): BetterSky/);
   assert.match(source, /getOptions\(\): BetterSkyOptions/);
   assert.match(source, /readonly assetsReady: Promise<void>/);
@@ -51,6 +52,9 @@ import type { Viewer } from 'cesium';
 declare const viewer: Viewer;
 const constructor: typeof BetterSky = Named;
 const name: string = constructor.name;
+const defaultPreload: Promise<void> = BetterSky.preloadAssets();
+const namedPreload: Promise<void> = Named.preloadAssets();
+const constructorPreload: Promise<void> = constructor.preloadAssets();
 class Extended extends Named {}
 const effects: InstanceType<typeof Named> = new Extended(viewer, { hbao: { denoise: false } });
 const options: BetterSkyOptions = effects.getOptions();

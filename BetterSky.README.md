@@ -127,6 +127,29 @@ Constructor options merge with the defaults; `update()` merges with the accepted
 
 `BetterSky.defaultOptions` returns an independent copy of the default preset. `effects.getOptions()` returns an independent snapshot of the accepted configuration; changing the snapshot does not change the instance. Vectors are normalized to arrays in snapshots. Direct changes through the advanced Pass API are not reflected in the snapshot.
 
+#### Preload assets before creating a Viewer
+
+Call the static method during client startup when you want the eight required BIN, EXR, and PNG files downloaded before constructing a Viewer. Configure the application's `CESIUM_BASE_URL` first; the method needs no Viewer or GPU:
+
+```js
+import BetterSky from 'bettersky-cesium'
+
+try {
+  await BetterSky.preloadAssets()
+} catch (error) {
+  if (error instanceof AggregateError) {
+    // The aggregate contains the failures for the resource URLs that could not be downloaded.
+    console.error('BetterSky asset downloads failed:', error.errors)
+  }
+  throw error
+}
+
+const viewer = new Viewer(container)
+const effects = new BetterSky(viewer)
+```
+
+The same method is available on the named `BetterSky` export. Calls made concurrently on the page share downloads with each other and with runtime asset requests. Successfully downloaded raw data stays cached for the current page, including after an instance is disposed; reuse after a page reload depends on the browser's HTTP cache. Failed resources are retried by the next `preloadAssets()` call. A resolved preload means only that downloads succeeded: `effects.assetsReady` still tracks the instance's required asset tasks through decoding and GPU upload, and settles after all required tasks finish. Snow and SMAA lookup textures are excluded from preloading.
+
 ```js
 const current = effects.getOptions()
 console.log(current.coverage)
@@ -157,6 +180,7 @@ Reading `assetsReady` starts and waits for the six required sky asset tasks, eve
 | API | Access / purpose |
 | --- | --- |
 | `BetterSky.defaultOptions` | Static getter returning a fresh copy of the default options. |
+| `BetterSky.preloadAssets()` | Downloads the eight required raw assets before Viewer creation; rejects with an `AggregateError` containing failed resource URLs. |
 | `effects.update(options)` | Shares validation and application logic with convenience setters; rejects unknown fields or invalid values before committing changes. |
 | `effects.getOptions()` | Returns an independent snapshot of accepted options; retains HBAO's internal values while disabled so they can be restored. |
 | `effects.assetStatus` / `effects.assetErrors` | Sky asset state and a read-only error snapshot. |

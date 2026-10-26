@@ -1,4 +1,5 @@
 import { 
+	DataTexture,
 	DataTextureLoader,
 	DataUtils,
 	FloatType,
@@ -10,6 +11,7 @@ import {
 	RGBAFormat
  } from "three";
 import * as fflate from './fflate.module.js';
+import ArrayBufferLoader from './ArrayBufferLoader.js';
 
 /**
  * OpenEXR loader currently supports uncompressed, ZIP(S), RLE, PIZ and DWA/B compression.
@@ -2357,20 +2359,25 @@ class EXRLoader extends DataTextureLoader {
 	}
 
 	load( url, onLoad, onProgress, onError ) {
-
-		function onLoadCallback( texture, texData ) {
-
+		const texture = new DataTexture();
+		const loader = new ArrayBufferLoader( this.manager );
+		loader.setRequestHeader( this.requestHeader );
+		loader.setPath( this.path );
+		loader.setWithCredentials( this.withCredentials );
+		loader.load( url, buffer => {
+			const texData = this.parse( buffer );
+			texture.image = { data: texData.data, width: texData.width, height: texData.height };
+			texture.type = texData.type;
+			texture.format = texData.format;
 			texture.colorSpace = texData.colorSpace;
 			texture.minFilter = LinearFilter;
 			texture.magFilter = LinearFilter;
 			texture.generateMipmaps = false;
 			texture.flipY = false;
-
+			texture.needsUpdate = true;
 			if ( onLoad ) onLoad( texture, texData );
-
-		}
-
-		return super.load( url, onLoadCallback, onProgress, onError );
+		}, onProgress, onError );
+		return texture;
 
 	}
 

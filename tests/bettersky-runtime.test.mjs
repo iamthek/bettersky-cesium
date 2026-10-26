@@ -6,10 +6,10 @@ import * as Cesium from "cesium";
 
 // Exercise the public entry against observable host mutations, using real Cesium
 // scene-mode/frustum values and counted pass wrappers instead of a WebGL device.
-async function createHarness({ globals = {}, failPreRender = false } = {}) {
+async function createHarness({ globals = {}, failPreRender = false, preloadAssets = () => Promise.resolve() } = {}) {
   const passes = [];
   const errors = [];
-  const counters = { installs: 0, updates: 0 };
+  const counters = { installs: 0, updates: 0, preloads: 0 };
   const context = vm.createContext({
     Float16Array: Uint16Array,
     structuredClone,
@@ -50,7 +50,9 @@ async function createHarness({ globals = {}, failPreRender = false } = {}) {
     const entry = new vm.SourceTextModule(source, { context });
     await entry.link(specifier => {
       if (specifier === "./src/options.js") return new vm.SourceTextModule(optionsSource, { context });
-      const exports = specifier === "cesium" ? Cesium : specifier.endsWith("viewportQuadCommand.js")
+      const exports = specifier === "cesium" ? Cesium : specifier.endsWith("preloadAssets.js")
+        ? { default() { counters.preloads++; return preloadAssets(); } }
+        : specifier.endsWith("viewportQuadCommand.js")
         ? { installViewportCommands() { counters.installs++; } }
         : { default: Pass };
       return new vm.SyntheticModule(Object.keys(exports), function () {
@@ -87,6 +89,33 @@ async function createHarness({ globals = {}, failPreRender = false } = {}) {
   }
   return { BetterSky: await loadEntry(), loadEntry, createViewer, passes, errors, counters };
 }
+
+test("static preloading forwards completion and failure without constructing an instance", async () => {
+  let resolvePreload;
+  let rejectPreload;
+  let pending = new Promise(resolve => { resolvePreload = resolve; });
+  const harness = await createHarness({ preloadAssets: () => pending });
+  assert.equal(harness.BetterSky.preloadAssets(), pending);
+  assert.equal(harness.counters.preloads, 1);
+  assert.equal(harness.counters.installs, 0);
+  assert.equal(harness.passes.length, 0);
+  resolvePreload();
+  assert.equal(await pending, undefined);
+
+  pending = new Promise((resolve, reject) => { rejectPreload = reject; });
+  const failure = new AggregateError([new Error("missing asset")], "preload failed");
+  const rejected = assert.rejects(harness.BetterSky.preloadAssets(), error => error === failure);
+  rejectPreload(failure);
+  await rejected;
+  assert.equal(harness.passes.length, 0);
+
+  // Preloading does not acquire the active-instance lease or require rendering globals.
+  new harness.BetterSky(harness.createViewer()).dispose();
+  const unsupported = await createHarness({ globals: { Float16Array: undefined, structuredClone: undefined } });
+  assert.equal(await unsupported.BetterSky.preloadAssets(), undefined);
+  assert.equal(unsupported.counters.installs, 0);
+  assert.equal(unsupported.passes.length, 0);
+});
 
 test("only one active public instance is allowed across duplicate bundles and disposal permits rebuilding", async () => {
   const harness = await createHarness();

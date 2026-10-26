@@ -519,6 +519,13 @@ export interface BetterSkyConstructor extends Function {
   /** 内置默认预设的独立副本；修改返回对象不会修改内置默认值，可用于读取默认值或生成自定义预设。 */
   readonly defaultOptions: BetterSkyOptions;
   /**
+   * 在创建 Viewer 前预下载八项必需的 BIN/EXR/PNG 原始资源；无需 Viewer 或 GPU。
+   * 同页并发调用与运行时资源请求会去重；成功仅表示原始资源下载完成，不表示实例已解码或上传 GPU。
+   * 雪纹理与 SMAA 查找纹理不在范围内。失败时以包含失败资源 URL 的 AggregateError 拒绝，再次调用会重试缺失资源。
+   * 缓存仅在当前页面内有效，并在实例 dispose() 后保留。
+   */
+  preloadAssets(): Promise<void>;
+  /**
    * 创建天空效果，将后处理加入场景并注册每帧更新；效果资源异步加载，宿主需持续渲染以驱动云动画。
    * @param viewerOrScene 已创建的 Cesium Viewer 或 Scene；仅传 Scene 时不会设置 Viewer 时钟。
    * @param options 覆盖默认预设的部分配置，嵌套对象深合并、数组整体替换；省略时使用完整默认预设。

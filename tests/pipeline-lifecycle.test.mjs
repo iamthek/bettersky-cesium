@@ -10,18 +10,71 @@ import * as Three from "three";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // Execute the real pass classes with counted GPU handles and controllable asset loads.
-async function createHarness({ realPrecomputed = false, failTextureAt, failFramebufferAt, failCommandAt } = {}) {
+async function createHarness({ realPrecomputed = false, realAssetCache = false, nativeImages = false, failTextureAt, failFramebufferAt, failCommandAt } = {}) {
     const liveTextures = new Set();
     const liveFramebuffers = new Set();
     const requests = [];
     const precomputedRequests = [];
     const errors = [];
+    const rawRequests = [];
+    const assetBuffers = new Map();
+    const bufferUrls = new WeakMap();
+    const objectUrls = new Map();
+    const revokedUrls = [];
+    const invalidatedBuffers = [];
+    const bitmapRequests = [];
+    const bitmaps = [];
+    let objectUrlCount = 0;
     let allocations = 0;
     let shaderReferences = 0;
     let textureAttempts = 0;
     let framebufferAttempts = 0;
     let commandAttempts = 0;
-    const context = vm.createContext({ console: { error: error => errors.push(error), log() {} } });
+    function assetBuffer(url) {
+        const size = url.endsWith("/shape.bin") ? 128 ** 3
+            : url.endsWith("/shape_detail.bin") ? 32 ** 3
+                : url.endsWith("/stbn.bin") ? 128 * 128 * 64 : 4;
+        const buffer = assetBuffers.get(url) ?? new ArrayBuffer(size);
+        bufferUrls.set(buffer, url);
+        return buffer;
+    }
+    class AssetBlob extends Blob {
+        constructor(parts, options) {
+            super(parts, options);
+            this.assetUrl = bufferUrls.get(parts[0]);
+        }
+    }
+    class AssetUrl extends URL {
+        static createObjectURL(blob) {
+            const url = `blob:pipeline-test-${++objectUrlCount}`;
+            objectUrls.set(url, blob);
+            return url;
+        }
+        static revokeObjectURL(url) {
+            assert(objectUrls.delete(url), "each temporary image URL is revoked once");
+            revokedUrls.push(url);
+        }
+    }
+    const context = vm.createContext({
+        console: { error: error => errors.push(error), log() {} },
+        Blob: AssetBlob,
+        URL: AssetUrl,
+        fetch: async url => {
+            rawRequests.push(url);
+            return { ok: true, arrayBuffer: async () => assetBuffer(url) };
+        },
+        createImageBitmap: nativeImages ? (blob, options) => new Promise((resolve, reject) => {
+            const bitmap = {
+                width: 1, height: 1, closed: false,
+                close() {
+                    assert.equal(this.closed, false, "each decoded bitmap is released once");
+                    this.closed = true;
+                },
+            };
+            bitmaps.push(bitmap);
+            bitmapRequests.push({ url: blob.assetUrl, options, bitmap, resolve, reject });
+        }) : undefined,
+    });
 
     class Texture {
         constructor(options = {}) {
@@ -92,19 +145,24 @@ async function createHarness({ realPrecomputed = false, failTextureAt, failFrame
                 constructor(options) { Object.assign(this, options); }
                 static fromCache(options) { return options; }
             },
-            Resource: { createIfNeeded: url => ({ fetchImage: () => pendingRequest(url) }) },
+            Resource: { createIfNeeded: url => ({ fetchImage: () => pendingRequest(objectUrls.get(url)?.assetUrl ?? url) }) },
             buildModuleUrl: value => value,
         },
         three: Three,
         "Library/Texture3D.js": { default: Texture3D },
         "Library/PostProcessStage.js": { default: RenderPass, viewportTriangleVertexShaderText: "" },
         "Library/geospatial/PrecomputedTexturesLoader.js": { default: PrecomputedTexturesLoader },
+        "Library/internal/AssetCache.js": {
+            loadAssetBuffer: url => Promise.resolve(assetBuffer(url)),
+            invalidateAssetBuffer: (url, buffer) => invalidatedBuffers.push({ url, buffer }),
+        },
         "Library/geospatial/PrecomputedDataLoader.js": {
             createData3DTextureLoaderClass: () => class { loadAsync(url) { return pendingRequest(url); } },
             createData3DTextureLoader: () => assert.fail("binary precomputed loader is outside this EXR test"),
             createDataTextureLoader: () => assert.fail("binary precomputed loader is outside this EXR test"),
         },
     };
+    if (realAssetCache) delete replacements["Library/internal/AssetCache.js"];
     if (realPrecomputed) {
         delete replacements["Library/geospatial/PrecomputedTexturesLoader.js"];
         replacements["Library/geospatial/EXRLoader.js"] = {
@@ -131,10 +189,17 @@ async function createHarness({ realPrecomputed = false, failTextureAt, failFrame
         modules.set(key, module);
         return module;
     }
-    const entry = await load("Library/GeospatialPipelinePass.js");
-    await entry.link((specifier, parent) => load(specifier.startsWith(".")
+    const link = (specifier, parent) => load(specifier.startsWith(".")
         ? path.posix.normalize(path.posix.join(path.posix.dirname(parent.identifier), specifier))
-        : specifier));
+        : specifier);
+    let preloader;
+    if (realAssetCache) {
+        preloader = await load("Library/internal/preloadAssets.js");
+        await preloader.link(link);
+        await preloader.evaluate();
+    }
+    const entry = await load("Library/GeospatialPipelinePass.js");
+    await entry.link(link);
     await entry.evaluate();
 
     const sharedVertexArray = { destroy() { assert.fail("viewport vertex array belongs to the context"); } };
@@ -179,6 +244,14 @@ async function createHarness({ realPrecomputed = false, failTextureAt, failFrame
         requests,
         precomputedRequests,
         errors,
+        rawRequests,
+        assetBuffers,
+        objectUrls,
+        revokedUrls,
+        invalidatedBuffers,
+        bitmapRequests,
+        bitmaps,
+        preloadAssets: preloader?.namespace.default,
         liveTextures,
         liveFramebuffers,
         failNextTexture(offset = 1) { failTextureAt = textureAttempts + offset; },
@@ -188,9 +261,15 @@ async function createHarness({ realPrecomputed = false, failTextureAt, failFrame
 }
 
 async function flushLoads(harness, reject = false) {
+    // Cache reads resolve before image decoding and binary conversion begin.
+    await new Promise(resolve => setImmediate(resolve));
     for (const request of harness.requests.splice(0)) {
         if (reject) request.reject(new Error("asset unavailable"));
         else request.resolve({ width: 1, height: 1, image: { width: 1, height: 1, depth: 1, data: new Uint8Array(4) } });
+    }
+    for (const request of harness.bitmapRequests.splice(0)) {
+        if (reject) request.reject(new Error("image decode failed"));
+        else request.resolve(request.bitmap);
     }
     for (const request of harness.precomputedRequests.splice(0)) {
         if (reject) request.reject(new Error("atmosphere unavailable"));
@@ -218,6 +297,136 @@ test("disposal releases owned resources once and ignores asset completions after
     assert.equal(harness.liveFramebuffers.size, 0);
     assert.equal(harness.shaderReferences, 0);
     assert.equal(harness.scene.context.defaultTexture3D, hostDefault3D);
+    assert.equal(harness.errors.length, 0);
+});
+
+test("preloaded raw assets survive pipeline initialization, disposal, and reconstruction", async () => {
+    const harness = await createHarness({ realAssetCache: true });
+    await harness.preloadAssets();
+    assert.equal(harness.rawRequests.length, 8);
+    assert.equal(harness.allocations, 0);
+    assert.equal(harness.shaderReferences, 0);
+    assert.equal(harness.requests.length, 0, "preloading does not decode images or construct textures");
+    assert.equal(harness.precomputedRequests.length, 0);
+    for (let cycle = 0; cycle < 2; cycle++) {
+        const pipeline = new harness.Pipeline(harness.scene, {});
+        const ready = pipeline.assetsReady;
+        await flushLoads(harness);
+        await ready;
+        assert.equal(pipeline.assetStatus, "ready");
+        assert.equal(harness.rawRequests.length, 8, "new GPU resources reuse page-level downloads");
+        assert.equal(harness.objectUrls.size, 0);
+        assert.equal(harness.revokedUrls.length, 2 * (cycle + 1));
+        pipeline.destroy();
+        assert.equal(harness.liveTextures.size, 0);
+        assert.equal(harness.liveFramebuffers.size, 0);
+        assert.equal(harness.shaderReferences, 0);
+    }
+    assert.equal(harness.errors.length, 0);
+});
+
+test("a truncated preloaded volume is invalidated and retry downloads only that asset", async () => {
+    const harness = await createHarness({ realAssetCache: true });
+    const shapeUrl = "BetterSkyAssets/GeospatialAssets/shape.bin";
+    harness.assetBuffers.set(shapeUrl, new ArrayBuffer(4));
+    await harness.preloadAssets();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    const ready = pipeline.assetsReady;
+    await flushLoads(harness);
+    await ready;
+    assert.equal(pipeline.assetStatus, "error");
+    assert.equal(pipeline.assetErrors.length, 1);
+    assert.equal(pipeline.assetErrors[0].id, "shape");
+    assert.match(pipeline.assetErrors[0].error.message, /Invalid volume asset size:.*shape\.bin/);
+    assert.equal(pipeline.shapeTexture, pipeline._defaultTexture3D);
+    assert.equal(harness.rawRequests.length, 8, "preloading itself retains raw bytes without parsing them");
+    harness.assetBuffers.delete(shapeUrl);
+    const retry = pipeline.retryAssets();
+    await flushLoads(harness);
+    await retry;
+    assert.equal(pipeline.assetStatus, "ready");
+    assert.deepEqual(harness.rawRequests.slice(8), [shapeUrl]);
+    pipeline.destroy();
+    assert.equal(harness.liveTextures.size, 0);
+    assert.equal(harness.liveFramebuffers.size, 0);
+});
+
+test("failed PNG decoding revokes its temporary URL and retry replaces only the rejected bytes", async () => {
+    const harness = await createHarness({ realAssetCache: true });
+    await harness.preloadAssets();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    const ready = pipeline.assetsReady;
+    await new Promise(resolve => setImmediate(resolve));
+    const weather = harness.requests.shift();
+    assert.match(weather.url, /local_weather\.png$/);
+    weather.reject(new Error("invalid PNG"));
+    await flushLoads(harness);
+    await ready;
+    assert.equal(pipeline.assetStatus, "error");
+    assert.equal(pipeline.assetErrors[0].id, "weather");
+    assert.equal(harness.objectUrls.size, 0);
+    assert.equal(harness.revokedUrls.length, 2);
+    const retry = pipeline.retryAssets();
+    await flushLoads(harness);
+    await retry;
+    assert.equal(pipeline.assetStatus, "ready");
+    assert.deepEqual(harness.rawRequests.slice(8), ["BetterSkyAssets/GeospatialAssets/local_weather.png"]);
+    assert.equal(harness.objectUrls.size, 0);
+    assert.equal(harness.revokedUrls.length, 3);
+    pipeline.destroy();
+});
+
+test("native PNG bitmaps preserve orientation and close after upload or failed GPU allocation", async () => {
+    for (const failUpload of [false, true]) {
+        const harness = await createHarness({ realAssetCache: true, nativeImages: true });
+        await harness.preloadAssets();
+        const pipeline = new harness.Pipeline(harness.scene, {});
+        const ready = pipeline.assetsReady;
+        await new Promise(resolve => setImmediate(resolve));
+        const weather = harness.bitmapRequests.shift();
+        assert.match(weather.url, /local_weather\.png$/);
+        assert.deepEqual({ ...weather.options }, {
+            imageOrientation: "flipY", premultiplyAlpha: "none", colorSpaceConversion: "default",
+        });
+        if (failUpload) harness.failNextTexture();
+        weather.resolve(weather.bitmap);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(weather.bitmap.closed, true);
+        await flushLoads(harness);
+        await ready;
+        assert.equal(pipeline.assetStatus, failUpload ? "error" : "ready");
+        assert(harness.bitmaps.every(bitmap => bitmap.closed));
+        assert.equal(harness.revokedUrls.length, 0);
+        if (failUpload) {
+            const retry = pipeline.retryAssets();
+            await flushLoads(harness);
+            await retry;
+            assert.equal(pipeline.assetStatus, "ready");
+            assert.equal(harness.rawRequests.length, 8, "GPU failures retain valid raw bytes for retry");
+            assert(harness.bitmaps.every(bitmap => bitmap.closed));
+        }
+        pipeline.destroy();
+        assert.equal(harness.liveTextures.size, 0);
+        assert.equal(harness.liveFramebuffers.size, 0);
+    }
+});
+
+test("native PNG bitmaps finishing after disposal close without allocating GPU resources", async () => {
+    const harness = await createHarness({ realAssetCache: true, nativeImages: true });
+    await harness.preloadAssets();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    const ready = pipeline.assetsReady;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(harness.bitmapRequests.length, 2);
+    const allocations = harness.allocations;
+    pipeline.destroy();
+    await ready;
+    await flushLoads(harness);
+    assert(harness.bitmaps.every(bitmap => bitmap.closed));
+    assert.equal(harness.allocations, allocations);
+    assert.equal(harness.liveTextures.size, 0);
+    assert.equal(harness.liveFramebuffers.size, 0);
+    assert.equal(harness.rawRequests.length, 8);
     assert.equal(harness.errors.length, 0);
 });
 
@@ -343,6 +552,7 @@ test("resource failures are observable and explicit retry reloads only failed as
     const unsubscribe = pipeline.subscribeAssets(() => notifications.push(pipeline.assetStatus));
     pipeline.precomputed();
     assert.equal(pipeline.assetStatus, "loading");
+    await new Promise(resolve => setImmediate(resolve));
     const weather = harness.requests.shift();
     assert.match(weather.url, /local_weather\.png$/);
     weather.reject(new Error("weather download failed"));
@@ -357,6 +567,7 @@ test("resource failures are observable and explicit retry reloads only failed as
     assert(Object.isFrozen(pipeline.assetErrors[0]));
     const successfulShape = pipeline.shapeTexture;
     const retry = pipeline.retryAssets();
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(harness.requests.length, 1, "successful images and binary tasks are not repeated");
     assert.equal(harness.precomputedRequests.length, 0, "the successful LUT set is not repeated");
     assert.equal(pipeline.assetStatus, "loading");
@@ -379,6 +590,7 @@ test("reading readiness before the first frame starts and waits for required ass
         assert.equal(harness.precomputedRequests.length, 0);
         let settled = false;
         const ready = pipeline.assetsReady.then(() => { settled = true; });
+        await new Promise(resolve => setImmediate(resolve));
         assert.equal(harness.requests.length, 5);
         assert.equal(harness.precomputedRequests.length, 1);
         assert.equal(pipeline.assetStatus, "loading");
@@ -416,6 +628,7 @@ test("disposal settles readiness requested immediately after disabled constructi
 test("optional snow does not block required readiness and disposal settles pending readiness", async () => {
     const harness = await createHarness();
     const pipeline = new harness.Pipeline(harness.scene, { showSnow: true });
+    await new Promise(resolve => setImmediate(resolve));
     const snow = harness.requests.shift();
     assert.match(snow.url, /snowCoverMask\.png$/);
     pipeline.precomputed();

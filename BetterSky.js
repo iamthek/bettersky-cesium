@@ -21,6 +21,7 @@ import { Cartesian2, Cartesian3, Cartesian4, JulianDate, PerspectiveFrustum, Sce
 import GeospatialPipelinePass from "./Library/GeospatialPipelinePass.js";
 import HBAOEffectPass from "./Library/HBAOEffectPass.js";
 import SMAAStage from "./Library/SMAAStage.js";
+import preloadAssets from "./Library/internal/preloadAssets.js";
 import { installViewportCommands } from "./Library/viewportQuadCommand.js";
 import { DEFAULT_OPTIONS, cloneOptions, isPlainObject, mergeOptions, prepareOptions } from "./src/options.js";
 
@@ -67,6 +68,11 @@ function assertRuntimeSupport(scene) {
 }
 
 export class BetterSky {
+  /** 预下载必需的天空资源，后续实例在当前页面内复用原始数据；无需 Viewer。 */
+  static preloadAssets() {
+    return preloadAssets();
+  }
+
   /** 内置默认预设的独立副本，可用于读取默认值或生成自定义预设。 */
   static get defaultOptions() {
     return cloneOptions(DEFAULT_OPTIONS);

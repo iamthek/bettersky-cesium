@@ -1,6 +1,7 @@
 import {  Loader  } from "three";
 
 import ArrayBufferLoader from './ArrayBufferLoader.js';
+import { invalidateAssetBuffer } from '../internal/AssetCache.js';
 // TypedArrayLoader 抽象基类（在 JS 中无法强制抽象，但可用约定方式使用）
 export default class TypedArrayLoader extends Loader {
   // 子类需实现该方法
@@ -19,6 +20,7 @@ export default class TypedArrayLoader extends Loader {
         try {
           onLoad(this.parseTypedArray(arrayBuffer));
         } catch (error) {
+          invalidateAssetBuffer(this.manager.resolveURL((this.path || '') + url), arrayBuffer);
           if (onError != null) {
             onError(error);
           } else {
