@@ -156,7 +156,7 @@ export function inspectJavaScript(source) {
   }
   visit(tree);
   if (imports.length === 0 || imports.some(value => !/^(cesium|three)(\/|$)/.test(value))) throw new Error(`Unexpected SDK import: ${imports.join(', ')}`);
-  if (exported.size !== 2 || !exported.has('BetterSky') || !exported.has('default')) throw new Error(`Unexpected public exports: ${[...exported]}`);
+  if (exported.size !== 1 || !exported.has('BetterSky')) throw new Error(`Unexpected public exports: ${[...exported]}`);
   if (comments.some(comment => /sourceMappingURL|sourceURL/.test(comment.value))) throw new Error('Debug mapping comment found.');
   return { imports: [...new Set(imports)], exports: [...exported] };
 }

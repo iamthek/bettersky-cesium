@@ -175,7 +175,7 @@ test('SMAA disposal settles lookup readiness even when image events never arrive
   wrapper.update(context);
   const ready = wrapper.assetsReady;
   wrapper.destroy();
-  await ready;
-  await wrapper.assetsReady;
+  await assert.rejects(ready, error => error.name === 'AbortError');
+  await assert.rejects(wrapper.assetsReady, error => error.name === 'AbortError');
   assert.equal(wrapper.assetStatus, 'disposed');
 });

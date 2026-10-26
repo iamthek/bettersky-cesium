@@ -25,14 +25,16 @@
 在接入项目中使用 npm 或 pnpm，任选一条命令。示例使用已验证的 Cesium `1.146.0` 组合：
 
 ```bash
-npm install bettersky-cesium@0.2.0 cesium@1.146.0
+npm install bettersky-cesium@1.0.0 cesium@1.146.0
 ```
 
 ```bash
-pnpm add bettersky-cesium@0.2.0 cesium@1.146.0
+pnpm add bettersky-cesium@1.0.0 cesium@1.146.0
 ```
 
-已有兼容的 Cesium 版本时，只安装 `bettersky-cesium@0.2.0`，保留项目已验证的锁文件。Cesium 与业务共用，three（`>=0.160.1`）自动安装。[兼容性说明](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.zh-CN.md#兼容性与部署)列出了一个需要避开的 Cesium 依赖组合。
+已有兼容的 Cesium 版本时，只安装 `bettersky-cesium@1.0.0`，保留项目已验证的锁文件。Cesium 与业务共用，three（`>=0.160.1`）自动安装。[兼容性说明](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.zh-CN.md#兼容性与部署)列出了一个需要避开的 Cesium 依赖组合。
+
+从 0.2.0 升级时，统一使用 `BetterSky` 具名导出，把配置快捷入口改为 `betterSkyInstance.update()`，并把资源等待改为 `betterSkyInstance.loadAssets()`。完整变更见 [1.0 迁移表](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.zh-CN.md#从-020-迁移)。
 
 ### 2. 准备资源
 
@@ -56,20 +58,20 @@ import { BetterSky } from 'bettersky-cesium'
 window.CESIUM_BASE_URL = '/cesium/'
 
 // 在这里创建业务自己的 Cesium Viewer。
-const effects = new BetterSky(viewer, { time: undefined })
+const betterSkyInstance = new BetterSky(viewer, { time: null })
 
 // 只更新需要修改的参数。
-effects.update({ coverage: 0.5 })
+betterSkyInstance.update({ coverage: 0.5 })
 
 // 离开场景时，先释放 BetterSky，再销毁 Viewer。
-// effects.dispose()
+// betterSkyInstance.dispose()
 ```
 
-`time: undefined` 保留业务时间。动态云需要 Viewer 持续渲染。完整参数、资源加载、失败重试和销毁说明见[使用指南](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.zh-CN.md)，版本变化见[更新记录](https://github.com/iamthek/bettersky-cesium/blob/main/CHANGELOG.md)。
+`time: null` 保留业务时间。动态云需要 Viewer 持续渲染。完整参数、资源加载、失败重试和销毁说明见[使用指南](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.zh-CN.md)，版本变化见[更新记录](https://github.com/iamthek/bettersky-cesium/blob/main/CHANGELOG.md)。
 
 ## 许可
 
-`0.2.0` 使用 [Apache License 2.0](https://github.com/iamthek/bettersky-cesium/blob/main/LICENSE)，允许按许可条款用于个人与商业项目、修改和再分发。分发 SDK 时保留许可、[NOTICE](https://github.com/iamthek/bettersky-cesium/blob/main/NOTICE) 与适用的[第三方声明](https://github.com/iamthek/bettersky-cesium/blob/main/THIRD_PARTY_NOTICES.md)。第三方材料继续遵循各自许可。
+`1.0.0` 使用 [Apache License 2.0](https://github.com/iamthek/bettersky-cesium/blob/main/LICENSE)，允许按许可条款用于个人与商业项目、修改和再分发。分发 SDK 时保留许可、[NOTICE](https://github.com/iamthek/bettersky-cesium/blob/main/NOTICE) 与适用的[第三方声明](https://github.com/iamthek/bettersky-cesium/blob/main/THIRD_PARTY_NOTICES.md)。第三方材料继续遵循各自许可。
 
 联系：[iamthek@qq.com](mailto:iamthek@qq.com)。
 

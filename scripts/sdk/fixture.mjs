@@ -13,12 +13,12 @@ export function browserAcceptance() {
   window.addEventListener("error", event => errors.push(event.message));
   window.addEventListener("unhandledrejection", event => errors.push(String(event.reason)));
 
-  return async function run(Cesium, BetterSky, defaultExport, caseId, base, checkSnow) {
+  return async function run(Cesium, BetterSky, caseId, base, checkSnow) {
     const start = performance.now();
     let startupMs;
     const checks = [];
     let viewer;
-    let effects;
+    let betterSkyInstance;
     const check = (name, condition) => {
       checks.push({ name, passed: !!condition });
       if (!condition) throw new Error("Acceptance failed: " + name);
@@ -42,32 +42,33 @@ export function browserAcceptance() {
       ...extra,
     });
     function attach() {
-      effects = new BetterSky(viewer, options);
-      return effects;
+      betterSkyInstance = new BetterSky(viewer, options);
+      return betterSkyInstance;
     }
-    async function ready() {
-      // The public promise covers required sky assets, not SMAA or optional snow.
-      // Keep rendering to exercise GPU upload and stage execution as well.
-      let settled = false;
+    const assertRejects = async operation => {
       let rejected = false;
-      let rejection;
-      effects.assetsReady.then(() => { settled = true; }, error => { rejected = true; rejection = error; settled = true; });
+      try { await operation(); } catch { rejected = true; }
+      if (!rejected) throw new Error("Expected Promise rejection");
+    };
+    async function ready() {
+      let settled = false;
+      let loadError;
+      const loading = betterSkyInstance.loadAssets().then(
+        () => { settled = true; },
+        error => { loadError = error; settled = true; },
+      );
       const deadline = performance.now() + 90000;
       while (performance.now() < deadline) {
         await frames(4);
-        if (rejected) throw new Error("assetsReady rejected: " + rejection);
         if (errors.length) throw new Error(errors.join("\n"));
-        if (settled && effects.assetStatus === "error") throw new Error("Required sky assets failed: " + JSON.stringify(effects.assetErrors));
-        const pass = effects.pass;
-        if (settled && effects.assetStatus === "ready" && pass && pass._u_scattering_texture !== pass._defaultTexture3D &&
-          pass._u_irradiance_texture !== viewer.scene.context.defaultTexture &&
-          pass._u_transmittance_texture !== viewer.scene.context.defaultTexture &&
-          pass.shapeTexture !== pass._defaultTexture3D &&
-          pass.shapeDetailTexture !== pass._defaultTexture3D &&
-          pass.stbnTexture !== pass._defaultTexture3D &&
-          pass.localWeatherTexture !== viewer.scene.context.defaultTexture &&
-          pass.turbulenceTexture !== viewer.scene.context.defaultTexture) return;
+        if (settled) {
+          await loading;
+          if (loadError) throw loadError;
+          return;
+        }
       }
+      await loading;
+      if (loadError) throw loadError;
       throw new Error("Runtime assets did not become ready within 90 seconds");
     }
     const publishResult = async result => {
@@ -79,7 +80,6 @@ export function browserAcceptance() {
       if (!response.ok) throw new Error("Cannot save acceptance result: HTTP " + response.status);
     };
     try {
-      check("named and default exports agree", BetterSky === defaultExport);
       viewer = makeViewer({ globe: false });
       let missingGlobeRejected = false;
       try { new BetterSky(viewer, options); } catch { missingGlobeRejected = true; }
@@ -99,41 +99,38 @@ export function browserAcceptance() {
       attach();
       check("business clock preserved", Cesium.JulianDate.equals(initialTime, viewer.clock.currentTime));
       const stageCount = viewer.scene.postProcessStages.length;
-      const snapshot = effects.getOptions();
+      const snapshot = betterSkyInstance.getOptions();
       const acceptedOptions = JSON.stringify(snapshot);
       snapshot.coverage = 0.123;
       snapshot.cloud.altitudes[0] += 123;
       snapshot.volumetricLight.intensity = 7;
-      check("getOptions returns independent nested snapshots", JSON.stringify(effects.getOptions()) === acceptedOptions && effects.getOptions() !== effects.getOptions());
-      check("asset status starts idle", effects.assetStatus === "idle" && effects.assetErrors.length === 0);
+      check("getOptions returns independent nested snapshots", JSON.stringify(betterSkyInstance.getOptions()) === acceptedOptions && betterSkyInstance.getOptions() !== betterSkyInstance.getOptions());
+      check("asset status starts idle", betterSkyInstance.getAssetState().status === "idle" && betterSkyInstance.getAssetState().errors.length === 0);
       const assetStates = [];
-      const unsubscribeAssets = effects.subscribeAssets(() => assetStates.push(effects.assetStatus));
+      const unsubscribeAssets = betterSkyInstance.subscribeAssets(state => assetStates.push(state.status));
       check("subscribeAssets returns an unsubscribe function", typeof unsubscribeAssets === "function");
       let rejected = false;
       try { new BetterSky(viewer, options); } catch (error) { rejected = /active|instance|实例/i.test(error.message); }
       check("second instance rejected without changing stages", rejected && viewer.scene.postProcessStages.length === stageCount);
       await ready();
-      check("assetsReady settles with successful required sky assets", effects.assetStatus === "ready" && effects.assetErrors.length === 0);
+      check("loadAssets settles with successful required resources", betterSkyInstance.getAssetState().status === "ready" && betterSkyInstance.getAssetState().errors.length === 0);
       check("asset subscription observes loading and ready", assetStates.includes("loading") && assetStates.includes("ready"));
-      const retryResult = await effects.retryAssets();
-      check("retryAssets settles successfully with no failed assets", retryResult === undefined && effects.assetStatus === "ready" && effects.assetErrors.length === 0);
+      const retryResult = await betterSkyInstance.retryAssets();
+      check("retryAssets settles successfully with no failed assets", retryResult === undefined && betterSkyInstance.getAssetState().status === "ready");
       unsubscribeAssets();
       const notificationsBeforeUnsubscribedRetry = assetStates.length;
-      await effects.retryAssets();
+      await betterSkyInstance.retryAssets();
       check("asset subscription can be removed", assetStates.length === notificationsBeforeUnsubscribedRetry);
       await frames(12);
       startupMs = performance.now() - start;
-      check("real GPU stages ready", !!effects.stage && effects.stage.ready);
-      effects.update({ coverage: 0.5, volumetricLight: { intensity: 1.5 } });
-      if (checkSnow) effects.pass.showSnow = true;
+      check("real GPU stages ready", !!betterSkyInstance.stage && betterSkyInstance.stage.ready);
+      betterSkyInstance.update({ coverage: 0.5, volumetricLight: { intensity: 1.5 }, snow: checkSnow });
       await frames(6);
-      check("parameter update", Math.abs(effects.pass.coverage - 0.5) < 0.00001);
-      effects.enabled = false;
-      check("disable", effects.enabled === false);
-      effects.enabled = true;
-      effects.hbaoEnabled = true;
-      effects.smaaEnabled = false;
-      effects.smaaEnabled = true;
+      check("parameter update", Math.abs(betterSkyInstance.getOptions().coverage - 0.5) < 0.00001);
+      betterSkyInstance.update({ enabled: false });
+      check("disable", betterSkyInstance.getOptions().enabled === false);
+      betterSkyInstance.update({ enabled: true, hbao: { enabled: true }, smaa: false });
+      betterSkyInstance.update({ smaa: true });
       await frames(6);
       const host = document.getElementById("viewer");
       host.style.width = "580px";
@@ -149,34 +146,34 @@ export function browserAcceptance() {
         intervals.push(performance.now() - frameStart);
         await new Promise(resolve => setTimeout(resolve, 0));
       }
-      effects.dispose();
-      effects.dispose();
+      betterSkyInstance.dispose();
+      betterSkyInstance.dispose();
       check("idempotent disposal removes stages", viewer.scene.postProcessStages.length === stagesBefore);
-      await effects.assetsReady;
-      check("disposed resource getters settle safely", effects.assetStatus === "disposed" && effects.assetErrors.length === 0);
+      await assertRejects(() => betterSkyInstance.loadAssets());
+      check("disposed asset state remains queryable", betterSkyInstance.getAssetState().status === "disposed");
       rejected = false;
-      try { effects.retryAssets(); } catch { rejected = true; }
+      try { await betterSkyInstance.retryAssets(); } catch { rejected = true; }
       check("retryAssets rejects disposed mutations", rejected);
       attach();
-      const pendingPass = effects.pass;
-      const pendingAssets = effects.assetsReady;
-      effects.dispose();
-      effects.dispose();
-      await pendingAssets;
+      const pendingAssets = betterSkyInstance.loadAssets();
+      betterSkyInstance.dispose();
+      betterSkyInstance.dispose();
+      rejected = false;
+      try { await pendingAssets; } catch { rejected = true; }
+      check("loading rejects with AbortError after disposal", rejected);
       check("disposal during asset loading", viewer.scene.postProcessStages.length === stagesBefore);
-      check("assetsReady settles without rejection after disposal", effects.assetStatus === "disposed");
+      check("disposed asset state", betterSkyInstance.getAssetState().status === "disposed");
       await frames(8);
       attach();
       await ready();
-      check("late callbacks do not recreate GPU resources", pendingPass.isDestroyed() && pendingPass._ownedTextures.size === 0);
-      check("recreate after disposal", !!effects.stage);
+      check("recreate after disposal", !!betterSkyInstance.stage);
       allowExpectedError = true;
       viewer.scene.camera.switchToOrthographicFrustum();
       await frames(4);
-      check("unsupported runtime camera stops effects", effects.enabled === false);
+      check("unsupported runtime camera stops effects", betterSkyInstance.getOptions().enabled === false);
       check("runtime camera reports once", expectedErrors.length === 1);
-      effects.dispose();
-      effects = undefined;
+      betterSkyInstance.dispose();
+      betterSkyInstance = undefined;
       allowExpectedError = false;
       const beforeRejected = viewer.scene.postProcessStages.length;
       rejected = false;
@@ -194,13 +191,12 @@ export function browserAcceptance() {
       viewer.scene.mode = Cesium.SceneMode.SCENE3D;
       attach();
       await ready();
-      check("rebuild after restoring perspective 3D", !!effects.stage);
-      effects.enabled = false;
+      check("rebuild after restoring perspective 3D", !!betterSkyInstance.stage);
+      betterSkyInstance.update({ enabled: false });
       await frames(2);
       viewer.render();
       const beforePixels = viewer.scene.context.readPixels();
-      effects.enabled = true;
-      effects.update({ coverage: 0.95 });
+      betterSkyInstance.update({ enabled: true, coverage: 0.95 });
       await frames(24);
       viewer.render();
       const afterPixels = viewer.scene.context.readPixels();
@@ -224,7 +220,7 @@ export function browserAcceptance() {
       document.getElementById("status").textContent = "FAILED";
     }
     document.getElementById("dispose").onclick = () => {
-      effects?.dispose();
+      betterSkyInstance?.dispose();
       if (viewer && !viewer.isDestroyed()) viewer.destroy();
       document.getElementById("status").textContent += " — disposed";
     };

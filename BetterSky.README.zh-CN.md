@@ -10,7 +10,7 @@
 
 ### 适用版本
 
-本文说明 BetterSky `0.2.0`。先按下面步骤完成安装和资源配置，需要调整效果时再查参数表。版本变化见[更新记录](CHANGELOG.md)。
+本文说明 BetterSky `1.0.0`。先按下面步骤完成安装和资源配置，需要调整效果时再查参数表。版本变化见[更新记录](CHANGELOG.md)。
 
 ### 环境要求
 
@@ -31,14 +31,14 @@
 在接入项目中任选一条命令。新项目示例使用已验证的 Cesium 1.146.0 组合；已有项目可以保留其他兼容且验证过的版本：
 
 ```bash
-npm install bettersky-cesium@0.2.0 cesium@1.146.0
+npm install bettersky-cesium@1.0.0 cesium@1.146.0
 ```
 
 ```bash
-pnpm add bettersky-cesium@0.2.0 cesium@1.146.0
+pnpm add bettersky-cesium@1.0.0 cesium@1.146.0
 ```
 
-包提供具名与默认导出及 `dist/index.d.ts`，无需单独安装类型包。随包声明提供中文字段注释，可在编辑器中查看含义、单位、默认值和约束。
+包提供 `BetterSky` 具名导出及 `dist/index.d.ts`，无需单独安装类型包。随包声明提供中文字段注释，可在编辑器中查看含义、单位、默认值和约束。
 
 ### 资源与部署
 
@@ -108,31 +108,31 @@ export default defineConfig({
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { BetterSky } from 'bettersky-cesium'
 
-const effects = new BetterSky(viewer, {
-  time: undefined, // 保留业务时间。
+const betterSkyInstance = new BetterSky(viewer, {
+  time: null, // 保留业务时间。
   coverage: 0.5,
   cloud: { densityScales: [0.12, 0.09, 0.0015, 0] },
 })
 
-effects.update({ cloud: { heights: [1300, 1800, 650, 0] } })
-effects.enabled = false
-effects.enabled = true
+betterSkyInstance.update({ cloud: { heights: [1300, 1800, 650, 0] } })
+betterSkyInstance.update({ enabled: false })
+betterSkyInstance.update({ enabled: true })
 ```
 
-`new BetterSky(viewerOrScene, options?)` 接受 Viewer 或 Scene。传入 Scene 时不设置 Viewer 时钟。实例自动注册渲染阶段与逐帧更新，不需要再次添加 `effects.stage` 或手动调用底层更新。
+`new BetterSky(viewerOrScene, options?)` 接受 Viewer 或 Scene。传入 Scene 时不设置 Viewer 时钟。实例自动注册渲染阶段与逐帧更新，不需要再次添加 `betterSkyInstance.stage` 或手动调用底层更新。
 
 构造参数合并默认值，`update()` 合并已有配置；嵌套对象逐字段合并，数组整体替换。未传字段保持原值；除 `time` 外会把显式 `undefined` 当作省略，`null` 仅用于明确支持它的字段。非法字段和值会在参数校验阶段拒绝。
 
 ### 配置快照与资源加载
 
-`BetterSky.defaultOptions` 返回独立的默认预设副本；`effects.getOptions()` 返回独立的已接受配置快照，修改快照不会改变实例。向量在快照中统一为数组，高级 Pass 的直接修改不会同步到快照。
+`BetterSky.getDefaultOptions()` 返回独立的默认预设副本；`betterSkyInstance.getOptions()` 返回独立的已接受配置快照，修改快照不会改变实例。向量在快照中统一为数组。快照记录已接受配置，场景和时钟的实时值从宿主 Viewer 读取。
 
 #### 创建 Viewer 前预下载资源
 
 如果希望在创建 Viewer 前下载八项必需的 BIN、EXR 和 PNG 文件，可在客户端启动时调用静态方法。请先配置应用的 `CESIUM_BASE_URL`；该方法不需要 Viewer 或 GPU：
 
 ```js
-import BetterSky from 'bettersky-cesium'
+import { BetterSky } from 'bettersky-cesium'
 
 try {
   await BetterSky.preloadAssets()
@@ -145,72 +145,58 @@ try {
 }
 
 const viewer = new Viewer(container)
-const effects = new BetterSky(viewer)
+const betterSkyInstance = new BetterSky(viewer)
 ```
 
-命名导出的 `BetterSky` 也提供此方法。同一 SDK 模块副本内的并发调用会彼此去重，并与运行时资源请求共享下载。成功下载的原始数据缓存在当前页面，实例销毁后仍保留；刷新后的复用依赖浏览器 HTTP 缓存。独立 bundle 或 SDK 副本各自使用独立缓存。
+同一 SDK 模块副本内的并发调用会彼此去重，并与运行时资源请求共享下载。成功下载的原始数据缓存在当前页面，实例销毁后仍保留；刷新后的复用依赖浏览器 HTTP 缓存。独立 bundle 或 SDK 副本各自使用独立缓存。
 
 每项共享下载在 60 秒没有进展时超时，等待响应头和读取响应体期间均适用；收到响应头或非空的响应体数据会重置计时器。超时会中止请求。失败或超时的资源会从缓存中移除，再次显式调用 `preloadAssets()` 会重试；不会自动重试。
 
-Promise 成功只表示下载完成：`effects.assetsReady` 仍负责实例所需资源的解码和 GPU 上传，并在所有必需任务结束后结算。预下载不包含雪纹理或 SMAA 查找纹理。
+Promise 成功只表示下载完成。`betterSkyInstance.loadAssets()` 会启动并等待当前配置所需的天空资源、开启的 SMAA 和雪纹理。预下载不包含 SMAA 或雪纹理。
 
 ```js
-const current = effects.getOptions()
+const current = betterSkyInstance.getOptions()
 console.log(current.coverage)
 
-const unsubscribe = effects.subscribeAssets(() => {
-  if (effects.assetStatus === 'error') console.error(effects.assetErrors)
+const unsubscribe = betterSkyInstance.subscribeAssets(state => {
+  console.log(state.status, state.errors)
 })
 
-await effects.assetsReady
-if (effects.assetStatus !== 'disposed') {
-  const errors = effects.assetErrors.filter(item => item.required)
-  if (errors.length > 0) console.error('天空资源加载失败', errors)
+try {
+  await betterSkyInstance.loadAssets()
+} catch (error) {
+  console.error('当前配置所需资源加载失败', error)
 }
 
-// 在界面上的重试操作中调用；完成后仍需检查 assetErrors。
-// await effects.retryAssets()
+// 在界面上的重试操作中调用；失败仍可通过 Promise 和状态快照观察。
+// await betterSkyInstance.retryAssets()
 
 // 离开页面时取消监听。
 unsubscribe()
 ```
 
-读取 `assetsReady` 会启动并等待六项必需的天空资源任务，即使 `enabled: false`。成功、失败或销毁都会正常结算；加载失败不会使 Promise reject，应检查 `assetErrors`。它不等待可选雪纹理或 SMAA 查找纹理。Promise 结束时，雪纹理可能仍在加载；SMAA 不计入这些状态。它与 Cesium 阶段的就绪状态分别判断。
-
-`assetStatus` 可为 `idle`、`loading`、`ready`、`error`、`disposed`。可选资源失败也可能显示 `error`；每个错误包含 `id`、`url`、`required` 和原始 `error`。`retryAssets()` 显式重试已失败资源，不重新加载成功项；失败不会每帧自动重试。`subscribeAssets(listener)` 返回取消订阅函数，回调不接收参数，在回调内读取状态。
+`loadAssets()` 即使 `enabled: false` 也会启动并等待当前配置所需的资源。全部就绪时成功，任一目标资源失败时以 `AggregateError` 拒绝。`retryAssets()` 会启动当前范围中尚未请求的资源、重试失败项，并复用成功项。`getAssetState()` 无副作用地返回状态为 `idle`、`loading`、`ready`、`error` 或 `disposed` 的 `{ status, errors }` 快照。`subscribeAssets(listener)` 发送同样结构的不可变快照，并返回取消订阅函数。加载期间销毁会让显式等待以 `AbortError` 拒绝。资源状态与 `betterSkyInstance.stage?.ready` 分别判断。
 
 ### 运行时 API
 
 | API | 读写方式 / 用途 |
 | --- | --- |
-| `BetterSky.defaultOptions` | 静态 getter，返回新的默认配置副本。 |
+| `BetterSky.getDefaultOptions()` | 静态方法，返回新的默认配置副本。 |
 | `BetterSky.preloadAssets()` | 创建 Viewer 前下载八项必需原始资源；失败时以包含失败资源 URL 的 `AggregateError` 拒绝。 |
-| `effects.update(options)` | 与便捷 setter 共用校验和应用通路；未知字段或不合法值在提交前拒绝。 |
-| `effects.getOptions()` | 返回当前已接受配置的独立快照；HBAO 关闭时保留其内部参数供重开恢复。 |
-| `effects.assetStatus` / `effects.assetErrors` | 天空资源的状态与只读错误快照。 |
-| `effects.assetsReady` | 读取会按需启动并等待六项必需资源；失败或销毁也结算，不包含 SMAA 和可选雪任务。 |
-| `effects.retryAssets()` / `effects.subscribeAssets(listener)` | 显式重试失败资源；订阅变化并获得取消订阅函数。 |
-| `effects.enabled` | 读取/设置管线总开关。 |
-| `effects.coverage` | 读取/设置天气覆盖度。 |
-| `effects.toneMappingExposure` | 读取/设置曝光倍率。 |
-| `effects.toneMappingMode` | 仅 setter，切换模式会重建天空渲染阶段。 |
-| `effects.localWeatherVelocity` | 仅 setter，接受数组或 Cartesian2。 |
-| `effects.setCloudAltitudes(value)` | 设置四分量云底高度。 |
-| `effects.setCloudHeights(value)` | 设置四分量云层厚度。 |
-| `effects.setCloudDensityScales(value)` | 设置四分量云密度。 |
-| `effects.setCloudShapeDetailAmounts(value)` | 设置四个 [0, 1] 范围内的细节侵蚀量。 |
-| `effects.hbaoEnabled` / `effects.smaaEnabled` | 读取/设置可选效果。 |
-| `effects.hbaoIntensity` / `effects.hbaoMaxRadius` | 仅 setter，设置 AO 强度/半径。 |
-| `effects.pass` | getter，获取底层 GeospatialPipelinePass，供高级操作。 |
-| `effects.stage` | getter，获取当前天空 PostProcessStageComposite；阶段重建后需重新读取。 |
-| `effects.dispose()` | 幂等移除逐帧监听和注册的阶段，恢复快照中的天空/地球字段，并清理实例拥有的 pass 资源。 |
+| `betterSkyInstance.update(options)` | 唯一的运行时配置修改入口；未知字段或不合法值在提交前拒绝。 |
+| `betterSkyInstance.getOptions()` | 返回当前已接受配置的完整独立快照。 |
+| `betterSkyInstance.getAssetState()` | 无副作用地返回当前配置范围的不可变 `{ status, errors }` 快照。 |
+| `betterSkyInstance.loadAssets()` | 启动并等待天空资源、已开启的 SMAA 和雪纹理。 |
+| `betterSkyInstance.retryAssets()` / `betterSkyInstance.subscribeAssets(listener)` | 启动尚未请求的资源、重试当前失败项或订阅资源状态；成功资源会被复用。 |
+| `betterSkyInstance.stage` | getter，获取当前天空 PostProcessStageComposite；阶段重建后需重新读取。 |
+| `betterSkyInstance.dispose()` | 幂等移除逐帧监听和注册的阶段，恢复快照中的天空/地球字段，并清理实例拥有的 pass 资源。 |
 
 ### 常用配置
 
 分别调整地表与云体补光，避免只提高全局曝光：
 
 ```js
-effects.update({
+betterSkyInstance.update({
   irradianceScale: 0.15,
   aerialPerspectiveStrength: 0.2,
   volumetricLight: { mode: 'volumetric', intensity: 2 },
@@ -221,59 +207,56 @@ effects.update({
 降低体积光质量、提前简化远景云并关闭 AO：
 
 ```js
-effects.update({
+betterSkyInstance.update({
   volumetricLight: { mode: 'volumetric', quality: 'low' },
   cloud: { lodRange: [120000, 300000] },
-  hbao: false,
+  hbao: { enabled: false },
 })
 ```
 
 分别控制太阳时间和天气移动：
 
 ```js
-effects.update({ time: '2026-05-01T06:00:00Z' })
+betterSkyInstance.update({ time: '2026-05-01T06:00:00Z' })
 viewer.clock.shouldAnimate = false
-effects.localWeatherVelocity = [0, 0]
+betterSkyInstance.update({ localWeatherVelocity: [0, 0] })
 ```
 
 暂停 Viewer 时钟不会暂停天气图移动；天气速度单位为 UV/秒，不是米/秒。底层云形或细节的其他运动也不受此天气图开关统一控制。
 
-### 高级 Pass 控制
-
-通常优先使用 `update()`。`effects.pass` 提供以下公开高级成员，直接修改不会同步配置快照，也不保证执行顶层参数校验：
-
-| 成员 | 读写方式与用途 |
-| --- | --- |
-| `stage`、`ready`、`name` | 只读阶段引用、阶段就绪状态和名称；`ready` 不表示所有异步资源就绪。 |
-| `enabled` | 读写天空 Pass 开关；需要联动 HBAO / SMAA 时使用 `effects.enabled`。 |
-| `coverage`、`toneMappingExposure` | 读写覆盖度 / 曝光；优先使用顶层同名入口以保持配置与云历史一致。 |
-| `toneMappingMode` | 仅写，支持上方色调模式；赋值会重建阶段。 |
-| `localWeatherVelocity` | 读写 `Cartesian2`，单位 UV/秒。 |
-| `aerialPerspectiveStrength` | 读写大气透视强度，`[0, 1]`。 |
-| `cloudAltitudeFadeRange` | 读写高度范围或 `null`，单位与 `cloud.altitudeFadeRange` 一致。 |
-| `setVolumetricLightOptions(options)` | 局部更新体积光，接受 `BetterSkyVolumetricLightOptions`，优先使用顶层 `update()`。 |
-| `showSnow`、`showRain` | 仅写 boolean，默认均为 `false`；开启积雪或雨条纹 / 闪光，会重建相关阶段。 |
-| `isDestroyed()` | 返回是否已销毁。 |
-
 ```js
-effects.pass.showSnow = true
-effects.pass.showRain = true
+betterSkyInstance.update({ snow: true, rain: true })
 ```
-
-雨雪不属于构造 / `update()` 的顶层参数，这两个 setter 也不能用来读取当前开关状态。积雪依赖 `BetterSkyAssets/snowCoverMask.png`。
 
 ### 销毁
 
 ```js
-effects.dispose()
+betterSkyInstance.dispose()
 viewer.destroy() // 仅在应用也需要销毁 Viewer 时调用。
 ```
 
-先销毁效果，再销毁宿主 Viewer。`dispose()` 可重复调用；也支持加载期间销毁，请求不会主动中止，迟到回调会跳过 GPU 创建。资源状态与配置快照仍可读取，销毁后禁止更新参数或重试加载。
+先销毁实例，再销毁宿主 Viewer。`dispose()` 可重复调用；也支持加载期间销毁，显式等待以 `AbortError` 拒绝，迟到回调会跳过 GPU 创建，共享原始下载仍可复用。资源状态与配置快照仍可读取，订阅可安全清理，但销毁后禁止更新参数或启动资源加载。
+
+### 从 0.2.0 迁移
+
+| 0.2.0 | 1.0.0 |
+| --- | --- |
+| `import BetterSky from 'bettersky-cesium'` | `import { BetterSky } from 'bettersky-cesium'` |
+| `BetterSky.defaultOptions` | `BetterSky.getDefaultOptions()` |
+| `effects.enabled = value`、快捷属性与 `setCloud…()` | `betterSkyInstance.update({ … })` |
+| `effects.hbaoEnabled`、`hbaoIntensity`、`hbaoMaxRadius` | `betterSkyInstance.update({ hbao: { enabled, intensity, maxRadius } })` |
+| `effects.pass.showRain` / `showSnow` | `betterSkyInstance.update({ rain, snow })` |
+| `effects.assetStatus` / `assetErrors` / `assetsReady` | `betterSkyInstance.getAssetState()` / `loadAssets()` |
+| `hbao: true` 或 `hbao: false` | `hbao: { enabled: true }` 或 `hbao: { enabled: false }` |
+| `darkParamY` | `nightGlowIntensity` |
+
+`subscribeAssets()` 回调现在接收 `{ status, errors }`。资源方法会覆盖天空资源以及已开启的 SMAA、雪纹理。
+
+`dispose()` 的清理失败会以 `AggregateError` 报告；抛出前仍会尝试全部相互独立的清理步骤。此后不支持继续使用该实例。
 
 ## 参数说明
 
-下列默认值对应 0.2.0 的 `BetterSky.defaultOptions`。数值均须有限，`NaN` 与无穷大无效。除 `hbao.denoise` 仅构造时设置外，下列配置均支持 `update()`；场景和时间参数按各自规则生效。
+下列默认值对应 1.0.0 的 `BetterSky.getDefaultOptions()`。数值均须有限，`NaN` 与无穷大无效。除 `hbao.denoise` 仅构造时设置外，下列配置均支持 `update()`；场景和时间参数按各自规则生效。
 
 ### 通用参数
 
@@ -286,7 +269,7 @@ viewer.destroy() // 仅在应用也需要销毁 Viewer 时调用。
 | `toneMappingExposure` | number | `2.8` | 非负亮度倍率，越大越亮；单位不是 EV。 |
 | `irradianceScale` | number | `0.15` | 非负地表辐照度增益，与云体补光分别控制。 |
 | `aerialPerspectiveStrength` | number | `0.15` | 地表大气透视混合强度 `[0, 1]`；`0` 关闭此混合。 |
-| `darkParamY` | number | `0.5` | 夜间天空辉光调制系数；允许有限数，建议 `[0, 1]`。 |
+| `nightGlowIntensity` | number | `0.5` | 夜间天空辉光调制系数；允许有限数，建议 `[0, 1]`。 |
 | `bloomIntensity` | number | `0.002` | 非负泛光强度，`0` 移除此强度贡献，不释放对应阶段。 |
 | `systemLight` | boolean | `true` | 跟随 Cesium 太阳方向；建议保持 `true`，详见注意事项。 |
 | `applySceneSettings` | boolean | `true` | 控制本次调用是否应用场景设置，详见场景设置与销毁。 |
@@ -334,9 +317,9 @@ viewer.destroy() // 仅在应用也需要销毁 Viewer 时调用。
 显式传入的 `volumetricLight.mode` 在本次构造或更新中优先。若同次调用含任意 `cloud.haze*` 字段且未指定 mode，会自动选择 `legacy`；其他局部更新保留当前模式，切换模式保留原有 haze 参数。
 
 ```js
-effects.update({ volumetricLight: { mode: 'volumetric', quality: 'low' } })
-effects.update({ volumetricLight: { mode: 'off' } })
-effects.update({ cloud: { hazeDensityScale: 0.000008 } }) // 切换至 legacy。
+betterSkyInstance.update({ volumetricLight: { mode: 'volumetric', quality: 'low' } })
+betterSkyInstance.update({ volumetricLight: { mode: 'off' } })
+betterSkyInstance.update({ cloud: { hazeDensityScale: 0.000008 } }) // 切换至 legacy。
 ```
 
 ### Legacy haze
@@ -376,10 +359,11 @@ Haze 还受相机高度淡出后的有效云覆盖度调制：覆盖度 ≤ 0.2 
 
 ### HBAO
 
-默认开启，使用下表数值和 `denoise: true`。构造时 `hbao: true` 使用默认值，对象局部覆盖；运行时 `false` 关闭并保留数值，`true` 重开，对象局部更新并启用。
+默认开启，使用下表数值和 `denoise: true`。构造和更新均使用对象形式；`hbao.enabled` 独立控制开关，修改任一数值不会隐式启用或关闭。
 
 | 参数 | 类型 | 默认值 | 含义与范围 |
 | --- | --- | --- | --- |
+| `hbao.enabled` | boolean | `true` | 是否启用 HBAO；关闭时保留全部数值。 |
 | `hbao.intensity` | number | `100` | 非负遮蔽强度指数，越大接触阴影越深。 |
 | `hbao.maxRadius` | number | `30` | 非负采样半径，单位米，过大可能出现暗边。 |
 | `hbao.bias` | number | `0.1` | 有限角度偏移，单位弧度；增大可减轻自遮蔽。 |
@@ -393,16 +377,16 @@ Haze 还受相机高度淡出后的有效云覆盖度调制：覆盖度 ≤ 0.2 
 
 ### TypeScript 类型
 
-`BetterSkyOptions` 用于构造参数；`BetterSkyUpdateOptions` 用于局部更新。其他公开类型包括 `BetterSkyVector2`、`BetterSkyVector4`、`BetterSkyQuality`、`BetterSkyCloudType`、`BetterSkyToneMappingMode`，以及云、降噪、体积光、HBAO 的 Options 接口和 `BetterSkyPass`。包还提供 `BetterSkyAssetStatus`、`BetterSkyAssetError` 与 `BetterSkyConstructor`。以所安装包附带的声明为准。
+`BetterSkyOptions` 用于构造参数，`BetterSkyUpdateOptions` 用于局部更新，`BetterSkyResolvedOptions` 用于两个配置读取方法的返回快照。其他公开类型包括向量、质量、云型、色调映射、嵌套配置接口、`BetterSkyAssetStatus`、`BetterSkyAssetError`、`BetterSkyAssetState` 与 `BetterSkyConstructor`。以所安装包附带的声明为准。
 
 ```ts
 import { BetterSky, type BetterSkyOptions } from 'bettersky-cesium'
 
 const options: BetterSkyOptions = {
-  time: undefined,
+  time: null,
   cloud: { altitudes: [4000, 6000, 10000, 0] },
 }
-const sky = new BetterSky(viewer, options)
+const betterSkyInstance = new BetterSky(viewer, options)
 ```
 
 ## 注意事项
@@ -412,12 +396,12 @@ const sky = new BetterSky(viewer, options)
 | 时机 | 对宿主的影响 |
 | --- | --- |
 | 构造且 `applySceneSettings: true` | 设置 HDR、对数深度、Gamma，并启用地形深度测试。 |
-| 构造 / 更新且提供有效 `time` | 修改 Viewer 时钟；仅传 Scene 不生效。 |
+| 构造 / 更新且提供有效时间字符串 | 修改 Viewer 时钟；`null` 或更新时省略会保留当前时间，仅传 Scene 没有独立时钟。 |
 | 首次启用的帧 | 暂时接管内置天空、大气、太阳、雾及部分地球设置；设置瓦片缓存为 2000、最大屏幕空间误差为 2。 |
 | 关闭 / 销毁 | 恢复启用时记录的天空与地球设置。 |
-| `update()` | 除非本次显式带 `applySceneSettings: false`，否则应用本次提供的 HDR、对数深度与 Gamma。 |
+| `update()` | 持久保存 `applySceneSettings`，仅在当前值为 true 时应用本次提供的场景字段；省略会保留原值。 |
 
-`applySceneSettings: false` 不阻止天空接管，也不阻止修改时间。构造时设置为 `false` 不会自动约束后续更新；需要保持业务场景设置时，每次相关更新都应显式传入。
+`applySceneSettings: false` 会阻止 SDK 管理场景字段，直到后续显式设回 true。重新启用时会应用已接受配置中保留的场景字段；保持开启期间，每次更新只应用该次调用显式提供的场景字段。它不阻止天空接管或明确的时间更新。
 
 时钟、HDR、Gamma、对数深度及地形深度测试不会在关闭 / 销毁时自动还原，业务若需要恢复，应自行保存原值。销毁会释放实例拥有的渲染资源，但不移除已安装的上下文辅助方法；不要继续使用缓存的 Pass 或阶段引用。
 
@@ -445,7 +429,7 @@ SDK 使用 Cesium 渲染器内部接口。升级 Cesium 或 three 后，应验�
 
 仅在受支持的三维透视场景使用，切换到 2D / Columbus View 前先销毁效果；SSR 页面应在客户端挂载后初始化。屏幕空间反射与次表面散射不属于当前支持功能。保持 `systemLight: true`；`false` 仅让部分效果采用业务写入 `scene.context.uniformState.sunDirectionWC2` 的自定义太阳方向，云和云影仍跟随 Cesium 太阳。该开关不提供统一的业务光照 API。
 
-资源请求应返回实际文件，不能被单页应用的 HTML 回退覆盖。0.2.0 采用 Apache License 2.0，第三方材料遵循各自许可。升级时同步更新 JS 与 `BetterSkyAssets/` 并刷新旧缓存。对外分发 SDK 运行产物时附带 [LICENSE](LICENSE)、[NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，遵循完整许可条款。
+资源请求应返回实际文件，不能被单页应用的 HTML 回退覆盖。1.0.0 采用 Apache License 2.0，第三方材料遵循各自许可。升级时同步更新 JS 与 `BetterSkyAssets/` 并刷新旧缓存。对外分发 SDK 运行产物时附带 [LICENSE](LICENSE)、[NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，遵循完整许可条款。
 
 ### 常见问题
 
@@ -458,7 +442,7 @@ SDK 使用 Cesium 渲染器内部接口。升级 Cesium 或 three 后，应验�
 | 光束变成大范围雾感 | 降低密度、层厚或距离，单独调整亮度；检查云是否形成明暗间隙。 |
 | 太阳附近的光环仍存在 | 镜头光晕与体积光分别控制，关闭体积光不关闭镜头光晕。 |
 | 第三层不投射云影 | 默认只有前两层参与投影，更改云型不改变该设置。 |
-| 初次启用时 SMAA 尚未生效 | 查找纹理异步加载，首帧和 `assetsReady` 都不能代表 SMAA 就绪。 |
+| 初次启用 SMAA 后尚未生效 | 查找纹理异步加载；开启后调用并等待 `betterSkyInstance.loadAssets()`，再检查 `getAssetState()`。 |
 | 暂停时间后云仍移动 | 单独设置 `localWeatherVelocity: [0, 0]`，其他底层运动控制分别处理。 |
 | 调用资源状态或快照 API 报错 | 确认所安装的 SDK 版本。销毁后仍可读取快照与资源状态，但不能更新参数或重试加载。 |
 | Demo 底图或地形不符合预期 | 未配置服务凭据时使用本地 NaturalEarthII 底图和椭球地形，详见 [Demo 说明](demo/README.md)。 |

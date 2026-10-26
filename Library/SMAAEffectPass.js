@@ -120,10 +120,25 @@ function loadLookupTexture(pass, context, textureKey, imageKey, source, pixelFor
 Object.defineProperties(SMAAEffectPass.prototype, {
     assetStatus: { get() { return this._assets.status; } },
     assetErrors: { get() { return this._assets.errors; } },
-    assetsReady: { get() { return this._assets.ready; } },
+    assetsReady: { get() { return this._assets.success; } },
 });
 SMAAEffectPass.prototype.retryAssets = function () { return this._assets.retry(); };
 SMAAEffectPass.prototype.subscribeAssets = function (listener) { return this._assets.subscribe(listener); };
+SMAAEffectPass.prototype.getAssetState = function () {
+    return this._assets.getState(["smaa-search", "smaa-area"]);
+};
+SMAAEffectPass.prototype.captureAssets = function ({ start = false, retry = false } = {}) {
+    if (start && !this._disposed) {
+        // Explicit asset loading also works before the first enabled frame;
+        // lookup uploads do not need render commands or intermediate targets.
+        const context = this._scene.context;
+        loadLookupTexture(this, context, "_searchTexture", "_searchImage",
+            this.getSearchTexture(), WebGLConstants.RGBA, createSampler);
+        loadLookupTexture(this, context, "_areaTexture", "_areaImage",
+            this.getAreaTexture(), WebGLConstants.RGB, createSampler2);
+    }
+    return this._assets.capture(["smaa-search", "smaa-area"], { start, retry });
+};
 
 SMAAEffectPass.prototype._isSupported = function () {
     return true;

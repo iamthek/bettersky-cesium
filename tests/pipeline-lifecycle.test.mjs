@@ -289,6 +289,7 @@ test("disposal releases owned resources once and ignores asset completions after
     harness.scene.postProcessStages.add(pipeline.stage);
     pipeline.precomputed();
     const allocations = harness.allocations;
+    pipeline.assetsReady.catch(() => {});
     pipeline.destroy();
     pipeline.destroy();
     assert.equal(pipeline.isDestroyed(), true);
@@ -421,7 +422,7 @@ test("native PNG bitmaps finishing after disposal close without allocating GPU r
     assert.equal(harness.bitmapRequests.length, 2);
     const allocations = harness.allocations;
     pipeline.destroy();
-    await ready;
+    await assert.rejects(ready, error => error.name === "AbortError");
     await flushLoads(harness);
     assert(harness.bitmaps.every(bitmap => bitmap.closed));
     assert.equal(harness.allocations, allocations);
@@ -467,6 +468,7 @@ test("failed image, binary, and atmosphere loads are handled after disposal", as
     const harness = await createHarness();
     const pipeline = new harness.Pipeline(harness.scene, { showSnow: true });
     pipeline.precomputed();
+    pipeline.assetsReady.catch(() => {});
     pipeline.destroy();
     await flushLoads(harness, true);
     assert.equal(harness.errors.length, 0);
@@ -616,8 +618,8 @@ test("disposal settles readiness requested immediately after disabled constructi
     const ready = pipeline.assetsReady;
     const allocated = harness.allocations;
     pipeline.destroy();
-    await ready;
-    await pipeline.assetsReady;
+    await assert.rejects(ready, error => error.name === "AbortError");
+    await assert.rejects(pipeline.assetsReady, error => error.name === "AbortError");
     assert.equal(pipeline.assetStatus, "disposed");
     await flushLoads(harness);
     assert.equal(harness.allocations, allocated, "late callbacks do not allocate GPU resources");
@@ -645,8 +647,8 @@ test("optional snow does not block required readiness and disposal settles pendi
     pending.precomputed();
     const ready = pending.assetsReady;
     pending.destroy();
-    await ready;
-    await pending.assetsReady;
+    await assert.rejects(ready, error => error.name === "AbortError");
+    await assert.rejects(pending.assetsReady, error => error.name === "AbortError");
     assert.equal(pending.assetStatus, "disposed");
     await flushLoads(harness);
     assert.equal(harness.liveTextures.size, 0);

@@ -17,7 +17,7 @@ export const DEFAULT_OPTIONS = {
   /** 地表大气透视混合强度 [0,1]；越大远景雾感越强，0 关闭此混合，不改变天空和云的散射。 */
   aerialPerspectiveStrength: 0.15,
   /** 夜间天空辉光的调制系数（无量纲，建议 [0,1]）；作用于 _customDarkParam.y，白天通常不明显。 */
-  darkParamY: 0.5,
+  nightGlowIntensity: 0.5,
   /** 太阳泛光/光晕强度（无量纲，建议 ≥0）；越大亮部扩散越明显，0 关闭此强度。 */
   bloomIntensity: 0.002,
   /** 独立体积光配置；与旧 cloud.haze* 路径按 mode 互斥渲染。 */
@@ -110,10 +110,12 @@ export const DEFAULT_OPTIONS = {
   gamma: 2.2,
   /**
    * HBAO 屏幕空间环境光遮蔽（增强建筑/地形接触阴影与立体感，纯深度实现）。
-   * false 关闭；true 用底层默认参数；或传对象覆盖部分参数：
-   * { intensity, maxRadius, bias, frustumLength, blackPoint, whitePoint, gamma, denoise }
+   * 通过 enabled 关闭或启用，并使用完整对象保存数值：
+   * { enabled, intensity, maxRadius, bias, frustumLength, blackPoint, whitePoint, gamma, denoise }
    */
   hbao: {
+    /** 是否启用 HBAO；关闭时保留全部数值配置。 */
+    enabled: true,
     /** AO 强度指数（建议 ≥0）；越大接触遮蔽越暗，0 不产生 AO 对比。 */
     intensity: 100,
     /** 视空间遮蔽邻域的最大半径（米）；越大影响范围越广，过大可能产生暗边或跨物体污染。 */
@@ -128,12 +130,18 @@ export const DEFAULT_OPTIONS = {
     whitePoint: 0.9,
     /** AO 调制曲线的幂指数（正数）；越大中间亮度越暗，独立于场景 gamma 和降噪 varianceGamma。 */
     gamma: 2.5,
+    /** HBAO 双边滤波降噪开关；仅构造时设置。 */
+    denoise: true,
   },
   /**
    * SMAA 亚像素形态学抗锯齿（比 FXAA 更锐利、无明显模糊，纯屏幕空间）。
    * 作用于天空效果合成后的最终图像。false 关闭；true 启用，不替代云体时域降噪。
    */
   smaa: true,
+  /** 地表积雪开关；开启后加载雪纹理。 */
+  snow: false,
+  /** 雨效开关，包含场景闪光及屏幕雨纹。 */
+  rain: false,
   /**
    * Viewer 时钟时间（ISO8601 字符串，Z 表示 UTC）；systemLight=true 时用于决定太阳角度。
    * 显式传 undefined 或 null 可保留用户时钟；仅传 Scene 时不会设置时钟。
@@ -143,7 +151,7 @@ export const DEFAULT_OPTIONS = {
 
 const CLOUD_LAYER_TYPES = ["cumulus", "altocumulus", "cirrus"];
 const QUALITY_LEVELS = ["low", "balanced", "high"];
-const HBAO_KEYS = [...Object.keys(DEFAULT_OPTIONS.hbao), "denoise"];
+const HBAO_KEYS = Object.keys(DEFAULT_OPTIONS.hbao);
 
 export function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -245,11 +253,10 @@ function validateVolumetricLight(options) {
 }
 
 function validateHbao(options) {
-  if (typeof options === "boolean") return;
   assertKeys(options, HBAO_KEYS, "hbao");
   for (const [key, value] of Object.entries(options)) {
     const path = `hbao.${key}`;
-    if (key === "denoise") boolean(value, path);
+    if (key === "enabled" || key === "denoise") boolean(value, path);
     else if (key === "blackPoint") number(value, path, 0, 1, false, true);
     else if (key === "whitePoint") number(value, path, 0);
     else if (key === "bias") number(value, path);
@@ -278,9 +285,9 @@ export function prepareOptions(input) {
   removeUndefined(options);
   let time;
   for (const [key, value] of Object.entries(options)) {
-    if (["enabled", "systemLight", "applySceneSettings", "highDynamicRange", "logarithmicDepthBuffer", "smaa"].includes(key)) boolean(value, key);
+    if (["enabled", "systemLight", "applySceneSettings", "highDynamicRange", "logarithmicDepthBuffer", "smaa", "snow", "rain"].includes(key)) boolean(value, key);
     else if (["coverage", "aerialPerspectiveStrength"].includes(key)) number(value, key, 0, 1);
-    else if (key === "darkParamY") number(value, key);
+    else if (key === "nightGlowIntensity") number(value, key);
     else if (key === "toneMappingMode") enumeration(value, key, [2, 4, 7, 8, 9, 10, 11, 12]);
     else if (key === "gamma") number(value, key, 0, Infinity, true);
     else if (key === "localWeatherVelocity") vector(value, key, 2);
@@ -294,10 +301,6 @@ export function prepareOptions(input) {
         catch { throw new Error("[BetterSky] time 必须是有效的 ISO 8601 时间。"); }
       }
     } else number(value, key, 0);
-  }
-  // Compatibility is based only on fields explicitly supplied in this command.
-  if (!Object.hasOwn(options.volumetricLight ?? {}, "mode") && options.cloud && Object.keys(options.cloud).some(key => key.startsWith("haze"))) {
-    options.volumetricLight = { ...options.volumetricLight, mode: "legacy" };
   }
   return { options, time };
 }

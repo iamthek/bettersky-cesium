@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0 - Unreleased
+
+- **Breaking:** Keep only the named `BetterSky` export; remove the default export and the `defaultOptions` static getter.
+- **Breaking:** Replace configuration shortcuts with `betterSkyInstance.update()` and use complete normalized snapshots from `BetterSky.getDefaultOptions()` and `betterSkyInstance.getOptions()`.
+- **Breaking:** Use object-form HBAO with `enabled`; add top-level `rain`, `snow` and `nightGlowIntensity` options, and remove the public internal Pass.
+- **Breaking:** Replace the resource getters and `assetsReady` with `loadAssets()`, `getAssetState()` and state-bearing `subscribeAssets()` callbacks; explicit failures now reject.
+- Add `BetterSky.preloadAssets()` with shared downloads, eight-file preloading, an idle-progress timeout, failed-resource retries and independent download caching.
+- Share downloaded asset bytes across concurrent preloads, runtime loading and instance recreation; invalidate failed decoding results while retaining successful downloads.
+- Add bilingual 0.2.0 to 1.0.0 migration guidance and standardize examples on `betterSkyInstance`.
+
 ## 0.2.0 - 2026-10-20
 
 - Open the source under Apache-2.0, remove bundle obfuscation while retaining JS/GLSL minification, and update package metadata and license notices.

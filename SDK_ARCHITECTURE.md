@@ -1,6 +1,6 @@
 # SDK 架构与开发说明
 
-本文介绍 BetterSky `0.2.0` 的代码如何分工，方便维护和排查问题。安装与参数说明见[使用指南](BetterSky.README.zh-CN.md)，发布步骤见[发布流程](SDK_PUBLISH_PLAN.md)。
+本文介绍 BetterSky `1.0.0` 的代码如何分工，方便维护和排查问题。安装与参数说明见[使用指南](BetterSky.README.zh-CN.md)，发布步骤见[发布流程](SDK_PUBLISH_PLAN.md)。
 
 默认画面仍使用 ACES（9）、云覆盖度 0.34、曝光倍率 2.8；各效果默认值见使用指南。运行边界是同页一个活动实例，以及包含 Globe 的三维透视场景。
 
@@ -26,23 +26,22 @@
 
 `getOptions()` 返回当前配置的独立副本，修改副本不会改变效果；向量统一为数组。HBAO 关闭时保留参数，重开后恢复。`hbao.denoise` 只在构造时决定后处理结构，运行时改值会报错，重复相同值不会报错；`BetterSkyUpdateOptions` 不包含这个字段。
 
-`applySceneSettings` 按每次调用判断：本次显式为 `false`，才跳过本次 HDR、gamma 和对数深度设置。配置快照反映最近更新时的实际场景值。直接修改高级 `pass` 不会同步快照，普通业务接入应优先使用顶层 API。销毁后不能继续修改参数。
+`applySceneSettings` 是持久配置：关闭期间只记录 HDR、gamma 和对数深度；重新设为 true 时应用已接受配置中的这些字段，保持开启期间则只应用当次显式提供的字段。配置快照保存已接受值，宿主实时值仍从场景读取。公开 API 不暴露内部 Pass。销毁后不能继续修改参数。
 
 ## 如何判断资源加载结果
 
 | API | 用法 |
 | --- | --- |
-| `assetStatus` | 读取 `idle`、`loading`、`ready`、`error` 或 `disposed`。 |
-| `assetErrors` | 读取冻结的错误快照；每项包含 `id`、`url`、`required` 和原始 `error`。 |
-| `assetsReady` | 读取时启动尚未开始的六项必需天空资源，即使效果关闭；等待当前一轮结束。 |
-| `retryAssets()` | 显式重试失败任务，保留已经成功加载的资源。 |
+| `getAssetState()` | 无副作用地返回当前配置范围的冻结 `{ status, errors }`；错误项包含 `id`、`url`、`required` 和原始 `error`。 |
+| `loadAssets()` | 启动并等待天空资源，以及已开启的 SMAA、雪纹理；目标失败或等待中销毁时拒绝。 |
+| `retryAssets()` | 启动当前范围中尚未请求的任务、重试失败项，并保留已经成功加载的资源。 |
 | `subscribeAssets(listener)` | 订阅变化并返回取消订阅函数；回调不接收参数，应在回调中读取状态。 |
 
-`assetsReady` 在成功、失败或销毁时都会 resolve，加载失败不会 reject。等待结束后检查 `assetErrors`，需要判断核心天空是否可用时筛选 `required: true` 的错误。失败不会每帧自动重试。
+`loadAssets()` 成功表示本次配置范围内的资源均已就绪；失败以 `AggregateError` 拒绝，等待期间销毁则以 `AbortError` 拒绝。订阅回调接收同一结构的只读状态。失败不会每帧自动重试。
 
-六项必需任务是天气图、湍流图、基础形状噪声、细节噪声、STBN 和大气 LUT；大气任务会加载三张 EXR。雪纹理按需加载，不阻塞 `assetsReady`，但其错误仍可观察，所以 Promise 结束时总状态仍可能是 loading 或 error。SMAA 查找纹理单独管理，不计入天空资源状态。Cesium 的阶段 ready 与上述资源就绪也分别判断。
+天空资源是天气图、湍流图、基础形状噪声、细节噪声、STBN 和大气 LUT；大气任务会加载三张 EXR。`snow: true` 时雪纹理、`smaa: true` 时查找纹理属于加载范围，关闭时不启动也不阻塞。Cesium 的 `stage.ready` 与上述资源就绪分别判断。
 
-通常在首个启用帧开始加载；显式读取 `assetsReady` 可以提前启动。销毁不会主动中止请求，但迟到的回调会跳过 GPU 创建。大气 LUT 全部上传成功后才一起替换备用纹理；部分失败会释放本次临时纹理。
+通常由启用后的首帧开始后台加载；显式调用 `loadAssets()` 可以提前启动。销毁不会主动中止共享原始下载，但显式等待会以 `AbortError` 拒绝，迟到的回调会跳过 GPU 创建。大气 LUT 全部上传成功后才一起替换备用纹理；部分失败会释放本次临时纹理。
 
 ## 如何保护宿主场景
 
@@ -52,7 +51,7 @@
 
 ## 源码与 npm 包有什么区别
 
-源码在 [GitHub](https://github.com/iamthek/bettersky-cesium) 公开，`0.2.0` 采用 Apache License 2.0；第三方材料保留各自许可。仓库保留已有素材与 Git 历史，npm 只包含运行所需文件。
+源码在 [GitHub](https://github.com/iamthek/bettersky-cesium) 公开，`1.0.0` 采用 Apache License 2.0；第三方材料保留各自许可。仓库保留已有素材与 Git 历史，npm 只包含运行所需文件。
 
 SDK 构建保留 JavaScript 和 GLSL 的压缩，移除混淆步骤，不生成 sourcemap 或 declaration map。TypeScript 从 `src/index.ts` 生成带注释的 `dist/index.d.ts`，Oxc AST 检查公开接口及参数说明。
 

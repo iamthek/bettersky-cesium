@@ -10,7 +10,7 @@ This guide covers SDK integration, configuration, and usage notes.
 
 ### Version
 
-This guide describes BetterSky `0.2.0`. Start with the installation and asset setup below, then use the parameter tables when you need to customize the result. See the [changelog](CHANGELOG.md) for release history.
+This guide describes BetterSky `1.0.0`. Start with the installation and asset setup below, then use the parameter tables when you need to customize the result. See the [changelog](CHANGELOG.md) for release history.
 
 ### Requirements
 
@@ -31,14 +31,14 @@ Only one BetterSky instance may be active per page. Dispose of the old instance 
 Run either command in your application. New-project examples use the verified Cesium 1.146.0 combination; an existing application can keep another compatible, verified version:
 
 ```bash
-npm install bettersky-cesium@0.2.0 cesium@1.146.0
+npm install bettersky-cesium@1.0.0 cesium@1.146.0
 ```
 
 ```bash
-pnpm add bettersky-cesium@0.2.0 cesium@1.146.0
+pnpm add bettersky-cesium@1.0.0 cesium@1.146.0
 ```
 
-The package provides named and default exports and `dist/index.d.ts`; no separate type package is needed. The bundled declarations include Chinese field documentation for editor hints covering meanings, units, defaults, and constraints.
+The package provides the named `BetterSky` export and `dist/index.d.ts`; no separate type package is needed. The bundled declarations include Chinese field documentation for editor hints covering meanings, units, defaults, and constraints.
 
 ### Assets and deployment
 
@@ -108,31 +108,31 @@ After your application creates `viewer`, initialize the SDK on the client:
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { BetterSky } from 'bettersky-cesium'
 
-const effects = new BetterSky(viewer, {
-  time: undefined, // Preserve the application's time.
+const betterSkyInstance = new BetterSky(viewer, {
+  time: null, // Preserve the application's time.
   coverage: 0.5,
   cloud: { densityScales: [0.12, 0.09, 0.0015, 0] },
 })
 
-effects.update({ cloud: { heights: [1300, 1800, 650, 0] } })
-effects.enabled = false
-effects.enabled = true
+betterSkyInstance.update({ cloud: { heights: [1300, 1800, 650, 0] } })
+betterSkyInstance.update({ enabled: false })
+betterSkyInstance.update({ enabled: true })
 ```
 
-`new BetterSky(viewerOrScene, options?)` accepts a Viewer or Scene. Passing a Scene does not set a Viewer clock. The instance registers its render stages and per-frame updates automatically; do not add `effects.stage` again or manually call lower-level updates.
+`new BetterSky(viewerOrScene, options?)` accepts a Viewer or Scene. Passing a Scene does not set a Viewer clock. The instance registers its render stages and per-frame updates automatically; do not add `betterSkyInstance.stage` again or manually call lower-level updates.
 
 Constructor options merge with the defaults; `update()` merges with the accepted configuration. Nested objects merge by field, and arrays are replaced as a whole. Omitted fields keep their values. Explicit `undefined` is treated as omission except for `time`; use `null` only for fields that explicitly support it. Invalid fields or values are rejected during parameter validation.
 
 ### Configuration snapshots and asset loading
 
-`BetterSky.defaultOptions` returns an independent copy of the default preset. `effects.getOptions()` returns an independent snapshot of the accepted configuration; changing the snapshot does not change the instance. Vectors are normalized to arrays in snapshots. Direct changes through the advanced Pass API are not reflected in the snapshot.
+`BetterSky.getDefaultOptions()` returns an independent copy of the default preset. `betterSkyInstance.getOptions()` returns an independent snapshot of the accepted configuration; changing the snapshot does not change the instance. Vectors are normalized to arrays in snapshots. The snapshot records accepted configuration, while the current scene and clock belong to the host Viewer.
 
 #### Preload assets before creating a Viewer
 
 Call the static method during client startup when you want the eight required BIN, EXR, and PNG files downloaded before constructing a Viewer. Configure the application's `CESIUM_BASE_URL` first; the method needs no Viewer or GPU:
 
 ```js
-import BetterSky from 'bettersky-cesium'
+import { BetterSky } from 'bettersky-cesium'
 
 try {
   await BetterSky.preloadAssets()
@@ -145,72 +145,58 @@ try {
 }
 
 const viewer = new Viewer(container)
-const effects = new BetterSky(viewer)
+const betterSkyInstance = new BetterSky(viewer)
 ```
 
-The same method is available on the named `BetterSky` export. Concurrent calls within the same SDK module copy share downloads with each other and with runtime asset requests. Successfully downloaded raw data stays cached for the current page, including after an instance is disposed; reuse after a page reload depends on the browser's HTTP cache. Independent bundles or SDK copies have separate caches.
+Concurrent calls within the same SDK module copy share downloads with each other and with runtime asset requests. Successfully downloaded raw data stays cached for the current page, including after an instance is disposed; reuse after a page reload depends on the browser's HTTP cache. Independent bundles or SDK copies have separate caches.
 
 Each shared download times out after 60 seconds without progress, including while waiting for response headers or reading the body. Receiving headers or nonempty body data resets the timer. A timeout aborts the request. Failed or timed-out resources are removed from the cache, and the next explicit `preloadAssets()` call retries them; there is no automatic retry.
 
-A resolved preload means only that downloads succeeded: `effects.assetsReady` still tracks the instance's required asset tasks through decoding and GPU upload, and settles after all required tasks finish. Snow and SMAA lookup textures are excluded from preloading.
+A resolved preload means only that downloads succeeded. `betterSkyInstance.loadAssets()` starts and waits for resources required by the current configuration: the sky assets plus enabled SMAA and snow textures. Preloading excludes snow and SMAA.
 
 ```js
-const current = effects.getOptions()
+const current = betterSkyInstance.getOptions()
 console.log(current.coverage)
 
-const unsubscribe = effects.subscribeAssets(() => {
-  if (effects.assetStatus === 'error') console.error(effects.assetErrors)
+const unsubscribe = betterSkyInstance.subscribeAssets(state => {
+  console.log(state.status, state.errors)
 })
 
-await effects.assetsReady
-if (effects.assetStatus !== 'disposed') {
-  const errors = effects.assetErrors.filter(item => item.required)
-  if (errors.length > 0) console.error('Sky assets failed to load', errors)
+try {
+  await betterSkyInstance.loadAssets()
+} catch (error) {
+  console.error('Required assets failed to load', error)
 }
 
-// Call from a UI retry action; check assetErrors again afterward.
-// await effects.retryAssets()
+// Call from a UI retry action; rejected failures remain observable.
+// await betterSkyInstance.retryAssets()
 
 // Unsubscribe when leaving the page.
 unsubscribe()
 ```
 
-Reading `assetsReady` starts and waits for the six required sky asset tasks, even with `enabled: false`. It resolves after success, failure, or disposal. Loading failures do not reject the Promise; inspect `assetErrors`. It does not wait for the optional snow texture or SMAA lookup textures. Optional snow may still be loading after the Promise resolves; SMAA textures are not tracked by these asset states. This Promise is separate from Cesium's stage readiness.
-
-`assetStatus` is one of `idle`, `loading`, `ready`, `error`, or `disposed`. An optional asset failure may also produce `error`. Each error contains `id`, `url`, `required`, and the original `error`. `retryAssets()` explicitly retries failed assets without reloading successful ones; failures are not retried automatically each frame. `subscribeAssets(listener)` returns an unsubscribe function. Its callback receives no arguments; read the state inside the callback.
+`loadAssets()` works even with `enabled: false`. It resolves when every resource required by the configuration is ready and rejects with an `AggregateError` when any target resource fails. `retryAssets()` starts resources in the current scope that have not been requested yet, retries failed resources and reuses successful ones. `getAssetState()` is a side-effect-free snapshot with `idle`, `loading`, `ready`, `error`, or `disposed` status. `subscribeAssets(listener)` sends the same immutable `{ status, errors }` structure and returns an unsubscribe function. Explicit waits reject with an `AbortError` if the instance is disposed while loading. This state is separate from `betterSkyInstance.stage?.ready`.
 
 ### Runtime API
 
 | API | Access / purpose |
 | --- | --- |
-| `BetterSky.defaultOptions` | Static getter returning a fresh copy of the default options. |
+| `BetterSky.getDefaultOptions()` | Static method returning a fresh copy of the default options. |
 | `BetterSky.preloadAssets()` | Downloads the eight required raw assets before Viewer creation; rejects with an `AggregateError` containing failed resource URLs. |
-| `effects.update(options)` | Shares validation and application logic with convenience setters; rejects unknown fields or invalid values before committing changes. |
-| `effects.getOptions()` | Returns an independent snapshot of accepted options; retains HBAO's internal values while disabled so they can be restored. |
-| `effects.assetStatus` / `effects.assetErrors` | Sky asset state and a read-only error snapshot. |
-| `effects.assetsReady` | Reading it starts the six required asset tasks as needed and waits for them; also resolves on failure or disposal. Excludes SMAA and the optional snow task. |
-| `effects.retryAssets()` / `effects.subscribeAssets(listener)` | Explicitly retry failed assets; subscribe to changes and receive an unsubscribe function. |
-| `effects.enabled` | Read/write master pipeline switch. |
-| `effects.coverage` | Read/write weather coverage. |
-| `effects.toneMappingExposure` | Read/write exposure multiplier. |
-| `effects.toneMappingMode` | Setter only; changing modes rebuilds the sky render stage. |
-| `effects.localWeatherVelocity` | Setter only; accepts an array or Cartesian2. |
-| `effects.setCloudAltitudes(value)` | Sets four-component cloud base altitudes. |
-| `effects.setCloudHeights(value)` | Sets four-component cloud thicknesses. |
-| `effects.setCloudDensityScales(value)` | Sets four-component cloud density multipliers. |
-| `effects.setCloudShapeDetailAmounts(value)` | Sets four detail erosion amounts in [0, 1]. |
-| `effects.hbaoEnabled` / `effects.smaaEnabled` | Read/write optional effect switches. |
-| `effects.hbaoIntensity` / `effects.hbaoMaxRadius` | Setters only; set AO intensity/radius. |
-| `effects.pass` | Getter exposing the underlying GeospatialPipelinePass for advanced operations. |
-| `effects.stage` | Getter exposing the current sky PostProcessStageComposite; read it again after a stage rebuild. |
-| `effects.dispose()` | Idempotently removes per-frame listeners and registered stages, restores captured sky/globe settings, and releases Pass resources owned by the instance. |
+| `betterSkyInstance.update(options)` | The only runtime configuration mutation path; rejects unknown fields or invalid values before committing changes. |
+| `betterSkyInstance.getOptions()` | Returns an independent complete snapshot of accepted options. |
+| `betterSkyInstance.getAssetState()` | Returns the side-effect-free immutable `{ status, errors }` snapshot for the current configuration scope. |
+| `betterSkyInstance.loadAssets()` | Starts and waits for required sky, enabled SMAA, and enabled snow resources. |
+| `betterSkyInstance.retryAssets()` / `betterSkyInstance.subscribeAssets(listener)` | Start never-requested resources, retry current failures, or subscribe to state snapshots; successful resources are reused. |
+| `betterSkyInstance.stage` | Getter exposing the current sky PostProcessStageComposite; read it again after a stage rebuild. |
+| `betterSkyInstance.dispose()` | Idempotently removes per-frame listeners and registered stages, restores captured sky/globe settings, and releases Pass resources owned by the instance. |
 
 ### Common configurations
 
 Adjust surface and cloud fill lighting separately instead of relying only on global exposure:
 
 ```js
-effects.update({
+betterSkyInstance.update({
   irradianceScale: 0.15,
   aerialPerspectiveStrength: 0.2,
   volumetricLight: { mode: 'volumetric', intensity: 2 },
@@ -221,59 +207,56 @@ effects.update({
 Reduce volumetric light quality, simplify distant clouds earlier, and disable AO:
 
 ```js
-effects.update({
+betterSkyInstance.update({
   volumetricLight: { mode: 'volumetric', quality: 'low' },
   cloud: { lodRange: [120000, 300000] },
-  hbao: false,
+  hbao: { enabled: false },
 })
 ```
 
 Control sun time and weather movement separately:
 
 ```js
-effects.update({ time: '2026-05-01T06:00:00Z' })
+betterSkyInstance.update({ time: '2026-05-01T06:00:00Z' })
 viewer.clock.shouldAnimate = false
-effects.localWeatherVelocity = [0, 0]
+betterSkyInstance.update({ localWeatherVelocity: [0, 0] })
 ```
 
 Pausing the Viewer clock does not stop weather map movement. Weather velocity is measured in UV/second, not meters/second. Other lower-level cloud shape or detail motion is not controlled by this weather map setting.
 
-### Advanced Pass controls
-
-Prefer `update()` for normal use. `effects.pass` exposes the following advanced members. Direct changes do not update the configuration snapshot and may bypass top-level parameter validation:
-
-| Member | Access / purpose |
-| --- | --- |
-| `stage`, `ready`, `name` | Read-only stage reference, stage readiness, and name; `ready` does not mean all asynchronous assets are ready. |
-| `enabled` | Read/write sky Pass switch; use `effects.enabled` to coordinate HBAO / SMAA as well. |
-| `coverage`, `toneMappingExposure` | Read/write coverage/exposure; prefer the top-level APIs to keep configuration and cloud history consistent. |
-| `toneMappingMode` | Write only; supports the tone mapping modes above and rebuilds the stage on assignment. |
-| `localWeatherVelocity` | Read/write `Cartesian2`, in UV/second. |
-| `aerialPerspectiveStrength` | Read/write aerial perspective strength, `[0, 1]`. |
-| `cloudAltitudeFadeRange` | Read/write altitude range or `null`, with the same units as `cloud.altitudeFadeRange`. |
-| `setVolumetricLightOptions(options)` | Partially updates volumetric light using `BetterSkyVolumetricLightOptions`; prefer top-level `update()`. |
-| `showSnow`, `showRain` | Write-only booleans, both defaulting to `false`; enable surface snow or rain streaks/flashes, rebuilding the affected stages. |
-| `isDestroyed()` | Returns whether the Pass has been destroyed. |
-
 ```js
-effects.pass.showSnow = true
-effects.pass.showRain = true
+betterSkyInstance.update({ snow: true, rain: true })
 ```
-
-Rain and snow are not top-level constructor or `update()` options. These setters cannot read the current toggle state. Snow requires `BetterSkyAssets/snowCoverMask.png`.
 
 ### Disposal
 
 ```js
-effects.dispose()
+betterSkyInstance.dispose()
 viewer.destroy() // Only if the application also needs to destroy the Viewer.
 ```
 
-Dispose of the effects before destroying the host Viewer. Calling `dispose()` repeatedly is safe. You can also dispose of an instance while assets are loading: requests are not actively aborted, and late callbacks skip GPU creation. Asset state and configuration snapshots remain readable after disposal; parameter updates and loading retries are prohibited.
+Dispose of the instance before destroying the host Viewer. Calling `dispose()` repeatedly is safe. You can dispose while assets are loading: explicit waits reject with an `AbortError`, late callbacks skip GPU creation, and shared raw downloads remain reusable. Asset state and configuration snapshots remain readable after disposal; subscriptions can be cleaned up safely, while parameter updates and loading calls are rejected.
+
+### Migration from 0.2.0
+
+| 0.2.0 | 1.0.0 |
+| --- | --- |
+| `import BetterSky from 'bettersky-cesium'` | `import { BetterSky } from 'bettersky-cesium'` |
+| `BetterSky.defaultOptions` | `BetterSky.getDefaultOptions()` |
+| `effects.enabled = value`, shorthand setters, and `setCloud…()` | `betterSkyInstance.update({ … })` |
+| `effects.hbaoEnabled`, `hbaoIntensity`, `hbaoMaxRadius` | `betterSkyInstance.update({ hbao: { enabled, intensity, maxRadius } })` |
+| `effects.pass.showRain` / `showSnow` | `betterSkyInstance.update({ rain, snow })` |
+| `effects.assetStatus` / `assetErrors` / `assetsReady` | `betterSkyInstance.getAssetState()` / `loadAssets()` |
+| `hbao: true` or `hbao: false` | `hbao: { enabled: true }` or `hbao: { enabled: false }` |
+| `darkParamY` | `nightGlowIntensity` |
+
+`subscribeAssets()` callbacks now receive `{ status, errors }`. The resource methods cover enabled SMAA and snow as well as the sky assets.
+
+Cleanup failures in `dispose()` are reported as an `AggregateError`; each independent cleanup is attempted before that error is thrown. No further use of the instance is supported.
 
 ## Parameters
 
-The defaults below match `BetterSky.defaultOptions` in version 0.2.0. All numeric values must be finite; `NaN` and infinity are invalid. All options below support `update()` except the constructor-only `hbao.denoise`. Scene and time options follow their own application rules.
+The defaults below match `BetterSky.getDefaultOptions()` in version 1.0.0. All numeric values must be finite; `NaN` and infinity are invalid. All options below support `update()` except the constructor-only `hbao.denoise`. Scene and time options follow their own application rules.
 
 ### General options
 
@@ -286,7 +269,7 @@ The defaults below match `BetterSky.defaultOptions` in version 0.2.0. All numeri
 | `toneMappingExposure` | number | `2.8` | Nonnegative brightness multiplier; higher values are brighter. Not measured in EV. |
 | `irradianceScale` | number | `0.15` | Nonnegative surface irradiance multiplier, separate from cloud fill lighting. |
 | `aerialPerspectiveStrength` | number | `0.15` | Surface aerial perspective blend strength `[0, 1]`; `0` disables this blend. |
-| `darkParamY` | number | `0.5` | Night sky glow modulation. Any finite number is accepted; `[0, 1]` is recommended. |
+| `nightGlowIntensity` | number | `0.5` | Night sky glow modulation. Any finite number is accepted; `[0, 1]` is recommended. |
 | `bloomIntensity` | number | `0.002` | Nonnegative bloom intensity; `0` removes its intensity contribution without releasing the stage. |
 | `systemLight` | boolean | `true` | Follows Cesium's sun direction; keeping `true` is recommended. See [Notes](#notes). |
 | `applySceneSettings` | boolean | `true` | Controls whether scene settings apply in the current call. See [Scene settings and disposal](#scene-settings-and-disposal). |
@@ -334,9 +317,9 @@ The default volumetric layer spans planet altitudes of 1600–4000 m and does no
 An explicit `volumetricLight.mode` takes priority in the current constructor or update call. If that call contains any `cloud.haze*` field without an explicit mode, it selects `legacy` automatically. Other partial updates retain the current mode, and mode changes preserve existing haze options.
 
 ```js
-effects.update({ volumetricLight: { mode: 'volumetric', quality: 'low' } })
-effects.update({ volumetricLight: { mode: 'off' } })
-effects.update({ cloud: { hazeDensityScale: 0.000008 } }) // Switches to legacy.
+betterSkyInstance.update({ volumetricLight: { mode: 'volumetric', quality: 'low' } })
+betterSkyInstance.update({ volumetricLight: { mode: 'off' } })
+betterSkyInstance.update({ cloud: { hazeDensityScale: 0.000008 } }) // Switches to legacy.
 ```
 
 ### Legacy haze
@@ -375,10 +358,11 @@ Greater reliance on history reduces noise but can increase ghosting; stronger sp
 
 ### HBAO
 
-Enabled by default with the values below and `denoise: true`. During construction, `hbao: true` uses the defaults, and an object overrides individual values. At runtime, `false` disables HBAO while retaining values, `true` re-enables it, and an object partially updates values and enables it.
+Enabled by default with the values below and `denoise: true`. Use the object form for construction and updates. `hbao.enabled` controls the switch independently from the numeric values; updating a value does not implicitly enable or disable HBAO.
 
 | Parameter | Type | Default | Meaning / range |
 | --- | --- | --- | --- |
+| `hbao.enabled` | boolean | `true` | Enables HBAO while retaining all numeric values when false. |
 | `hbao.intensity` | number | `100` | Nonnegative occlusion intensity exponent; higher values deepen contact shadows. |
 | `hbao.maxRadius` | number | `30` | Nonnegative sample radius in meters; large values may cause dark halos. |
 | `hbao.bias` | number | `0.1` | Finite angular bias in radians; increasing it can reduce self-occlusion. |
@@ -392,16 +376,16 @@ The `BetterSkyUpdateOptions` type excludes `hbao.denoise`. JavaScript runtime va
 
 ### TypeScript types
 
-Use `BetterSkyOptions` for constructor options and `BetterSkyUpdateOptions` for partial updates. Other public types include `BetterSkyVector2`, `BetterSkyVector4`, `BetterSkyQuality`, `BetterSkyCloudType`, `BetterSkyToneMappingMode`, the Options interfaces for clouds, denoising, volumetric light, and HBAO, and `BetterSkyPass`. The package also provides `BetterSkyAssetStatus`, `BetterSkyAssetError`, and `BetterSkyConstructor`. Refer to the declarations bundled with the version you installed.
+Use `BetterSkyOptions` for constructor options, `BetterSkyUpdateOptions` for partial updates and `BetterSkyResolvedOptions` for both configuration snapshot methods. Other public types include the vector, quality, cloud type and tone mapping types, the nested option interfaces, `BetterSkyAssetStatus`, `BetterSkyAssetError`, `BetterSkyAssetState` and `BetterSkyConstructor`. Refer to the declarations bundled with the version you installed.
 
 ```ts
 import { BetterSky, type BetterSkyOptions } from 'bettersky-cesium'
 
 const options: BetterSkyOptions = {
-  time: undefined,
+  time: null,
   cloud: { altitudes: [4000, 6000, 10000, 0] },
 }
-const sky = new BetterSky(viewer, options)
+const betterSkyInstance = new BetterSky(viewer, options)
 ```
 
 ## Notes
@@ -411,12 +395,12 @@ const sky = new BetterSky(viewer, options)
 | When | Effect on the host |
 | --- | --- |
 | Construction with `applySceneSettings: true` | Sets HDR, logarithmic depth, and gamma, and enables terrain depth testing. |
-| Construction / update with a valid `time` | Changes the Viewer clock; has no effect when only a Scene is provided. |
+| Construction / update with a valid time string | Changes the Viewer clock; `null` or omitted update time preserves it, and a Scene has no separate clock. |
 | First enabled frame | Temporarily takes over the built-in sky, atmosphere, sun, fog, and some globe settings; sets the tile cache to 2000 and maximum screen-space error to 2. |
 | Disable / dispose | Restores the sky and globe settings captured when enabled. |
-| `update()` | Applies HDR, logarithmic depth, and gamma supplied in that call, unless the call explicitly includes `applySceneSettings: false`. |
+| `update()` | Persists `applySceneSettings` and applies supplied scene fields only while it is true; an omitted value retains the previous switch. |
 
-`applySceneSettings: false` does not prevent sky takeover or time changes. Setting it to `false` during construction does not automatically constrain later updates; pass it explicitly in each relevant update to preserve application scene settings.
+`applySceneSettings: false` prevents SDK-managed scene fields from changing until a later update explicitly sets it back to true. Re-enabling it applies the scene fields retained in the accepted configuration; calls made while it stays true apply only scene fields supplied in that call. It does not prevent sky takeover or an explicit time update.
 
 Clock, HDR, gamma, logarithmic depth, and terrain depth testing are not automatically restored on disable / disposal. Save and restore their original values in the application if needed. Disposal releases rendering resources owned by the instance but leaves installed context helper methods in place. Do not continue using cached Pass or stage references.
 
@@ -444,7 +428,7 @@ BetterSky uses Cesium renderer internals. After upgrading Cesium or three, verif
 
 Use only supported 3D perspective scenes. Dispose of the effects before switching to 2D / Columbus View. On SSR pages, initialize after client mounting. Screen-space reflections and subsurface scattering are not currently supported. Keep `systemLight: true`; `false` makes only some effects use a custom sun direction supplied through `scene.context.uniformState.sunDirectionWC2`, while clouds and cloud shadows still follow Cesium's sun. This is not a unified custom-light API.
 
-Asset requests must return the actual files, not the application's HTML fallback. Version 0.2.0 uses the Apache License 2.0; third-party materials retain their own terms. Upgrade JS and `BetterSkyAssets/` together and invalidate old caches. Include [LICENSE](LICENSE), [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) when distributing SDK runtime builds, and follow the complete license terms.
+Asset requests must return the actual files, not the application's HTML fallback. Version 1.0.0 uses the Apache License 2.0; third-party materials retain their own terms. Upgrade JS and `BetterSkyAssets/` together and invalidate old caches. Include [LICENSE](LICENSE), [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) when distributing SDK runtime builds, and follow the complete license terms.
 
 ### Troubleshooting
 
@@ -457,7 +441,7 @@ Asset requests must return the actual files, not the application's HTML fallback
 | Light shafts look like widespread fog | Reduce density, layer thickness, or distance, and adjust brightness separately. Check whether the clouds leave gaps between lit and shadowed areas. |
 | A halo remains near the sun | Lens flare and volumetric light are controlled separately; disabling volumetric light does not disable lens flare. |
 | The third layer does not cast cloud shadows | Only the first two layers cast shadows by default; changing cloud types does not change this. |
-| SMAA is not active immediately after enabling | Lookup textures load asynchronously. Neither the first frame nor `assetsReady` indicates SMAA readiness. |
+| SMAA is not active immediately after enabling | Lookup textures load asynchronously. Await `betterSkyInstance.loadAssets()` after enabling SMAA and check `getAssetState()`. |
 | Clouds still move after pausing time | Set `localWeatherVelocity: [0, 0]` separately; handle other lower-level motion controls independently. |
 | Asset state or snapshot API calls fail | Confirm the installed SDK version. Read snapshots and asset state after disposal if needed, but do not update options or retry loading on a disposed instance. |
 | Demo basemap or terrain differs from expectations | Without service credentials, the demo uses the local NaturalEarthII basemap and ellipsoid terrain. See the [demo guide](demo/README.md). |

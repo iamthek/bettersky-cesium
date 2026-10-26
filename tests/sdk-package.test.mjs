@@ -45,7 +45,7 @@ test('release gate accepts Apache-2.0 metadata and NOTICE and rejects changed pu
     exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' } }, types: './dist/index.d.ts',
     peerDependencies: { cesium: '>=1.142.0' }, dependencies: { three: '>=0.160.1' },
   };
-  const bundle = `/*! BetterSky for Cesium ${root.version}. ${copyrightLine(root.author)}. SPDX-License-Identifier: Apache-2.0. */\nimport {Cartesian2} from 'cesium';class BetterSky{};export {BetterSky};export default BetterSky;`;
+  const bundle = `/*! BetterSky for Cesium ${root.version}. ${copyrightLine(root.author)}. SPDX-License-Identifier: Apache-2.0. */\nimport {Cartesian2} from 'cesium';class BetterSky{};export {BetterSky};`;
   const entries = [
     { path: 'package.json', data: Buffer.from(JSON.stringify(manifest)) },
     { path: 'dist/index.js', data: Buffer.from(bundle) },
@@ -84,9 +84,9 @@ test('generated public declarations document every member and parameter and reta
 test('declaration checks reject removed or empty JSDoc and parameter descriptions before packing', async () => {
   const source = (await emitPublicDeclarations()).toString('utf8');
   const mutations = [
-    [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '$1'), /Missing JSDoc.*BetterSkyOptions.enabled/],
-    [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '/** @default true */\n  $1'), /Empty JSDoc description.*BetterSkyOptions.enabled/],
-    [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '/** */\n  $1'), /Empty JSDoc description.*BetterSkyOptions.enabled/],
+    [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '$1'), /Missing JSDoc.*BetterSkyHbaoOptions.enabled/],
+    [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '/** @default true */\n  $1'), /Empty JSDoc description.*BetterSkyHbaoOptions.enabled/],
+    [source.replace(/\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*(enabled\?: boolean;)/, '/** */\n  $1'), /Empty JSDoc description.*BetterSkyHbaoOptions.enabled/],
     [source.replace(/^[\t ]*\* @param viewerOrScene[^\r\n]*(?:\r?\n|$)/m, ''), /Missing @param.*BetterSkyConstructor.constructor.viewerOrScene/],
     [source.replace(/(@param viewerOrScene)[^\r\n]*/, '$1'), /Missing @param.*BetterSkyConstructor.constructor.viewerOrScene/],
     [source.replace(/\/\*\*[\s\S]*?\*\//g, ''), /Missing JSDoc/],
@@ -116,8 +116,9 @@ export interface Options {
 });
 
 test('ESM validation requires external dependencies and blocks dynamic code execution', () => {
-  const safe = "import {Cartesian2} from 'cesium';class BetterSky{};export {BetterSky};export default BetterSky;";
-  assert.deepEqual(inspectJavaScript(safe).exports.sort(), ['BetterSky', 'default']);
+  const safe = "import {Cartesian2} from 'cesium';class BetterSky{};export {BetterSky};";
+  assert.deepEqual(inspectJavaScript(safe).exports.sort(), ['BetterSky']);
+  assert.throws(() => inspectJavaScript(safe + 'export default BetterSky;'), /Unexpected public exports/);
   assert.throws(() => inspectJavaScript(safe + "eval('1')"), /Forbidden dynamic/);
   assert.throws(() => inspectJavaScript(safe + "new Function('return 1')"), /Forbidden dynamic/);
   assert.throws(() => inspectJavaScript(safe + "globalThis['Function']('return 1')"), /Forbidden dynamic/);
@@ -125,7 +126,7 @@ test('ESM validation requires external dependencies and blocks dynamic code exec
 });
 
 test('ESM validation accepts named Cesium imports and rejects whole-module imports and re-exports', () => {
-  const publicApi = 'class BetterSky{};export {BetterSky};export default BetterSky;';
+  const publicApi = 'class BetterSky{};export {BetterSky};';
   assert.deepEqual(inspectJavaScript("import {Cartesian2 as Position} from 'cesium';" + publicApi).imports, ['cesium']);
   for (const statement of [
     "import * as Cesium from 'cesium';",
@@ -164,7 +165,7 @@ test('named Cesium imports omit unused engine exports and reject invalid depende
       },
     });
   };
-  const publicApi = 'export {BetterSky};export default BetterSky;';
+  const publicApi = 'export {BetterSky};';
   const named = "import {Cartesian2} from 'cesium';class BetterSky {static position = Cartesian2;}" + publicApi;
   const namespace = "import * as Cesium from 'cesium';class BetterSky {static cesium = Cesium;}" + publicApi;
   const namedResult = await buildConsumer(named);

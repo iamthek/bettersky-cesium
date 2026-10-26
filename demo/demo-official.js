@@ -12,11 +12,11 @@ import "cesium/Build/Cesium/Widgets/widgets.css";
 import { BetterSky } from "../src/index.ts";
 
 // 控件只转换参数形状，默认值统一由管线内置预设提供。
-const DEFAULT_OPTIONS = BetterSky.defaultOptions;
+const DEFAULT_OPTIONS = BetterSky.getDefaultOptions();
 const CONTROL_DEFAULTS = {
   enabled: DEFAULT_OPTIONS.enabled,
   systemLight: DEFAULT_OPTIONS.systemLight,
-  hbaoEnabled: !!DEFAULT_OPTIONS.hbao,
+  hbaoEnabled: DEFAULT_OPTIONS.hbao.enabled,
   smaaEnabled: DEFAULT_OPTIONS.smaa,
   coverage: DEFAULT_OPTIONS.coverage,
   weatherX: DEFAULT_OPTIONS.localWeatherVelocity[0],
@@ -25,7 +25,7 @@ const CONTROL_DEFAULTS = {
   toneMappingExposure: DEFAULT_OPTIONS.toneMappingExposure,
   irradianceScale: DEFAULT_OPTIONS.irradianceScale,
   aerialPerspectiveStrength: DEFAULT_OPTIONS.aerialPerspectiveStrength,
-  darkParamY: DEFAULT_OPTIONS.darkParamY,
+  nightGlowIntensity: DEFAULT_OPTIONS.nightGlowIntensity,
   bloomIntensity: DEFAULT_OPTIONS.bloomIntensity,
   volumetricLightMode: DEFAULT_OPTIONS.volumetricLight.mode,
   volumetricDensity: DEFAULT_OPTIONS.volumetricLight.density,
@@ -104,7 +104,7 @@ function buildPipelineOptions(values) {
     toneMappingExposure: values.toneMappingExposure,
     irradianceScale: values.irradianceScale,
     aerialPerspectiveStrength: values.aerialPerspectiveStrength,
-    darkParamY: values.darkParamY,
+    nightGlowIntensity: values.nightGlowIntensity,
     highDynamicRange: values.highDynamicRange,
     logarithmicDepthBuffer: values.logarithmicDepthBuffer,
     gamma: values.gamma,
@@ -147,7 +147,8 @@ function buildPipelineOptions(values) {
         spatialFilterStrength: values.denoiseSpatialFilterStrength,
       },
     },
-    hbao: values.hbaoEnabled ? {
+    hbao: {
+      enabled: values.hbaoEnabled,
       intensity: values.hbaoIntensity,
       maxRadius: values.hbaoMaxRadius,
       bias: values.hbaoBias,
@@ -155,7 +156,7 @@ function buildPipelineOptions(values) {
       blackPoint: values.hbaoBlackPoint,
       whitePoint: values.hbaoWhitePoint,
       gamma: values.hbaoGamma,
-    } : false,
+    },
     smaa: values.smaaEnabled,
   };
 }
@@ -167,7 +168,7 @@ function updateTimelineRange(viewer, time) {
   viewer.timeline.zoomTo(clock.startTime, clock.stopTime);
 }
 
-function createEffectControlPanel(viewer, fx) {
+function createEffectControlPanel(viewer, betterSkyInstance) {
   const panel = document.getElementById("effectPanel");
   const controlsRoot = document.getElementById("effectControls");
   // 首页没有控制面板，渲染预设由 BetterSky 内置默认值提供。
@@ -423,12 +424,12 @@ function createEffectControlPanel(viewer, fx) {
     state[key] = value;
     apply(value);
   };
-  const updateCloud = (key, value) => fx.update({ cloud: { [key]: value } });
-  const updateVolumetricLight = (key, value) => fx.update({
+  const updateCloud = (key, value) => betterSkyInstance.update({ cloud: { [key]: value } });
+  const updateVolumetricLight = (key, value) => betterSkyInstance.update({
     volumetricLight: { mode: state.volumetricLightMode, [key]: value },
   });
   const layerVector = (prefix) => [0, 1, 2, 3].map((index) => state[`${prefix}${index}`]);
-  const updateHbao = () => fx.update({ hbao: buildPipelineOptions(state).hbao });
+  const updateHbao = () => betterSkyInstance.update({ hbao: buildPipelineOptions(state).hbao });
   const refreshCloudTops = () => {
     for (let index = 0; index < 3; index++) {
       controls.get(`cloudTop${index}`).setValue(state[`altitude${index}`] + state[`height${index}`]);
@@ -490,16 +491,16 @@ function createEffectControlPanel(viewer, fx) {
   };
 
   const weather = createSection("基础天气", true);
-  addToggle(weather, "enabled", "天空效果总开关", commitValue("enabled", (value) => fx.update({ enabled: value })),
+  addToggle(weather, "enabled", "天空效果总开关", commitValue("enabled", (value) => betterSkyInstance.update({ enabled: value })),
     "API：enabled。开启/关闭整条天空效果，不是删除 Viewer 或地形。\n单位：布尔值；开时渲染云、大气和光晕，关时保留参数便于再次启用。\nHBAO/SMAA 有独立开关；关闭可减少天空后处理成本，重新开启需等待历史采样稳定。");
-  addToggle(weather, "systemLight", "跟随系统太阳", commitValue("systemLight", (value) => fx.update({ systemLight: value })),
+  addToggle(weather, "systemLight", "跟随系统太阳", commitValue("systemLight", (value) => betterSkyInstance.update({ systemLight: value })),
     "API：systemLight。开启时使用 Cesium 时钟决定的太阳方向；关闭时使用管线自定义方向。\n单位：布尔值；不是日光亮度调节。关闭后本示例不提供自定义太阳编辑，改变时间可能不再改变效果光源。\n观察 Godray 应同时检查太阳角度和云影；切换后需要重新积累稳定画面。");
-  addRange(weather, "coverage", "云量覆盖度", 0, 1, 0.01, commitValue("coverage", (value) => fx.update({ coverage: value })),
+  addRange(weather, "coverage", "云量覆盖度", 0, 1, 0.01, commitValue("coverage", (value) => betterSkyInstance.update({ coverage: value })),
     "API：coverage。控制天气场的云量覆盖，不是云密度或曝光。\n单位：0–1；调大云区更广，调小留出更多晴空。haze 的覆盖率调制在 0.2–0.4 线性夹取，0.34 对应 0.7，不是已饱和。\n云量还受高度淡出影响；更多云可能增加有效采样工作，调节会清除云历史。");
   for (const axis of ["X", "Y"]) {
     const key = `weather${axis}`;
     addRange(weather, key, `风速 ${axis}`, -0.005, 0.005, 0.00001,
-      commitValue(key, () => fx.update({ localWeatherVelocity: [state.weatherX, state.weatherY] })),
+      commitValue(key, () => betterSkyInstance.update({ localWeatherVelocity: [state.weatherX, state.weatherY] })),
       `API：localWeatherVelocity[${axis === "X" ? 0 : 1}]。天气纹理坐标的 ${axis} 分量速度，不是地理东西/南北风。\n单位：纹理坐标/秒，不能当作 m/s；绝对值调大移动更快，调小更慢，0 停止该方向，负值反向。\n两轴一起组成风向；速度不改变云量或采样预算，过快运动可能放大时域噪声和拖影。`);
   }
 
@@ -552,10 +553,10 @@ function createEffectControlPanel(viewer, fx) {
   addSelect(godray, "volumetricLightMode", "体积光模式", [
     ["volumetric", "独立体积光 · volumetric"], ["legacy", "旧 haze · legacy"], ["off", "关闭 · off"],
   ], commitValue("volumetricLightMode", () => {
-    fx.update({ volumetricLight: buildPipelineOptions(state).volumetricLight });
+    betterSkyInstance.update({ volumetricLight: buildPipelineOptions(state).volumetricLight });
     refreshDependencies();
   }),
-  "API：volumetricLight.mode。volumetric 使用独立低分辨率体积光及其历史，legacy 使用现有 cloud.haze* 算法，off 关闭两条额外体积光路径。\n两条路径互斥；切换保留各自参数并重新积累历史。关闭时两组数值禁用，仍可切换模式。仅提交旧 cloud.haze* 且未显式传新 mode 的 API 调用自动选择 legacy。");
+  "API：volumetricLight.mode。volumetric 使用独立低分辨率体积光及其历史，legacy 使用现有 cloud.haze* 算法，off 关闭两条额外体积光路径。\n两条路径互斥；切换保留各自参数并重新积累历史。关闭时两组数值禁用，仍可切换模式。修改 cloud.haze* 不会自动切换模式，需要显式选择 legacy。");
   addRange(godray, "volumetricDensity", "体积光介质密度", 0, 0.0001, 0.000001,
     commitValue("volumetricDensity", (value) => updateVolumetricLight("density", value)),
     "API：volumetricLight.density。独立体积光介质的消光密度。\n单位：米的倒数，非负有限值；调大同时增加散射和消光，调小更透明，0 不产生此介质。\n仅 volumetric 模式生效；不改变云体密度，改变会清除独立体积光历史。");
@@ -666,32 +667,32 @@ function createEffectControlPanel(viewer, fx) {
     ["10", "Linear"],
     ["11", "Reinhard"],
     ["12", "Cineon"],
-  ], commitValue("toneMappingMode", (value) => fx.update({ toneMappingMode: Number(value) })),
+  ], commitValue("toneMappingMode", (value) => betterSkyInstance.update({ toneMappingMode: Number(value) })),
   "API：toneMappingMode。选择 HDR 到显示亮度的映射曲线。\n枚举（无单位）：7 AgX 压缩高光并控制高亮色彩；8 Neutral 较中性的高光压缩；9 ACES 电影式对比；10 Linear 线性映射，强光易裁白；11 Reinhard 渐进压缩亮度；12 Cineon 胶片式曲线。没有调大/调小的统一含义。\n与曝光、Gamma 联动，不增加真实光束；切换会重建相关管线，应避免连续反复切换。");
   addRange(color, "toneMappingExposure", "曝光", 0, 20, 0.1,
-    commitValue("toneMappingExposure", (value) => fx.update({ toneMappingExposure: value })),
+    commitValue("toneMappingExposure", (value) => betterSkyInstance.update({ toneMappingExposure: value })),
     "API：toneMappingExposure。色调映射前的亮度倍率，不是以 EV 为单位的快门设置。\n单位：无量纲；调大全局效果更亮，调小更暗，0 会压掉该映射输入亮度。\n与色调曲线和 HDR 联动，过大可能裁白天空/云/地表；不增加散射或云影，不应拿曝光伪造 Godray，不改变采样预算。");
   addRange(color, "irradianceScale", "地表光照增益", 0, 2, 0.01,
-    commitValue("irradianceScale", (value) => fx.update({ irradianceScale: value })),
+    commitValue("irradianceScale", (value) => betterSkyInstance.update({ irradianceScale: value })),
     "API：irradianceScale。独立控制地表光照增益，不改变云体补光。\n单位：非负无量纲倍率；调大地表更亮，调小更暗。官方 Cesium 已完成底图光照，示例用 0.15 避免与曝光叠加泛白。\n与地表原始材质及色调映射联动，不增加样本预算；别通过抬高此值增强天空光束。");
   addRange(color, "aerialPerspectiveStrength", "地表大气透视", 0, 1, 0.01,
-    commitValue("aerialPerspectiveStrength", (value) => fx.update({ aerialPerspectiveStrength: value })),
+    commitValue("aerialPerspectiveStrength", (value) => betterSkyInstance.update({ aerialPerspectiveStrength: value })),
     "API：aerialPerspectiveStrength。地表合成时的大气透视混合强度。\n单位：0–1；调大远景更受大气衰减/散射影响，调小保留更多原始地表对比，0 关闭这项混合。\n不改变天空/云的散射，也不是 Godray 密度；过大可能让底图发白，采样预算不随强度增加。");
-  addRange(color, "darkParamY", "夜间辉光", 0, 1, 0.01,
-    commitValue("darkParamY", (value) => fx.update({ darkParamY: value })),
-    "API：darkParamY。夜间天空辉光的调制分量。\n单位：0–1 无量纲；调大增加此夜间辉光，调小减弱；白天可能不明显。\n依赖太阳高度和时间，不是地表照明或 Godray 日光直射增益；过高可能冲淡夜空暗部，不改变积分预算。");
+  addRange(color, "nightGlowIntensity", "夜间辉光", 0, 1, 0.01,
+    commitValue("nightGlowIntensity", (value) => betterSkyInstance.update({ nightGlowIntensity: value })),
+    "API：nightGlowIntensity。夜间天空辉光的调制分量。\n单位：0–1 无量纲；调大增加此夜间辉光，调小减弱；白天可能不明显。\n依赖太阳高度和时间，不是地表照明或 Godray 日光直射增益；过高可能冲淡夜空暗部，不改变积分预算。");
   addRange(color, "bloomIntensity", "太阳泛光强度", 0, 2, 0.001,
-    commitValue("bloomIntensity", (value) => fx.update({ bloomIntensity: value })),
+    commitValue("bloomIntensity", (value) => betterSkyInstance.update({ bloomIntensity: value })),
     "API：bloomIntensity。太阳泛光/光晕效果强度。\n单位：无量纲；调大亮部扩散更明显，调小更弱，0 关闭此强度。示例保留 0.002。\n与曝光和色调映射联动；泛光不是真实体积散射，不能代替 Godray。强度不扩展积分预算，但过高会糊掉明暗层次。");
 
   const hbao = createSection("SMAA / HBAO");
-  addToggle(hbao, "smaaEnabled", "SMAA 抗锯齿", commitValue("smaaEnabled", (value) => fx.update({ smaa: value })),
+  addToggle(hbao, "smaaEnabled", "SMAA 抗锯齿", commitValue("smaaEnabled", (value) => betterSkyInstance.update({ smaa: value })),
     "API：smaa。最终图像的亚像素形态学抗锯齿开关。\n单位：布尔值；开启降低屏幕边缘锯齿，关闭保留原始边缘。不是云的时域降噪，不能消除云体积分噪声或拖影。\n开启增加屏幕空间后处理工作；首次启用需准备相关资源，与分辨率和 HDR 结果联动。");
   addToggle(hbao, "hbaoEnabled", "HBAO 环境光遮蔽", commitValue("hbaoEnabled", () => {
     updateHbao();
     refreshDependencies();
   }),
-    "API：hbao。开启时提交完整的本地七参数对象，关闭提交 false。\n单位：布尔开关；开启增强建筑/地形接触阴影，关闭减少该屏幕空间后处理。禁用时数值保留，重新开启恢复完整参数。\n依赖场景深度，不能产生太阳方向地形阴影或替代云影；开启增加 AO/滤波工作，帮助按钮始终可用。");
+    "API：hbao.enabled。开关与七个数值参数通过同一个配置对象提交。\n单位：布尔开关；开启增强建筑/地形接触阴影，关闭减少该屏幕空间后处理。禁用时数值保留，重新开启恢复完整参数。\n依赖场景深度，不能产生太阳方向地形阴影或替代云影；开启增加 AO/滤波工作，帮助按钮始终可用。");
   addRange(hbao, "hbaoIntensity", "HBAO 强度", 0, 300, 1, commitValue("hbaoIntensity", updateHbao),
     "API：hbao.intensity。AO 输出的强度指数。\n单位：非负无量纲；调大接触遮蔽更暗，调小更弱，0 不产生该 AO 对比。\n与半径、黑白点和 HBAO Gamma 联动；过高易产生脏暗边缘，不改变方向/步数预算，关闭 HBAO 时保留。");
   addRange(hbao, "hbaoMaxRadius", "HBAO 最大半径", 1, 100, 1, commitValue("hbaoMaxRadius", updateHbao),
@@ -708,17 +709,17 @@ function createEffectControlPanel(viewer, fx) {
     "API：hbao.gamma。AO 调制曲线的幂指数。\n单位：正无量纲；调大使归一化中间亮度更暗，调小使中间亮度更亮。\n不等于场景 gamma 或历史 varianceGamma；过高丢失暗部层次，与黑/白点联动，不改变采样预算，关闭 HBAO 时保留。");
 
   const scene = createSection("场景时间");
-  addToggle(scene, "highDynamicRange", "高动态范围 HDR", commitValue("highDynamicRange", (value) => fx.update({ highDynamicRange: value })),
+  addToggle(scene, "highDynamicRange", "高动态范围 HDR", commitValue("highDynamicRange", (value) => betterSkyInstance.update({ highDynamicRange: value })),
     "API：highDynamicRange。Cesium 场景的 HDR 开关。\n单位：布尔值；开启保留更宽亮度范围供色调映射，关闭更易在强光处裁剪。不是曝光增益。\n与材质、色调映射及 framebuffer 格式联动，可能改变显存和渲染成本；应统一验证天空与地表输出。");
-  addToggle(scene, "logarithmicDepthBuffer", "对数深度缓冲", commitValue("logarithmicDepthBuffer", (value) => fx.update({ logarithmicDepthBuffer: value })),
+  addToggle(scene, "logarithmicDepthBuffer", "对数深度缓冲", commitValue("logarithmicDepthBuffer", (value) => betterSkyInstance.update({ logarithmicDepthBuffer: value })),
     "API：logarithmicDepthBuffer。场景对数深度缓冲开关。\n单位：布尔值；开启改善远近同框的深度精度，关闭回到普通深度分布，远景可能更易 z-fighting。\n云遮挡和 HBAO 都依赖深度，不是距离淡出；切换可能改变深度 shader/资源，需检查地形边界和近处几何。");
   addRange(scene, "gamma", "场景 Gamma", 0.1, 5, 0.1,
-    commitValue("gamma", (value) => fx.update({ gamma: value })),
+    commitValue("gamma", (value) => betterSkyInstance.update({ gamma: value })),
     "API：gamma。Cesium 场景的显示 Gamma 校正参数。\n单位：正无量纲；一般调大使校正后的中间调更亮，调小更暗，具体结果还受 HDR 与色调曲线影响。\n不是 HBAO Gamma、降噪裁剪或线性日光 RGB；不增加散射或采样预算，过度调节会掩盖真实明暗。");
   const timeInput = addDateTime(scene, "time", "UTC 时间", (value) => {
     state.time = value;
     viewer.clock.shouldAnimate = false;
-    fx.update({ time: `${value}Z` });
+    betterSkyInstance.update({ time: `${value}Z` });
     updateTimelineRange(viewer, value);
   },
   "API：time（ISO8601，提交时追加 Z），同步 viewer.clock 和时间轴。\n单位：UTC 日期/分钟；虽然输入类型叫 datetime-local，本示例明确把显示值当 UTC，不做本地时区转换。提前/推后时间改变太阳方位与高度，不是光束亮度滑块。\n编辑时暂停时钟动画，时间轴继续反向同步输入；系统太阳关闭时光源可能不跟随。太阳和云影变化后需等待时域画面稳定。");
@@ -751,7 +752,7 @@ function createEffectControlPanel(viewer, fx) {
     refreshCloudTops();
     refreshDependencies();
     viewer.clock.shouldAnimate = false;
-    fx.update(buildPipelineOptions(state));
+    betterSkyInstance.update(buildPipelineOptions(state));
     updateTimelineRange(viewer, state.time);
     syncTimeInput(viewer.clock);
   });
@@ -837,21 +838,21 @@ window.onload = async () => {
   });
 
   // ====== 一行开启天空效果 ======
-  const fx = new BetterSky(viewer);
+  const betterSkyInstance = new BetterSky(viewer);
 
   updateTimelineRange(viewer, CONTROL_DEFAULTS.time);
-  createEffectControlPanel(viewer, fx);
+  createEffectControlPanel(viewer, betterSkyInstance);
 
-  // 运行时也可切换：fx.hbaoEnabled = false; fx.smaaEnabled = false; fx.hbaoIntensity = 150;
+  // 运行时也可切换：betterSkyInstance.update({ hbao: { enabled: false, intensity: 150 }, smaa: false });
 
-  // 暴露到全局，便于在控制台调试（如 fx.coverage = 0.4）
+  // 暴露到全局，便于在控制台调试（如 betterSkyInstance.update({ coverage: 0.4 })）
   window.viewer = viewer;
-  window.fx = fx;
+  window.betterSkyInstance = betterSkyInstance;
 
   // 校验：天空管线 Composite 已加入官方后处理集合
   const pps = viewer.scene.postProcessStages;
-  const ok = pps.contains(fx.stage);
-  console.log("[demo-official] 天空效果已启用：", ok, fx.stage && fx.stage.name);
+  const ok = pps.contains(betterSkyInstance.stage);
+  console.log("[demo-official] 天空效果已启用：", ok, betterSkyInstance.stage && betterSkyInstance.stage.name);
   if (!ok) {
     console.error("[demo-official] 未能加入后处理集合，请检查控制台报错。");
   }

@@ -37,7 +37,6 @@ const HAZE_QUALITY_SAMPLES = Object.freeze({
 function toCartesian2(value) {
   return new Cartesian2(value[0], value[1]);
 }
-
 function toCartesian4(value) {
   return new Cartesian4(value[0], value[1], value[2], value[3]);
 }
@@ -73,8 +72,8 @@ export class BetterSky {
     return preloadAssets();
   }
 
-  /** 内置默认预设的独立副本，可用于读取默认值或生成自定义预设。 */
-  static get defaultOptions() {
+  /** 返回内置默认预设的独立副本。 */
+  static getDefaultOptions() {
     return cloneOptions(DEFAULT_OPTIONS);
   }
 
@@ -99,8 +98,8 @@ export class BetterSky {
     this._viewer = defined(viewerOrScene.scene) ? viewerOrScene : undefined;
     this._scene = scene;
     this._options = mergeOptions(DEFAULT_OPTIONS, options);
-    this._hbaoOptions = mergeOptions({ ...DEFAULT_OPTIONS.hbao, denoise: true }, isPlainObject(options.hbao) ? options.hbao : {});
-    if (this._options.hbao) this._options.hbao = cloneOptions(this._hbaoOptions);
+    this._hbaoOptions = cloneOptions(this._options.hbao);
+    this._options.time = Object.hasOwn(options, "time") ? options.time ?? null : this._options.time;
     this._disposed = false;
     const clock = this._viewer?.clock;
     const initialTime = defined(clock) && defined(this._options.time)
@@ -128,11 +127,10 @@ export class BetterSky {
       if (defined(this._options.gamma)) scene.gamma = this._options.gamma;
       scene.globe.depthTestAgainstTerrain = true;
     }
-    this._syncSceneOptions();
     if (defined(initialTime)) clock.currentTime = initialTime;
 
     // 3) HBAO 环境光遮蔽（可选，先于天空效果加入，在地表几何上叠加柔和接触阴影）
-    const hbaoEnabled = !!this._options.hbao;
+    const hbaoEnabled = this._options.hbao.enabled;
     this._hbao = new HBAOEffectPass(scene, { show: hbaoEnabled, ...this._hbaoOptions });
     scene.postProcessStages.add(this._hbao.stage);
 
@@ -201,7 +199,7 @@ export class BetterSky {
     if (defined(opt.toneMappingExposure)) geo.toneMappingExposure = opt.toneMappingExposure;
     if (defined(opt.irradianceScale)) geo._irradianceScale = opt.irradianceScale;
     if (defined(opt.aerialPerspectiveStrength)) geo.aerialPerspectiveStrength = opt.aerialPerspectiveStrength;
-    if (defined(opt.darkParamY)) geo._customDarkParam.y = opt.darkParamY;
+    if (defined(opt.nightGlowIntensity)) geo._customDarkParam.y = opt.nightGlowIntensity;
     // toneMappingMode 的 setter 会触发管线重建，放在最后
     if (defined(opt.cloud)) {
       const c = opt.cloud;
@@ -270,6 +268,8 @@ export class BetterSky {
     }
     if (cloudHistoryChanged) geo.cloudMaterialPass.invalidateHistory();
     if (defined(opt.volumetricLight)) geo.setVolumetricLightOptions(this._options.volumetricLight);
+    if ("rain" in opt) geo.showRain = opt.rain;
+    if ("snow" in opt) geo.showSnow = opt.snow;
     if (defined(opt.toneMappingMode)) geo.toneMappingMode = opt.toneMappingMode;
     if (defined(opt.hbao)) {
       if (isPlainObject(opt.hbao)) {
@@ -289,12 +289,8 @@ export class BetterSky {
   _applyEnabled() {
     const enabled = this._options.enabled;
     if (this._geo) this._geo.enabled = enabled;
-    if (this._hbao) this._hbao.enabled = enabled && !!this._options.hbao;
+    if (this._hbao) this._hbao.enabled = enabled && this._options.hbao.enabled;
     if (this._smaa) this._smaa.enabled = enabled && this._options.smaa;
-  }
-
-  _syncSceneOptions() {
-    for (const key of ["highDynamicRange", "logarithmicDepthBuffer", "gamma"]) this._options[key] = this._scene[key];
   }
 
   _assertMutable() {
@@ -304,128 +300,75 @@ export class BetterSky {
     if (sceneError) throw new Error(`[BetterSky] ${sceneError} 请在支持的场景中更新。`);
   }
 
-  /** 当前已接受配置的独立快照；直接修改底层 pass 的高级操作不包含在内。 */
+  /** 返回最近接受的完整配置副本。 */
   getOptions() {
     return cloneOptions(this._options);
   }
 
-  /** 天空 Pass 异步效果资源状态；不包含 SMAA 查找纹理。 */
-  get assetStatus() {
-    return this._disposed ? "disposed" : this._geo.assetStatus;
+  _assetState() {
+    if (this._disposed) return Object.freeze({ status: "disposed", errors: Object.freeze([]) });
+    const states = [this._geo.getAssetState({ includeSnow: this._options.snow })];
+    if (this._smaa) states.push(this._smaa.getAssetState());
+    const status = states.some(state => state.status === "loading") ? "loading"
+      : states.some(state => state.status === "error") ? "error"
+        : states.some(state => state.status === "idle") ? "idle" : "ready";
+    return Object.freeze({ status, errors: Object.freeze(states.flatMap(state => state.errors)) });
   }
 
-  /** 当前资源错误的只读快照。 */
-  get assetErrors() {
-    return this._disposed ? Object.freeze([]) : this._geo.assetErrors;
+  /** 无副作用地查询当前配置所需资源状态。 */
+  getAssetState() {
+    return this._assetState();
   }
 
-  /** 等待当前一轮天空资源加载结束；失败通过 assetStatus/assetErrors 查询。 */
-  get assetsReady() {
-    return this._disposed ? Promise.resolve() : this._geo.assetsReady;
+  _captureAssets({ start = false, retry = false } = {}) {
+    if (this._disposed) return Promise.reject(Object.assign(new Error("[BetterSky] 实例已销毁。"), { name: "AbortError" }));
+    this._assertMutable();
+    const jobs = [this._geo.captureAssets({
+      start,
+      retry,
+      includeSnow: this._options.snow,
+    })];
+    if (this._options.smaa) {
+      if (!this._smaa) {
+        this._smaa = new SMAAStage(this._scene, { show: this._options.enabled });
+        this._scene.postProcessStages.add(this._smaa.stage);
+      }
+      jobs.push(this._smaa.captureAssets({ start, retry }));
+    }
+    return Promise.all(jobs).then(states => {
+      if (this._disposed) throw Object.assign(new Error("[BetterSky] 实例已销毁。"), { name: "AbortError" });
+      const status = states.some(state => state.status === "error") ? "error"
+        : states.every(state => state.status === "ready") ? "ready" : "idle";
+      if (status === "error") throw new AggregateError(
+        states.flatMap(state => state.errors),
+        "[BetterSky] 当前配置所需资源加载失败。",
+      );
+    });
   }
 
-  /** 重试失败的天空资源；实例已销毁时抛出错误。 */
+  /** 启动并等待当前配置所需资源。 */
+  loadAssets() {
+    return this._captureAssets({ start: true });
+  }
+
+  /** 重试当前配置所需资源的失败项。 */
   retryAssets() {
-    this._assertMutable();
-    return this._geo.retryAssets();
+    // Newly enabled feature scopes may still be idle, so leave them in this run.
+    return this._captureAssets({ start: true, retry: true });
   }
 
-  /** 订阅天空资源状态变化，返回取消订阅函数。 */
+  /** 订阅资源状态变化，并返回取消订阅函数。 */
   subscribeAssets(listener) {
-    this._assertMutable();
     if (typeof listener !== "function") throw new Error("[BetterSky] 资源监听器必须是函数。");
-    return this._geo.subscribeAssets(listener);
-  }
-
-  /** 底层 GeospatialPipelinePass 实例（高级用法） */
-  get pass() {
-    return this._geo;
+    if (this._disposed) return () => {};
+    const subscriptions = [this._geo.subscribeAssets(() => listener(this._assetState()))];
+    if (this._smaa) subscriptions.push(this._smaa.subscribeAssets(() => listener(this._assetState())));
+    return () => { for (const unsubscribe of subscriptions) unsubscribe(); };
   }
 
   /** 官方后处理 Composite（已加入 scene.postProcessStages） */
   get stage() {
     return this._geo ? this._geo.stage : undefined;
-  }
-
-  /** 是否启用效果 */
-  get enabled() {
-    return this._geo ? this._geo.enabled : false;
-  }
-  set enabled(v) {
-    this.update({ enabled: v });
-  }
-
-  /** 云量覆盖度 [0,1] */
-  get coverage() {
-    return this._geo ? this._geo.coverage : 0;
-  }
-  set coverage(v) {
-    this.update({ coverage: v });
-  }
-
-  /** 曝光 */
-  get toneMappingExposure() {
-    return this._geo ? this._geo.toneMappingExposure : 0;
-  }
-  set toneMappingExposure(v) {
-    this.update({ toneMappingExposure: v });
-  }
-
-  /** 色调映射模式（设置会触发管线重建） */
-  set toneMappingMode(v) {
-    this.update({ toneMappingMode: v });
-  }
-
-  /** 风/天气速度，接受 [x,y] 或 Cartesian2 */
-  set localWeatherVelocity(v) {
-    this.update({ localWeatherVelocity: v });
-  }
-
-  /** 三层云底高度及预留分量，接受数组或 Cartesian4。 */
-  setCloudAltitudes(v) {
-    this.update({ cloud: { altitudes: v } });
-  }
-
-  /** 云层厚度，接受数组或 Cartesian4 */
-  setCloudHeights(v) {
-    this.update({ cloud: { heights: v } });
-  }
-
-  /** 云密度/散射/消光，接受数组或 Cartesian4 */
-  setCloudDensityScales(v) {
-    this.update({ cloud: { densityScales: v } });
-  }
-
-  setCloudShapeDetailAmounts(v) {
-    this.update({ cloud: { shapeDetailAmounts: v } });
-  }
-
-  /** HBAO 是否启用（运行时开关） */
-  get hbaoEnabled() {
-    return this._hbao ? this._hbao.enabled : false;
-  }
-  set hbaoEnabled(v) {
-    this._assertMutable();
-    if (typeof v !== "boolean") throw new Error("[BetterSky] hbaoEnabled 必须是布尔值。");
-    this.update({ hbao: v });
-  }
-
-  /** HBAO 强度（越大遮蔽越深） */
-  set hbaoIntensity(v) {
-    this._updateOptions({ hbao: { intensity: v } }, true);
-  }
-
-  /** HBAO 最大视空间采样半径（米）。 */
-  set hbaoMaxRadius(v) {
-    this._updateOptions({ hbao: { maxRadius: v } }, true);
-  }
-
-  /** SMAA 抗锯齿是否启用（运行时开关） */
-  get smaaEnabled() {
-    return this._smaa ? this._smaa.enabled : false;
-  }
-  set smaaEnabled(v) {
-    this.update({ smaa: v });
   }
 
   /** 批量更新参数（同构造时 options，部分字段即可） */
@@ -434,30 +377,30 @@ export class BetterSky {
   }
 
   /** All public commands are normalized and validated before saving or applying any field. */
-  _updateOptions(input, preserveHbaoSwitch = false) {
+  _updateOptions(input) {
     this._assertMutable();
     const { options, time } = prepareOptions(input);
     const hbaoOptions = isPlainObject(options.hbao) ? mergeOptions(this._hbaoOptions, options.hbao) : this._hbaoOptions;
     if (hbaoOptions.denoise !== this._hbaoOptions.denoise) {
       throw new Error("[BetterSky] hbao.denoise 仅支持构造时配置，请 dispose() 后重建实例。");
     }
+    const previousApplySceneSettings = this._options.applySceneSettings;
     const nextOptions = mergeOptions(this._options, options);
-    if ("hbao" in options) {
-      const hbaoEnabled = preserveHbaoSwitch ? !!this._options.hbao : !!options.hbao;
-      nextOptions.hbao = hbaoEnabled ? cloneOptions(hbaoOptions) : false;
-    }
-    // This is a per-command gate, preserving the original update() call semantics.
-    nextOptions.applySceneSettings = options.applySceneSettings !== false;
+    if ("hbao" in options) nextOptions.hbao = cloneOptions(hbaoOptions);
+    if ("time" in options) nextOptions.time = time ? options.time : null;
     this._options = nextOptions;
     this._hbaoOptions = cloneOptions(hbaoOptions);
     if (nextOptions.applySceneSettings) {
-      if (defined(options.highDynamicRange)) this._scene.highDynamicRange = !!options.highDynamicRange;
-      if (defined(options.logarithmicDepthBuffer)) {
-        this._scene.logarithmicDepthBuffer = !!options.logarithmicDepthBuffer;
-      }
-      if (defined(options.gamma)) this._scene.gamma = options.gamma;
+      const sceneFields = previousApplySceneSettings ? options : {
+        highDynamicRange: nextOptions.highDynamicRange,
+        logarithmicDepthBuffer: nextOptions.logarithmicDepthBuffer,
+        gamma: nextOptions.gamma,
+      };
+      if (defined(sceneFields.highDynamicRange)) this._scene.highDynamicRange = !!sceneFields.highDynamicRange;
+      if (defined(sceneFields.logarithmicDepthBuffer)) this._scene.logarithmicDepthBuffer = !!sceneFields.logarithmicDepthBuffer;
+      if (defined(sceneFields.gamma)) this._scene.gamma = sceneFields.gamma;
+      if (!previousApplySceneSettings) this._scene.globe.depthTestAgainstTerrain = true;
     }
-    this._syncSceneOptions();
     if (defined(time) && defined(this._viewer?.clock)) this._viewer.clock.currentTime = time;
     this._applyPreset(options);
   }
@@ -495,5 +438,3 @@ export class BetterSky {
     if (errors.length) throw new AggregateError(errors, "[BetterSky] 部分资源释放失败。");
   }
 }
-
-export default BetterSky;

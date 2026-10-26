@@ -2,13 +2,13 @@
 
 本文说明如何准备、验证和发布一个 npm 版本。日常使用见[使用指南](BetterSky.README.zh-CN.md)，代码分工见[架构说明](SDK_ARCHITECTURE.md)。
 
-本文以 `0.2.0` 为例。是否已经发布，以 npm registry 的实际结果为准；本地改好文档或生成压缩包都不等于已发布。已发布版本不能覆盖修改。
+本文以 `1.0.0` 为例。是否已经发布，以 npm registry 的实际结果为准；本地改好文档或生成压缩包都不等于已发布。已发布版本不能覆盖修改。
 
 ## 发布的是什么
 
 源码仓库是 [iamthek/bettersky-cesium](https://github.com/iamthek/bettersky-cesium)，默认分支为 `main`。Demo 位于 [GitHub Pages](https://iamthek.github.io/bettersky-cesium/)。源码与 Demo 发布相互独立，npm 只发布 SDK 的运行文件。
 
-`0.2.0` 采用 Apache License 2.0。构建保留 JavaScript 和 GLSL 压缩，移除代码混淆，不生成 sourcemap 或 declaration map。源码、已有素材和 Git 历史留在仓库，不需要为了精简 npm 包而删除。
+`1.0.0` 采用 Apache License 2.0。构建保留 JavaScript 和 GLSL 压缩，移除代码混淆，不生成 sourcemap 或 declaration map。源码、已有素材和 Git 历史留在仓库，不需要为了精简 npm 包而删除。
 
 仓库根 `package.json` 保持 `private: true`，用于防止误发整个工程。`build:sdk` 会生成独立的 `.sdk-package/` 及精简元数据；发布脚本上传经过验证的准确 `.tgz`，不直接发布仓库根目录。
 
@@ -41,15 +41,15 @@ pnpm install --frozen-lockfile
 pnpm test
 pnpm run build:sdk
 pnpm run pack:sdk --output-dir "<交付目录>"
-pnpm run verify:sdk --tarball "<交付目录>/bettersky-cesium-0.2.0.tgz" --report-dir "<交付目录>" --serve
+pnpm run verify:sdk --tarball "<交付目录>/bettersky-cesium-1.0.0.tgz" --report-dir "<交付目录>" --serve
 ```
 
 使用 `@browser` 检查验收页面，保存浏览器核查记录；需要登录时由维护者手动处理。完成后，在验收终端输入 `finish`，等待测试服务停止和临时目录清理，再汇总证据：
 
 ```bash
 pnpm run verify:sdk --finalize --report "<验收报告路径>" --evidence "<浏览器核查记录路径>"
-pnpm run publish:sdk --tarball "<交付目录>/bettersky-cesium-0.2.0.tgz" --report "<验收报告路径>" --dry-run
-pnpm run publish:sdk --tarball "<交付目录>/bettersky-cesium-0.2.0.tgz" --report "<验收报告路径>"
+pnpm run publish:sdk --tarball "<交付目录>/bettersky-cesium-1.0.0.tgz" --report "<验收报告路径>" --dry-run
+pnpm run publish:sdk --tarball "<交付目录>/bettersky-cesium-1.0.0.tgz" --report "<验收报告路径>"
 ```
 
 认证和一次性验证由有权限的维护者完成，不把凭据写入脚本、文档、报告或包。预审成功不代表真实上传权限或 2FA 已经满足。
@@ -57,7 +57,7 @@ pnpm run publish:sdk --tarball "<交付目录>/bettersky-cesium-0.2.0.tgz" --rep
 npm 可能已经接收上传，但版本暂时还查不到。脚本会保存处理中回执；此时用同一包和报告核查，避免重复上传：
 
 ```bash
-pnpm run publish:sdk --tarball "<交付目录>/bettersky-cesium-0.2.0.tgz" --report "<验收报告路径>" --verify-only
+pnpm run publish:sdk --tarball "<交付目录>/bettersky-cesium-1.0.0.tgz" --report "<验收报告路径>" --verify-only
 ```
 
 发布报告绑定准确包哈希。重新构建或重新打包后，应重新验证；不能把旧报告用于新包。
@@ -93,7 +93,7 @@ package/
 
 ## 哪些结果需要确认
 
-- **接口与类型**：具名和默认导出、参数注释、默认值、单位、配置快照、构造期字段限制及销毁后行为与实现一致。
+- **接口与类型**：仅具名导出、参数注释、默认值、单位、完整配置快照、构造期字段限制及销毁后行为与实现一致。
 - **资源与包内容**：真实 `.tgz` 符合白名单，九项资源路径和字节正确，无映射文件、内联映射、凭据或开发目录，许可通知完整。
 - **接入与依赖**：npm/pnpm 分别安装真实包，类型检查、生产构建和资源复制通过；按报告记录 Cesium、engine/widgets 和 three 的实际版本。
 - **浏览器画面**：初始化、参数更新、开关、窗口缩放、销毁重建正常；根路径、子路径及自定义资源根均能加载真实文件，控制台无新增错误。
@@ -101,7 +101,7 @@ package/
 
 支持下限保持 Cesium `>=1.142.0`。已有锁定的 1.142.0 + engine 26.0.0 / widgets 16.0.0 可用；新项目示例采用干净安装已验证的 1.146.0 + engine 26.4.0 / widgets 16.3.0。1.142.0 + engine 26.4.0 / widgets 16.3.0 存在上游缺失导出，不用 overrides、改包或测试替身把失败标成通过。每次升级需重新记录结果，不宣称验证了所有未来版本。
 
-`assetsReady` 只等待六项必需天空任务，成功、失败、销毁均 resolve；通过 `assetErrors` 判断失败，调用 `retryAssets()` 显式重试。雪纹理为可选任务，SMAA 单独管理，不能据此声称所有资源均已加载。
+`loadAssets()` 等待调用时配置所需的天空资源，以及已开启的 SMAA、雪纹理；任一目标失败以 `AggregateError` 拒绝，等待期间销毁以 `AbortError` 拒绝。`getAssetState()` 无副作用，`subscribeAssets()` 发送同一只读状态快照。`retryAssets()` 启动当前范围中尚未请求的任务、重试失败项，并复用成功项。`stage.ready` 仍单独表示 Cesium 阶段就绪。
 
 ## 验收文件如何收尾
 

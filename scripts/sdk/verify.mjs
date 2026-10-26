@@ -32,7 +32,7 @@ const writeJson = (file, value) => {
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml", ".wasm": "application/wasm", ".bin": "application/octet-stream", ".exr": "application/octet-stream" };
 function execute(command, args, options = {}) {
   return new Promise((resolveRun, reject) => {
-    const child = spawn(command, args, { windowsHide: true, ...options, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { ...options, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     child.stdout.on("data", bytes => { output += bytes; });
     child.stderr.on("data", bytes => { output += bytes; });
@@ -134,9 +134,9 @@ function fixtureMain(id, base, checkSnow) {
   return [
     'import { Viewer, EllipsoidTerrainProvider, JulianDate, Cartesian3, Math as CesiumMath, SceneMode, Color } from "cesium";',
     'const Cesium = { Viewer, EllipsoidTerrainProvider, JulianDate, Cartesian3, Math: CesiumMath, SceneMode, Color };',
-    'import BetterSky, { BetterSky as Named } from "bettersky-cesium";',
+    'import { BetterSky } from "bettersky-cesium";',
     'import "cesium/Build/Cesium/Widgets/widgets.css";',
-    "(" + browserAcceptance.toString() + ")()(Cesium, Named, BetterSky, " + JSON.stringify(id) + ", " + JSON.stringify(base) + ", " + JSON.stringify(checkSnow) + ");",
+    "(" + browserAcceptance.toString() + ")()(Cesium, BetterSky, " + JSON.stringify(id) + ", " + JSON.stringify(base) + ", " + JSON.stringify(checkSnow) + ");",
   ].join("\n");
 }
 function fixtureResourceRoot(item) {
@@ -383,21 +383,21 @@ async function verify(options) {
           const components = await cesiumComponents(resolved.cesium);
           if (componentPins) assert.deepEqual(components, componentPins, "Compatible Cesium component pins did not resolve through the real Cesium entry");
           await writeFile(join(project, "acceptance.ts"), [
-            'import BetterSky, { BetterSky as Named, type BetterSkyOptions } from "bettersky-cesium";',
+            'import { BetterSky, type BetterSkyOptions, type BetterSkyResolvedOptions } from "bettersky-cesium";',
             'import type { Viewer } from "cesium";',
             'declare const viewer: Viewer;',
-            'const options: BetterSkyOptions = { time: undefined, coverage: 0.5, cloud: { altitudes: [4000,6000,10000,0] }, volumetricLight: { quality: "low" } };',
-            'const effects: Named = new BetterSky(viewer, options);',
-            'effects.update({ cloud: { densityScales: [0.1,0.1,0.01,0] } });',
-            'const snapshot: BetterSkyOptions = effects.getOptions();',
-            'const unsubscribe: () => void = effects.subscribeAssets(() => { const status = effects.assetStatus; const errors = effects.assetErrors; void status; void errors; });',
-            'const ready: Promise<void> = effects.assetsReady; const retried: Promise<void> = effects.retryAssets();',
-            'void snapshot; void ready; void retried; unsubscribe(); effects.enabled = false; effects.dispose();',
+            'const options: BetterSkyOptions = { time: undefined, coverage: 0.5, cloud: { altitudes: [4000,6000,10000,0] }, volumetricLight: { quality: "low" }, snow: false };',
+            'const betterSkyInstance: BetterSky = new BetterSky(viewer, options);',
+            'betterSkyInstance.update({ cloud: { densityScales: [0.1,0.1,0.01,0] } });',
+            'const snapshot: BetterSkyResolvedOptions = betterSkyInstance.getOptions();',
+            'const unsubscribe: () => void = betterSkyInstance.subscribeAssets(state => { const status = state.status; const errors = state.errors; void status; void errors; });',
+            'const defaults: BetterSkyResolvedOptions = BetterSky.getDefaultOptions(); const ready: Promise<void> = betterSkyInstance.loadAssets(); const retried: Promise<void> = betterSkyInstance.retryAssets();',
+            'void snapshot; void ready; void retried; unsubscribe(); betterSkyInstance.update({ enabled: false, rain: true, hbao: { enabled: false, intensity: 80 }, snow: true }); betterSkyInstance.dispose();',
           ].join("\n"));
           const typescriptRoot = await realpath(join(project, "node_modules/typescript"));
           const typescriptManifest = await readJson(join(typescriptRoot, "package.json"));
           const tsc = join(typescriptRoot, typescriptManifest.bin.tsc);
-          await execute(process.execPath, [tsc, "--noEmit", "--strict", "--skipLibCheck", "false", "--module", "ESNext", "--moduleResolution", "Bundler", "--target", "ES2022", "--lib", "ES2022,DOM", "acceptance.ts"], { cwd: project, env: environment });
+          await execute(process.execPath, [tsc, "--noEmit", "--strict", "--exactOptionalPropertyTypes", "--skipLibCheck", "false", "--module", "ESNext", "--moduleResolution", "Bundler", "--target", "ES2022", "--lib", "ES2022,DOM", "acceptance.ts"], { cwd: project, env: environment });
           await mkdir(join(project, "licenses"), { recursive: true });
           // License texts are not served as runtime assets; the integration fixture keeps
           // them outside the public asset root, matching the documented recommendation.

@@ -70,9 +70,15 @@ export default class SMAAStage {
 
   get assetStatus() { return this._smaa?.assetStatus ?? "disposed"; }
   get assetErrors() { return this._smaa?.assetErrors ?? Object.freeze([]); }
-  get assetsReady() { return this._smaa?.assetsReady ?? Promise.resolve(); }
-  retryAssets() { return this._smaa?.retryAssets() ?? Promise.resolve(); }
+  get assetsReady() { return this._smaa?.assetsReady ?? this.captureAssets({ start: true }); }
+  retryAssets() { return this._smaa?.retryAssets() ?? Promise.reject(Object.assign(new Error("[BetterSky] SMAA is disposed."), { name: "AbortError" })); }
   subscribeAssets(listener) { return this._smaa?.subscribeAssets(listener) ?? (() => {}); }
+  getAssetState() {
+    return this._smaa?.getAssetState() ?? Object.freeze({ status: "disposed", errors: Object.freeze([]) });
+  }
+  captureAssets(options) {
+    return this._smaa?.captureAssets(options) ?? Promise.reject(Object.assign(new Error("[BetterSky] SMAA is disposed."), { name: "AbortError" }));
+  }
 
   get name() {
     return this._stage.name;

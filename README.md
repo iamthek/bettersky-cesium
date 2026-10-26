@@ -25,14 +25,16 @@ Use a browser application with Cesium `>=1.142.0`, WebGL 2, the required floatin
 Choose npm or pnpm. This example uses the verified Cesium `1.146.0` combination:
 
 ```bash
-npm install bettersky-cesium@0.2.0 cesium@1.146.0
+npm install bettersky-cesium@1.0.0 cesium@1.146.0
 ```
 
 ```bash
-pnpm add bettersky-cesium@0.2.0 cesium@1.146.0
+pnpm add bettersky-cesium@1.0.0 cesium@1.146.0
 ```
 
-Already using a compatible Cesium version? Install only `bettersky-cesium@0.2.0` and keep your verified lockfile. Cesium is shared with the application; three (`>=0.160.1`) is installed automatically. The [compatibility notes](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md#compatibility-and-deployment) explain a known Cesium dependency combination to avoid.
+Already using a compatible Cesium version? Install only `bettersky-cesium@1.0.0` and keep your verified lockfile. Cesium is shared with the application; three (`>=0.160.1`) is installed automatically. The [compatibility notes](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md#compatibility-and-deployment) explain a known Cesium dependency combination to avoid.
+
+Upgrading from 0.2.0? Use the named `BetterSky` export, replace the configuration shortcuts with `betterSkyInstance.update()`, and migrate asset waits to `betterSkyInstance.loadAssets()`. The [1.0 migration table](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md#migration-from-020) lists every breaking change.
 
 ### 2. Prepare assets
 
@@ -56,20 +58,20 @@ import { BetterSky } from 'bettersky-cesium'
 window.CESIUM_BASE_URL = '/cesium/'
 
 // Create your application's Cesium Viewer here.
-const effects = new BetterSky(viewer, { time: undefined })
+const betterSkyInstance = new BetterSky(viewer, { time: null })
 
 // Change only the options you need.
-effects.update({ coverage: 0.5 })
+betterSkyInstance.update({ coverage: 0.5 })
 
 // When leaving the scene, dispose of BetterSky before destroying the Viewer.
-// effects.dispose()
+// betterSkyInstance.dispose()
 ```
 
-`time: undefined` keeps your application's clock. Keep the Viewer rendering continuously for animated clouds. Continue with the [user guide](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md) for options, asset loading, retries and cleanup, or browse the [changelog](https://github.com/iamthek/bettersky-cesium/blob/main/CHANGELOG.md).
+`time: null` keeps your application's clock. Keep the Viewer rendering continuously for animated clouds. Continue with the [user guide](https://github.com/iamthek/bettersky-cesium/blob/main/BetterSky.README.md) for options, asset loading, retries and cleanup, or browse the [changelog](https://github.com/iamthek/bettersky-cesium/blob/main/CHANGELOG.md).
 
 ## License
 
-Version `0.2.0` uses the [Apache License 2.0](https://github.com/iamthek/bettersky-cesium/blob/main/LICENSE), allowing personal and commercial use, modification and redistribution under its terms. Preserve the license, [NOTICE](https://github.com/iamthek/bettersky-cesium/blob/main/NOTICE) and applicable [third-party notices](https://github.com/iamthek/bettersky-cesium/blob/main/THIRD_PARTY_NOTICES.md) when distributing the SDK. Third-party materials retain their own licenses.
+Version `1.0.0` uses the [Apache License 2.0](https://github.com/iamthek/bettersky-cesium/blob/main/LICENSE), allowing personal and commercial use, modification and redistribution under its terms. Preserve the license, [NOTICE](https://github.com/iamthek/bettersky-cesium/blob/main/NOTICE) and applicable [third-party notices](https://github.com/iamthek/bettersky-cesium/blob/main/THIRD_PARTY_NOTICES.md) when distributing the SDK. Third-party materials retain their own licenses.
 
 Questions: [iamthek@qq.com](mailto:iamthek@qq.com).
 

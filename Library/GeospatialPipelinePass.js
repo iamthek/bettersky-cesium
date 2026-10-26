@@ -610,8 +610,7 @@ export default class GeospatialPipelinePass {
             })
         }
         if (!this._snowCoverMaskMap && this._showSnow) {
-            this._snowCoverMaskMap = this._scene.context.defaultTexture;
-            this._registerImageAsset("snow", "BetterSkyAssets/snowCoverMask.png", "_snowCoverMaskMap", false);
+            this._registerSnowAsset();
             this._assets.start(["snow"]);
         }
         const gl = getWebGLContext(this._scene.context);
@@ -1099,6 +1098,32 @@ export default class GeospatialPipelinePass {
         } });
     }
 
+    _registerSnowAsset() {
+        if (this._destroyed || this._snowCoverMaskMap) return;
+        this._snowCoverMaskMap = this._scene.context.defaultTexture;
+        this._registerImageAsset("snow", "BetterSkyAssets/snowCoverMask.png", "_snowCoverMaskMap", false);
+    }
+
+    _assetIds(includeSnow = false) {
+        const ids = ["weather", "turbulence", "shape", "shape-detail", "stbn", "atmosphere"];
+        if (includeSnow) ids.push("snow");
+        return ids;
+    }
+
+    getAssetState({ includeSnow = false } = {}) {
+        return this._assets.getState(this._assetIds(includeSnow));
+    }
+
+    captureAssets({ start = false, retry = false, includeSnow = false } = {}) {
+        if (start) {
+            this.precomputed();
+            if (includeSnow) this._registerSnowAsset();
+        }
+        if (retry) this.precomputed();
+        if (retry && includeSnow) this._registerSnowAsset();
+        return this._assets.capture(this._assetIds(includeSnow), { start, retry });
+    }
+
     precomputed() {
         if (this._destroyed || this._isPrecomputed) return;
         this._isPrecomputed = true;
@@ -1146,7 +1171,7 @@ export default class GeospatialPipelinePass {
                 }
             }, undefined, reject);
         }) });
-        this._assets.start();
+        this._assets.start(this._assetIds());
     }
 
     get assetStatus() { return this._assets.status; }
@@ -1154,7 +1179,7 @@ export default class GeospatialPipelinePass {
     get assetsReady() {
         // An explicit readiness request starts required assets even before the first enabled frame.
         this.precomputed();
-        return this._assets.ready;
+        return this._assets.success;
     }
     retryAssets() { return this._assets.retry(); }
     subscribeAssets(listener) { return this._assets.subscribe(listener); }
