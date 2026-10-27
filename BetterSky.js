@@ -101,6 +101,7 @@ export class BetterSky {
     this._hbaoOptions = cloneOptions(this._options.hbao);
     this._options.time = Object.hasOwn(options, "time") ? options.time ?? null : this._options.time;
     this._disposed = false;
+    this._assetSubscriptions = new Set();
     const clock = this._viewer?.clock;
     const initialTime = defined(clock) && defined(this._options.time)
       ? prepared.time ?? JulianDate.fromIso8601(this._options.time) : undefined;
@@ -281,6 +282,7 @@ export class BetterSky {
     if (opt.smaa && !this._smaa) {
       this._smaa = new SMAAStage(this._scene, { show: true });
       this._scene.postProcessStages.add(this._smaa.stage);
+      this._subscribeSmaaAssets();
     }
     if ("hbao" in opt || "smaa" in opt || "enabled" in opt) this._applyEnabled();
   }
@@ -308,7 +310,7 @@ export class BetterSky {
   _assetState() {
     if (this._disposed) return Object.freeze({ status: "disposed", errors: Object.freeze([]) });
     const states = [this._geo.getAssetState({ includeSnow: this._options.snow })];
-    if (this._smaa) states.push(this._smaa.getAssetState());
+    if (this._options.smaa && this._smaa) states.push(this._smaa.getAssetState());
     const status = states.some(state => state.status === "loading") ? "loading"
       : states.some(state => state.status === "error") ? "error"
         : states.some(state => state.status === "idle") ? "idle" : "ready";
@@ -332,6 +334,7 @@ export class BetterSky {
       if (!this._smaa) {
         this._smaa = new SMAAStage(this._scene, { show: this._options.enabled });
         this._scene.postProcessStages.add(this._smaa.stage);
+        this._subscribeSmaaAssets();
       }
       jobs.push(this._smaa.captureAssets({ start, retry }));
     }
@@ -361,9 +364,25 @@ export class BetterSky {
   subscribeAssets(listener) {
     if (typeof listener !== "function") throw new Error("[BetterSky] 资源监听器必须是函数。");
     if (this._disposed) return () => {};
-    const subscriptions = [this._geo.subscribeAssets(() => listener(this._assetState()))];
-    if (this._smaa) subscriptions.push(this._smaa.subscribeAssets(() => listener(this._assetState())));
-    return () => { for (const unsubscribe of subscriptions) unsubscribe(); };
+    const subscription = {
+      notify: () => listener(this._assetState()),
+      unsubscribeGeo: undefined,
+      unsubscribeSmaa: undefined,
+    };
+    subscription.unsubscribeGeo = this._geo.subscribeAssets(subscription.notify);
+    if (this._smaa) subscription.unsubscribeSmaa = this._smaa.subscribeAssets(subscription.notify);
+    this._assetSubscriptions.add(subscription);
+    return () => {
+      if (!this._assetSubscriptions.delete(subscription)) return;
+      subscription.unsubscribeGeo();
+      subscription.unsubscribeSmaa?.();
+    };
+  }
+
+  _subscribeSmaaAssets() {
+    for (const subscription of this._assetSubscriptions) {
+      subscription.unsubscribeSmaa ??= this._smaa.subscribeAssets(subscription.notify);
+    }
   }
 
   /** 官方后处理 Composite（已加入 scene.postProcessStages） */
@@ -431,6 +450,11 @@ export class BetterSky {
     cleanup(() => removeStage(this._geo));
     cleanup(() => removeStage(this._hbao));
     cleanup(() => removeStage(this._smaa));
+    for (const subscription of this._assetSubscriptions) {
+      cleanup(subscription.unsubscribeGeo);
+      if (subscription.unsubscribeSmaa) cleanup(subscription.unsubscribeSmaa);
+    }
+    this._assetSubscriptions.clear();
     this._geo = undefined;
     this._hbao = undefined;
     this._smaa = undefined;

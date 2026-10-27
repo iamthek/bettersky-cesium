@@ -440,6 +440,52 @@ test("asset state is a pure scope-aware snapshot and explicit loading follows su
   assert.throws(() => effects.update({}), /已销毁/);
 });
 
+test("disabled SMAA is excluded from resource state and explicit loading", async () => {
+  const harness = await createHarness();
+  const effects = new harness.BetterSky(harness.createViewer());
+  const smaa = harness.passes[2];
+  for (const status of ["idle", "loading", "error"]) {
+    smaa.assetState = { status, errors: status === "error" ? [{ id: "smaa-area" }] : [] };
+    effects.update({ smaa: false });
+    assert.equal(effects.getAssetState().status, "ready");
+    assert.equal(effects.getAssetState().errors.length, 0);
+    await effects.loadAssets();
+    await effects.retryAssets();
+    assert.equal(smaa.captureOptions, undefined);
+    effects.update({ smaa: true });
+    assert.equal(effects.getAssetState().status, status);
+  }
+  effects.dispose();
+});
+
+test("asset subscriptions follow dynamically enabled SMAA and unsubscribe completely", async () => {
+  const harness = await createHarness();
+  const effects = new harness.BetterSky(harness.createViewer(), { smaa: false });
+  const cancelled = effects.subscribeAssets(() => assert.fail("cancelled listener invoked"));
+  cancelled();
+  const states = [];
+  const unsubscribe = effects.subscribeAssets(state => states.push(state));
+  effects.update({ smaa: true });
+  const smaa = harness.passes[2];
+  for (const status of ["loading", "error", "ready"]) {
+    smaa.assetState = { status, errors: status === "error" ? [{ id: "smaa-area" }] : [] };
+    smaa.assetListener();
+    assert.equal(states.at(-1).status, status);
+  }
+  effects.update({ smaa: false });
+  effects.update({ smaa: true });
+  smaa.assetListener();
+  assert.equal(states.length, 4);
+  unsubscribe();
+  unsubscribe();
+  assert.equal(smaa.assetListener, undefined);
+  assert.equal(harness.passes[1].assetListener, undefined);
+  effects.subscribeAssets(() => {});
+  effects.dispose();
+  assert.equal(smaa.assetListener, undefined);
+  assert.equal(harness.passes[1].assetListener, undefined);
+});
+
 test("explicit loading aggregates required failures and retries only the selected failed assets", async () => {
   const harness = await createHarness();
   const effects = new harness.BetterSky(harness.createViewer(), { snow: true });

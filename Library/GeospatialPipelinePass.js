@@ -514,10 +514,12 @@ export default class GeospatialPipelinePass {
         this.cloudMaterialPass && this.cloudMaterialPass.init(true)
     }
     set showSnow(mode) {
+        if (mode === this._showSnow) return;
         this._showSnow = mode;
         this.init(true);
     }
     set showRain(mode) {
+        if (mode === this._showRain) return;
         this._showRain = mode;
         this.init(true);
         // 更新云

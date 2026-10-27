@@ -432,6 +432,24 @@ test("native PNG bitmaps finishing after disposal close without allocating GPU r
     assert.equal(harness.errors.length, 0);
 });
 
+test("unchanged rain and snow switches preserve stages and GPU allocations", async () => {
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    for (const enabled of [false, true, false]) {
+        pipeline.showRain = enabled;
+        pipeline.showSnow = enabled;
+        const stage = pipeline.stage;
+        const allocations = harness.allocations;
+        pipeline.showRain = enabled;
+        pipeline.showSnow = enabled;
+        assert.equal(pipeline.stage, stage);
+        assert.equal(harness.allocations, allocations);
+        assert.equal(pipeline._showRain, enabled);
+        assert.equal(pipeline._showSnow, enabled);
+    }
+    pipeline.destroy();
+});
+
 test("rebuilds, resizing, completed assets, and recreating in one scene retain no owned resources", async () => {
     const harness = await createHarness();
     for (let cycle = 0; cycle < 2; cycle++) {

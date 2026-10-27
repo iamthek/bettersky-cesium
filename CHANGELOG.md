@@ -9,6 +9,8 @@
 - Add `BetterSky.preloadAssets()` with shared downloads, eight-file preloading, an idle-progress timeout, failed-resource retries and independent download caching.
 - Share downloaded asset bytes across concurrent preloads, runtime loading and instance recreation; invalidate failed decoding results while retaining successful downloads.
 - Add bilingual 0.2.0 to 1.0.0 migration guidance and standardize examples on `betterSkyInstance`.
+- Exclude disabled SMAA from resource snapshots and keep existing asset subscriptions connected when SMAA is enabled later.
+- Skip render-pipeline rebuilds when rain or snow switches are unchanged.
 
 ## 0.2.0 - 2026-10-20
 
