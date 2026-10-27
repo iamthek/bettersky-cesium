@@ -10,7 +10,7 @@ This guide covers SDK integration, configuration, and usage notes.
 
 ### Version
 
-This guide describes BetterSky `1.0.0`. Start with the installation and asset setup below, then use the parameter tables when you need to customize the result. See the [changelog](CHANGELOG.md) for release history.
+This guide describes BetterSky `1.0.0`. Follow the installation and asset setup below, and see the parameter tables to customize the result. See the [changelog](CHANGELOG.md) for release history.
 
 ### Requirements
 

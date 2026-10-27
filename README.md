@@ -73,13 +73,15 @@ betterSkyInstance.update({ coverage: 0.5 })
 
 Version `1.0.0` uses the [Apache License 2.0](https://github.com/iamthek/bettersky-cesium/blob/main/LICENSE), allowing personal and commercial use, modification and redistribution under its terms. Preserve the license, [NOTICE](https://github.com/iamthek/bettersky-cesium/blob/main/NOTICE) and applicable [third-party notices](https://github.com/iamthek/bettersky-cesium/blob/main/THIRD_PARTY_NOTICES.md) when distributing the SDK. Third-party materials retain their own licenses.
 
-Questions: [iamthek@qq.com](mailto:iamthek@qq.com).
+Contact email: [iamthek@qq.com](mailto:iamthek@qq.com).
 
 ## Support the Project
 
-If this project helped you, please, kind stranger, buy me a coffee 🙏☕ Just a tired developer running on caffeine here — your support keeps the project alive and improving.
+The project is maintained in my spare time. If it has helped you, you can buy me a coffee 🙏☕ — your support keeps the project maintained and improving.
 
 <p align="center">
-  <img src="https://iamthek.github.io/buy_me_a_coffee_alipay.jpg" alt="Alipay" width="200" height="300">
-  <img src="https://iamthek.github.io/buy_me_a_coffee_wechat.jpg" alt="WeChat Pay" width="200" height="300">
+  <img src="https://iamthek.github.io/buy_me_a_coffee_alipay.jpg" alt="Alipay" height="267">
+  <img src="https://iamthek.github.io/buy_me_a_coffee_wechat.jpg" alt="WeChat Pay" height="267">
 </p>
+
+*This payment channel currently only supports users in mainland China, with overseas users coming soon.*

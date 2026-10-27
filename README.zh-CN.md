@@ -73,13 +73,15 @@ betterSkyInstance.update({ coverage: 0.5 })
 
 `1.0.0` 使用 [Apache License 2.0](https://github.com/iamthek/bettersky-cesium/blob/main/LICENSE)，允许按许可条款用于个人与商业项目、修改和再分发。分发 SDK 时保留许可、[NOTICE](https://github.com/iamthek/bettersky-cesium/blob/main/NOTICE) 与适用的[第三方声明](https://github.com/iamthek/bettersky-cesium/blob/main/THIRD_PARTY_NOTICES.md)。第三方材料继续遵循各自许可。
 
-联系：[iamthek@qq.com](mailto:iamthek@qq.com)。
+联系邮箱：[iamthek@qq.com](mailto:iamthek@qq.com)。
 
 ## 赞助支持
 
-如果这个项目帮到了你，可以请我喝杯咖啡🙏☕ ，你的支持是项目持续维护和改进的动力。
+项目通过个人业余时间进行维护，如果这个项目帮到了你，可以请我喝杯咖啡🙏☕ ，你的支持是项目持续维护和改进的动力。
 
 <p align="center">
-  <img src="https://iamthek.github.io/buy_me_a_coffee_alipay.jpg" alt="支付宝" width="200" height="300">
-  <img src="https://iamthek.github.io/buy_me_a_coffee_wechat.jpg" alt="微信支付" width="200" height="300">
+  <img src="https://iamthek.github.io/buy_me_a_coffee_alipay.jpg" alt="支付宝" height="267">
+  <img src="https://iamthek.github.io/buy_me_a_coffee_wechat.jpg" alt="微信支付" height="267">
 </p>
+
+*当前赞赏码仅支持中国大陆用户，港澳台及海外用户渠道稍后开放。*
