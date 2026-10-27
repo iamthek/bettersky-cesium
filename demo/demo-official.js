@@ -849,11 +849,27 @@ window.onload = async () => {
   window.viewer = viewer;
   window.betterSkyInstance = betterSkyInstance;
 
-  // 校验：天空管线 Composite 已加入官方后处理集合
+  // 阶段注册与资源就绪分别检查；两者都不代表首帧已经完成渲染。
   const pps = viewer.scene.postProcessStages;
-  const ok = pps.contains(betterSkyInstance.stage);
-  console.log("[demo-official] 天空效果已启用：", ok, betterSkyInstance.stage && betterSkyInstance.stage.name);
-  if (!ok) {
+  const stageRegistered = pps.contains(betterSkyInstance.stage);
+  console.log("[demo-official] 天空后处理阶段已注册：", stageRegistered, betterSkyInstance.stage?.name);
+  if (!stageRegistered) {
     console.error("[demo-official] 未能加入后处理集合，请检查控制台报错。");
+  }
+
+  try {
+    // 等待调用时配置所需的天空、SMAA 和雪纹理；加载失败会拒绝 Promise。
+    await betterSkyInstance.loadAssets();
+    console.log("[demo-official] 天空效果资源已就绪：", betterSkyInstance.getAssetState());
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      console.info("[demo-official] 天空效果资源加载已取消：", error);
+      return;
+    }
+    console.error(
+      "[demo-official] 天空效果资源加载失败，可调用 betterSkyInstance.retryAssets() 重试：",
+      betterSkyInstance.getAssetState(),
+      error,
+    );
   }
 };

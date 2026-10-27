@@ -15,6 +15,8 @@ pnpm dev
 
 打开 Vite 输出的地址，通常是 [http://localhost:3000/](http://localhost:3000/)。不配置服务凭据也可以运行，默认使用本地 NaturalEarthII 底图和椭球地形。
 
+Demo 会调用 `betterSkyInstance.loadAssets()` 等待当前配置所需资源，并在控制台分别报告后处理阶段注册和资源加载结果。资源就绪不代表首帧已经渲染；加载失败时可查看 `betterSkyInstance.getAssetState()`，修复资源地址或网络问题后调用 `betterSkyInstance.retryAssets()` 重试。
+
 需要在线服务时，将 `demo/.env.example` 复制为仓库根目录的 `.env.local`，再按需填写：
 
 | 变量 | 用途 |

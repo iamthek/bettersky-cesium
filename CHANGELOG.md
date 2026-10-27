@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 - Unreleased
+## 1.0.0 - 2026-10-27
 
 - **Breaking:** Keep only the named `BetterSky` export; remove the default export and the `defaultOptions` static getter.
 - **Breaking:** Replace configuration shortcuts with `betterSkyInstance.update()` and use complete normalized snapshots from `BetterSky.getDefaultOptions()` and `betterSkyInstance.getOptions()`.
@@ -11,6 +11,7 @@
 - Add bilingual 0.2.0 to 1.0.0 migration guidance and standardize examples on `betterSkyInstance`.
 - Exclude disabled SMAA from resource snapshots and keep existing asset subscriptions connected when SMAA is enabled later.
 - Skip render-pipeline rebuilds when rain or snow switches are unchanged.
+- Update the demo to report post-process stage registration and explicit resource loading separately, including loading failures and retries.
 
 ## 0.2.0 - 2026-10-20
 
