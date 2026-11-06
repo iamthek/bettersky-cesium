@@ -18,6 +18,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:demo2": "vite --config vite.demo2.config.js",
     "test": "node --experimental-vm-modules --test",
     "build": "vite build",
     "build:demo": "vite build",
