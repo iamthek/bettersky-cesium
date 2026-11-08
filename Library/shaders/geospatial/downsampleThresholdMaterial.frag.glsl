@@ -145,6 +145,7 @@ float F_Schlick( const in float f0, const in float f90, const in float dotVH ) {
 uniform sampler2D inputBuffer;
 uniform float thresholdLevel;
 uniform float thresholdRange;
+uniform float bloomRadianceLimit;
 in vec2 vCenterUv1;
 in vec2 vCenterUv2;
 in vec2 vCenterUv3;
@@ -198,5 +199,8 @@ void main() {
     }
     float l = luminance(color);
     float scale = saturate(smoothstep(thresholdLevel, thresholdLevel + thresholdRange, l));
+    // Lens scatter has a bounded display response. Keep the solar disk's full
+    // radiance in the scene while preventing its ghosts from washing out the sky.
+    scale *= min(1.0, bloomRadianceLimit / max(l, 1e-7));
     out_FragColor = vec4(color * scale, 1.0);
 }

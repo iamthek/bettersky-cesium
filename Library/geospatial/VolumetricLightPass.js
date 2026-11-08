@@ -1,3 +1,4 @@
+import { withSceneDepth } from "../internal/SceneDepth.js";
 import {
     BoundingRectangle,
     Cartesian2,
@@ -25,7 +26,7 @@ export const volumetricLightCompositeGLSL = compositeShader;
 
 const qualitySettings = Object.freeze({
     low: { scale: 0.25, steps: 24 },
-    balanced: { scale: 0.5, steps: 48 },
+    balanced: { scale: 0.5, steps: 32 },
     high: { scale: 0.5, steps: 64 },
 });
 
@@ -75,6 +76,8 @@ export default class VolumetricLightPass {
             u_volumetricLightBefore: () => this.beforeColorTexture ?? fallback(),
             u_volumetricLightAfter: () => this.afterColorTexture ?? fallback(),
             u_volumetricLightDepth: () => this.depthTexture ?? fallback(),
+            u_volumetricLightModelPrefix: () => this.modelPrefixTexture ?? fallback(),
+            u_volumetricLightModelPrefixAvailable: () => !!this.modelPrefixTexture,
             u_volumetricLightEnabled: () => this.ready,
             u_volumetricLightMaxDistance: () => this.options.maxDistance,
             u_volumetricLightSceneDepth: () => this._sceneDepth ?? fallback(),
@@ -89,6 +92,7 @@ export default class VolumetricLightPass {
             u_volumetricLightLayerTop: () => this._layerTop,
         };
         this._renderUniformMap = {
+            ...pipeline.sceneDepth?.uniformMap,
             ...shadowPass.uniformMap,
             ...this.uniformMap,
             u_volumetricLightInverseProjection: () => this._inverseProjection,
@@ -108,7 +112,7 @@ export default class VolumetricLightPass {
             u_volumetricLightIntensity: () => this.options.intensity,
             u_volumetricLightAnisotropy: () => this.options.anisotropy,
             u_volumetricLightSunAngularRadius: () => pipeline.atmosphere.sunAngularRadius,
-            u_volumetricLightSolarIrradiance: () => pipeline.atmosphere.solarIrradiance,
+            u_volumetricLightSolarIrradiance: () => pipeline.getSolarIrradiance?.() ?? pipeline.atmosphere.solarIrradiance,
             u_volumetricLightSunRadianceToRelativeLuminance: () => pipeline.atmosphere.sunRadianceToRelativeLuminance,
             u_volumetricLightSunDirection: () => this._sunDirection,
             u_volumetricLightStepCount: () => qualitySettings[this.options.quality].steps,
@@ -116,6 +120,7 @@ export default class VolumetricLightPass {
             u_volumetricLightCurrentBefore: () => this._current.before,
             u_volumetricLightCurrentAfter: () => this._current.after,
             u_volumetricLightCurrentDepth: () => this._current.depth,
+            u_volumetricLightCurrentModelPrefix: () => this._current.modelPrefix,
             u_volumetricLightHistoryBefore: () => this._history[this._historyIndex].before,
             u_volumetricLightHistoryAfter: () => this._history[this._historyIndex].after,
             u_volumetricLightHistoryDepth: () => this._history[this._historyIndex].depth,
@@ -143,6 +148,13 @@ export default class VolumetricLightPass {
         return this._history?.[this._historyIndex].depth;
     }
 
+    // Prefix alpha stores transmittance, unlike cloud opacity. It belongs to
+    // this rendered frame and never borrows the opaque path's temporal history.
+    get modelPrefixTexture() {
+        return this.ready && this._renderedFrame === this.pipeline._frame
+            ? this._current?.modelPrefix : undefined;
+    }
+
     get byteLength() {
         return this._byteLength;
     }
@@ -167,9 +179,17 @@ export default class VolumetricLightPass {
     invalidateHistory() {
         this._historyValid = false;
         this._rendered = false;
+        this._renderedFrame = undefined;
     }
 
-    _createTarget(context, width, height) {
+    prepare(context) {
+        if (this.options.mode !== "volumetric") return;
+        this._ensureResources(context);
+        void this._drawCommand.shaderProgram.vertexAttributes;
+        void this._resolveCommand.shaderProgram.vertexAttributes;
+    }
+
+    _createTarget(context, width, height, prefix = true) {
         const sampler = new Sampler({
             minificationFilter: TextureMinificationFilter.NEAREST,
             magnificationFilter: TextureMagnificationFilter.NEAREST,
@@ -183,20 +203,25 @@ export default class VolumetricLightPass {
             sampler,
             flipY: false,
         });
-        const target = {
-            before: createTexture(PixelDatatype.HALF_FLOAT),
-            after: createTexture(PixelDatatype.HALF_FLOAT),
+        const target = {};
+        try {
+            target.before = createTexture(PixelDatatype.HALF_FLOAT);
+            target.after = createTexture(PixelDatatype.HALF_FLOAT);
             // Preserve kilometre-scale centroid and terrain/cloud distances.
-            depth: createTexture(PixelDatatype.FLOAT),
-        };
-        target.passState = new PassState(context);
-        target.passState.viewport = new BoundingRectangle(0, 0, width, height);
-        target.passState.framebuffer = new Framebuffer({
-            context,
-            colorTextures: [target.before, target.after, target.depth],
-            destroyAttachments: false,
-        });
-        return target;
+            target.depth = createTexture(PixelDatatype.FLOAT);
+            if (prefix) target.modelPrefix = createTexture(PixelDatatype.HALF_FLOAT);
+            target.passState = new PassState(context);
+            target.passState.viewport = new BoundingRectangle(0, 0, width, height);
+            target.passState.framebuffer = new Framebuffer({
+                context,
+                colorTextures: [target.before, target.after, target.depth, ...(prefix ? [target.modelPrefix] : [])],
+                destroyAttachments: false,
+            });
+            return target;
+        } catch (error) {
+            for (const key of ["before", "after", "depth", "modelPrefix"]) target[key]?.destroy();
+            throw error;
+        }
     }
 
     _ensureResources(context) {
@@ -212,22 +237,31 @@ export default class VolumetricLightPass {
             this._fullHeight = this._scene.drawingBufferHeight;
             this._texelSize.x = 1 / width;
             this._texelSize.y = 1 / height;
-            this._current = this._createTarget(context, width, height);
-            this._history = [this._createTarget(context, width, height), this._createTarget(context, width, height)];
+            this._history = [];
+            try {
+                this._current = this._createTarget(context, width, height);
+                for (let i = 0; i < 2; ++i) this._history.push(this._createTarget(context, width, height, false));
+            } catch (error) { this._releaseRenderTargets(); throw error; }
             this._historyIndex = 0;
-            // Two RGBA16F integrals and one RGBA32F depth target, in three sets.
-            this._byteLength = width * height * 32 * 3;
+            // Three RGBA16F integrals and one RGBA32F depth target, in three sets.
+            this._byteLength = width * height * (40 + 32 * 2);
         }
         if (!this._drawCommand) {
             const renderState = RenderState.fromCache({ depthTest: { enabled: false }, depthMask: false });
-            this._drawCommand = context.createViewportQuadCommand(new ShaderSource({
-                defines: ["LOG_DEPTH"],
-                sources: [fragmentShader.replace("/*__VOLUMETRIC_LIGHT_SUNLIGHT__*/", volumetricLightSunlightGLSL)],
-            }), { uniformMap: this._renderUniformMap, renderState }, vertexShader);
-            this._resolveCommand = context.createViewportQuadCommand(new ShaderSource({
-                defines: ["LOG_DEPTH"],
-                sources: [resolveShader],
-            }), { uniformMap: this._renderUniformMap, renderState }, vertexShader);
+            try {
+                this._drawCommand = context.createViewportQuadCommand(new ShaderSource({
+                    defines: this.pipeline._useLogDepth ? ["LOG_DEPTH"] : [],
+                    sources: [withSceneDepth(fragmentShader.replace("/*__VOLUMETRIC_LIGHT_SUNLIGHT__*/", volumetricLightSunlightGLSL))],
+                }), { uniformMap: this._renderUniformMap, renderState }, vertexShader);
+                this._resolveCommand = context.createViewportQuadCommand(new ShaderSource({
+                    defines: this.pipeline._useLogDepth ? ["LOG_DEPTH"] : [],
+                    sources: [resolveShader],
+                }), { uniformMap: this._renderUniformMap, renderState }, vertexShader);
+            } catch (error) {
+                this._destroyCommands();
+                this._releaseRenderTargets();
+                throw error;
+            }
         }
     }
 
@@ -245,6 +279,13 @@ export default class VolumetricLightPass {
         this._layerTop = lowestBase;
         this._layerBottom = bottom;
         return true;
+    }
+
+    setUseLogDepth(value) {
+        if (this._useLogDepth === value) return;
+        this._useLogDepth = value;
+        this.invalidateHistory();
+        this._destroyCommands();
     }
 
     _prepareHistory(context) {
@@ -306,6 +347,7 @@ export default class VolumetricLightPass {
         this._previousSceneMode = this._scene.mode;
         this._historyValid = true;
         this._rendered = true;
+        this._renderedFrame = this.pipeline._frame;
         this._frame = (this._frame + 1) % 1024;
     }
 
@@ -317,6 +359,7 @@ export default class VolumetricLightPass {
             target.before.destroy();
             target.after.destroy();
             target.depth.destroy();
+            target.modelPrefix?.destroy();
         }
         this._current = undefined;
         this._history = undefined;

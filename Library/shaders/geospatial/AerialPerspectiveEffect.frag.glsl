@@ -1,5 +1,4 @@
 
-#version 300 es
 precision highp float;
 precision highp int;
 precision highp sampler2D;
@@ -19,6 +18,7 @@ precision highp usamplerCube;
 precision highp usampler2DArray;
 in vec2 v_textureCoordinates;
 uniform sampler2D depthTexture;
+/*__SCENE_DEPTH__*/
 uniform sampler2D colorTexture;
 uniform sampler2D positionTexture;
 uniform vec2 resolution;
@@ -28,6 +28,22 @@ uniform float cameraHeight;
 uniform float aerialPerspectiveStrength;
 uniform float cloudVisibility;
 uniform vec4 u_customDarkParam;
+// The precomputed atmosphere/cloud LUTs use relative radiance units. Calibrate
+// them to the native SunLight=2 / diffuse-IBL scene reference before exposure.
+#define BS_ATMOSPHERE_RADIANCE_SCALE 8.0
+uniform bool bsInputHDR;
+uniform float bsExposure;
+vec3 bsDisplayRadiance(vec3 color) {
+    if (bsInputHDR) return color;
+    color *= bsExposure;
+    float minimum = min(color.r, min(color.g, color.b));
+    color -= minimum < 0.08 ? minimum - 6.25 * minimum * minimum : 0.04;
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < 0.76) return color;
+    float compressed = 1.0 - 0.24 * 0.24 / (peak - 0.52);
+    color *= compressed / max(peak, 1e-6);
+    return mix(color, vec3(compressed), 1.0 - 1.0 / (0.15 * (peak - compressed) + 1.0));
+}
 #define PI 3.141592653589793
 #define PI2 6.283185307179586
 #define PI_HALF 1.5707963267948966
@@ -1040,11 +1056,7 @@ vec3 GetSunAndSkyIrradiance(
   #else
     vec3 sun_irradiance = u_solar_irradiance * GetTransmittanceToSun(u_transmittance_texture, r, mu_s) * max(dot(normal, sun_direction), 0.0);
   #endif
-  #ifdef DARKLIGHT
-    return max(sun_irradiance, u_solar_irradiance* u_customDarkParam.y) ;
-  #else 
-    return sun_irradiance;
-  #endif
+  return sun_irradiance;
 }
 
 vec3 GetSolarRadiance() {
@@ -1074,7 +1086,9 @@ vec3 GetSkyRadiance(
   );
   // 修改
   #ifdef DARKLIGHT
-     radiance = mix(radiance * u_customDarkParam.x, radiance, step(-0.09, dot(normalize(camera), sun_direction)));
+     // Night glow belongs to the sky, never to the surface's direct sunlight.
+     radiance *= mix(max(u_customDarkParam.y, 0.0), 1.0,
+         smoothstep(-0.10, 0.0, dot(normalize(camera), sun_direction)));
   #endif
   #ifdef PHOTOMETRIC
   radiance *= SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
@@ -1330,7 +1344,7 @@ void applyTransmittanceInscatter(const vec3 positionECEF, float shadowLength, in
   radiance = radiance * mix(vec3(1.0), transmittance, aerialPerspectiveStrength);
   #endif // TRANSMITTANCE
   #ifdef INSCATTER
-  radiance = radiance + inscatter * aerialPerspectiveStrength;
+  radiance = radiance + bsDisplayRadiance(inscatter * BS_ATMOSPHERE_RADIANCE_SCALE) * aerialPerspectiveStrength;
   #endif // INSCATTER
 }
 
@@ -1671,16 +1685,19 @@ vec4 innerLightPositionAndIntensity() {
 void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   outputColor = vec4(0.0);
   float shadowLength = 0.0;
-  float depth = czm_unpackDepth(texture(depthTexture, v_textureCoordinates));
+  float sceneDistance = betterSkySceneDistance(depthTexture, uv);
   // Evaluate derivatives before sky/cloud early returns to keep each fragment quad coherent.
-  vec4 positionEC = czm_windowToEyeCoordinates(gl_FragCoord.xy, depth);
+  vec4 positionEC = vec4(betterSkyEyePosition(uv, sceneDistance), 1.0);
 
   vec3 viewNormal;
   #ifdef RECONSTRUCT_NORMAL
-    vec3 dx = dFdx(positionEC.xyz);
-    vec3 dy = dFdy(positionEC.xyz);
+    vec3 eyePosition = positionEC.xyz / positionEC.w;
+    vec3 dx = dFdx(eyePosition);
+    vec3 dy = dFdy(eyePosition);
     vec3 normal = cross(dx, dy);
-    viewNormal = normal / max(length(normal), 1e-10);
+    // At silhouettes or missing depth the derivatives need not describe the
+    // same surface. Fall back to the view-facing direction instead of NaNs.
+    viewNormal = length(normal) > 1e-10 ? normalize(normal) : -betterSkyEyeRay(uv);
   #else // RECONSTRUCT_NORMAL
     viewNormal = texture(normalBuffer, uv).xyz;
   #endif // RECONSTRUCT_NORMAL
@@ -1697,13 +1714,15 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   #endif 
   #ifdef HAS_OVERLAY
     vec4 overlay = cloudVisibility > 0.0 ? texture(overlayBuffer, uv) * cloudVisibility : vec4(0.0);
+    overlay.rgb *= BS_ATMOSPHERE_RADIANCE_SCALE;
+    if (!bsInputHDR && overlay.a > 1e-6) overlay.rgb = bsDisplayRadiance(overlay.rgb / overlay.a) * overlay.a;
     if (overlay.a == 1.0) {
       outputColor = vec4(compositeVolumetricLight(uv, vec3(0.0), overlay), overlay.a);
       return;
     }
   #endif // HAS_OVERLAY
   moonDirection = normalize(czm_inverseViewRotation * czm_moonDirectionEC);
-  if (depth >= 1.0 - 1e-7) {
+  if (sceneDistance <= 0.0) {
     #ifdef SKY
         vec3 rayDirection = normalize(vRayDirection);
         outputColor.rgb = getSkyRadiance(
@@ -1716,6 +1735,8 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
         lunarRadianceScale
         );
         outputColor.a = 1.0;
+        outputColor.rgb *= BS_ATMOSPHERE_RADIANCE_SCALE;
+        outputColor.rgb = bsDisplayRadiance(outputColor.rgb);
     #else // SKY
         outputColor = inputColor;
     #endif // SKY
@@ -1784,7 +1805,9 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   #if defined(SUN_IRRADIANCE) || defined(SKY_IRRADIANCE)
     radiance = getSunSkyIrradiance(positionECEF, normalECEF, inputColor.rgb, sunTransmittance);
   #else // defined(SUN_IRRADIANCE) || defined(SKY_IRRADIANCE)
-    radiance = inputColor.rgb;
+    // Native materials have already separated direct and environment lighting.
+    // Cloud shade remains bounded so contact areas retain that environment fill.
+    radiance = inputColor.rgb * mix(0.65, 1.0, sunTransmittance);
   #endif // defined(SUN_IRRADIANCE) || defined(SKY_IRRADIANCE)
   #ifdef ENABLE_THUNDERCLOUDS
     if (innerLight.w > 0.0001) {   radiance *=innerLightColor;   }
@@ -1817,11 +1840,67 @@ void CloudMain(const vec4 inputColor, const vec2 uv, out vec4 outputColor) {
     //     outputColor.a = inputColor.a * (1.0 - clouds.a) + clouds.a;
     // #endif // SKIP_RENDERING
 }
+uniform sampler2D bsGaussianColor;
+uniform bool bsGaussianAvailable;
+uniform float bsPreExposure;
+uniform bool bsGaussianSRGB;
+uniform float bsGaussianExposure;
+uniform sampler2D bsModelFrontCloud;
+uniform bool bsModelFrontAvailable;
+uniform vec2 bsCloudUvScale;
+uniform vec2 bsCloudJitter;
+
+vec4 bsFrontCloud(vec2 uv, float modelDistance) {
+    if (!bsModelFrontAvailable) return vec4(0.0);
+    vec2 size = vec2(textureSize(bsModelFrontCloud, 0));
+    vec2 grid = (uv - bsCloudJitter) / bsCloudUvScale * size - 0.5;
+    vec2 anchor = floor(grid);
+    vec2 fraction = fract(grid);
+    vec4 result = vec4(0.0);
+    float total = 0.0;
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            vec2 tapUv = (anchor + vec2(x, y) + 0.5) / size;
+            vec4 depths = texture(u_betterSkyDepth, tapUv * bsCloudUvScale + bsCloudJitter);
+            if (depths.b <= 0.0 || depths.a <= 0.0) continue;
+            vec2 weight = mix(1.0 - fraction, fraction, vec2(x, y));
+            float relative = abs(depths.b - modelDistance) / max(modelDistance, 1.0);
+            float w = weight.x * weight.y * (1.0 - smoothstep(0.02, 0.08, relative));
+            result += texture(bsModelFrontCloud, tapUv) * w;
+            total += w;
+        }
+    }
+    result.rgb *= BS_ATMOSPHERE_RADIANCE_SCALE;
+    if (total <= 0.00001) return vec4(0.0);
+    result /= total;
+    if (!bsInputHDR && result.a > 1e-6) result.rgb = bsDisplayRadiance(result.rgb / result.a) * result.a;
+    return result * cloudVisibility;
+}
+
+vec3 bsCompositeGaussian(vec2 uv, vec3 background) {
+    if (!bsGaussianAvailable) return background;
+    vec4 gaussian = texture(bsGaussianColor, uv);
+    float alpha = clamp(gaussian.a, 0.0, 1.0);
+    float distance = texture(u_betterSkyDepth, uv).b;
+    if (alpha <= 0.00001 || distance <= 0.0) return background;
+    vec3 color = max(gaussian.rgb / alpha, vec3(0.0));
+    if (bsGaussianSRGB) color = czm_srgbToLinear(color);
+    color = bsDisplayRadiance(color * bsGaussianExposure);
+    vec3 eye = betterSkyEyePosition(uv, distance);
+    vec3 world = (inverseViewMatrix * vec4(eye, 1.0)).xyz;
+    vec3 position = mat3(inverseEllipsoidMatrix) * world * METER_TO_LENGTH_UNIT - vGeometryEllipsoidCenter;
+    float shadowLength = texture(shadowLengthBuffer, uv).r * cloudVisibility;
+    applyTransmittanceInscatter(position, min(shadowLength, distance * METER_TO_LENGTH_UNIT), color);
+    vec4 frontCloud = bsFrontCloud(uv, distance);
+    color = compositeVolumetricLightToDistance(uv, color, frontCloud, distance);
+    return mix(background, color, alpha);
+}
+
 void main() {
     vec2 uv = v_textureCoordinates;
     vec4 color0 = texture(colorTexture, uv);
     // Official Cesium post-process input has already been gamma encoded.
-    color0.rgb = pow(max(color0.rgb, vec3(0.0)), vec3(czm_gamma));
+    if (!bsInputHDR) color0.rgb = czm_srgbToLinear(max(color0.rgb, vec3(0.0)));
     vec4 color1 = vec4(0.0);
 
     CloudMain(color0, uv, color1);
@@ -1829,9 +1908,13 @@ void main() {
     color0.a = clamp(color0.a, 0.0, 1.0);
 
     SkyMain(color0, uv, color1);
+    moonDirection = normalize(czm_inverseViewRotation * czm_moonDirectionEC);
+    color1.rgb = bsCompositeGaussian(uv, color1.rgb);
     color0 = blend23(color0, color1, 1.0);
     color0.a = clamp(color0.a, 0.0, 1.0);
     out_FragColor = color0;
+    // Exposure is restored in float precision immediately before the final tone map.
+    out_FragColor.rgb *= bsPreExposure;
     #ifdef ENCODE_OUTPUT
         out_FragColor = linearToOutputTexel( out_FragColor );
     #endif

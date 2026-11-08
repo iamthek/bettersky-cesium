@@ -4,19 +4,38 @@ import { Cartesian2, Cartesian4, JulianDate } from "cesium";
 export const DEFAULT_OPTIONS = {
   /** 是否在初始化后启用天空效果；false 保留配置但暂停效果渲染。 */
   enabled: true,
+  /** 原生地形和 PBR 模型的统一太阳、环境光及近景投影配置。 */
+  lighting: {
+    /** 太阳直射强度，非负；与环境补光分别控制。 */
+    sunIntensity: 2,
+    /** 天空环境图亮度倍率，非负；不突破 Cesium IBL factor 的合法范围。 */
+    ambientIntensity: 1.2,
+    shadows: {
+      enabled: true,
+      maximumDistance: 1500,
+      size: 1024,
+      softShadows: true,
+    },
+  },
+  /** 高斯扫描层的源颜色空间、曝光校准及日照响应；不重新生成扫描自阴影。 */
+  gaussianSplat: {
+    colorSpace: "auto",
+    exposureOffset: -0.5,
+    daylightResponse: true,
+  },
   /** 云量覆盖度 [0,1]；越大云区越广，≤0.1 基本无云，独立于云体密度。 */
-  coverage: 0.34,
+  coverage: 0.30,
   /** 天气纹理移动速度 [x,y]（纹理坐标/秒）；绝对值越大移动越快，0 停止，负值反向。 */
   localWeatherVelocity: [0.0003, 0.0001],
   /** HDR 色调映射曲线：7=AgX、8=Neutral、9=ACES、10=Linear、11=Reinhard、12=Cineon。 */
-  toneMappingMode: 9,
+  toneMappingMode: 8,
   /** 色调映射前的亮度倍率（无量纲，建议 ≥0）；越大越亮，单位不是曝光档位 EV。 */
-  toneMappingExposure: 2.8,
+  toneMappingExposure: 1,
   /** 地表光照增益（非负倍率）；越大地表越亮，独立于云体补光，仍受色调映射影响。 */
-  irradianceScale: 0.15,
+  irradianceScale: 1,
   /** 地表大气透视混合强度 [0,1]；越大远景雾感越强，0 关闭此混合，不改变天空和云的散射。 */
   aerialPerspectiveStrength: 0.15,
-  /** 夜间天空辉光的调制系数（无量纲，建议 [0,1]）；作用于 _customDarkParam.y，白天通常不明显。 */
+  /** 夜间天空辉光的调制系数（无量纲，建议 [0,1]）；只影响夜空，不设地表直射光下限。 */
   nightGlowIntensity: 0.5,
   /** 太阳泛光/光晕强度（无量纲，建议 ≥0）；越大亮部扩散越明显，0 关闭此强度。 */
   bloomIntensity: 0.002,
@@ -34,7 +53,7 @@ export const DEFAULT_OPTIONS = {
     maxDistance: 16000,
     /** 前向散射偏好 g [0,0.9]；0 为各向同性，越大越集中于朝太阳的观察方向。 */
     anisotropy: 0.55,
-    /** 分辨率比例/积分步数/可见性图尺寸：low=0.25/24/512，balanced=0.5/48/1024，high=0.5/64/2048。 */
+    /** 分辨率比例/积分步数/可见性图尺寸：low=0.25/24/512，balanced=0.5/32/1024，high=0.5/64/2048。 */
     quality: "balanced",
   },
   /** 云层形态、照明、穿云光介质与降噪配置；初始化时可只覆盖其中的部分字段。 */
@@ -50,13 +69,13 @@ export const DEFAULT_OPTIONS = {
     /** 云层厚度 [第一层,第二层,第三层,预留]（米），接受数组或 Cartesian4；云顶 = 云底 + 厚度。 */
     heights: [1300, 1800, 650, 0],
     /** 云密度倍率 [第一层,第二层,第三层,预留]（无量纲，建议 ≥0），接受数组或 Cartesian4；0 关闭对应层介质。 */
-    densityScales: [0.12, 0.09, 0.0015, 0],
+    densityScales: [0.12, 0.025, 0.001, 0],
     /** 云形细节侵蚀 [第一层,第二层,第三层,预留]（各分量 [0,1]），接受数组或 Cartesian4；越大边缘越破碎。 */
-    shapeDetailAmounts: [0.18, 0.12, 0, 0],
+    shapeDetailAmounts: [0.25, 0.15, 0.05, 0],
     /** 天空辐照度对云体的补光倍率（非负）；越大云暗面越亮，0 移除这一补光项。 */
-    skyIrradianceScale: 1.8,
+    skyIrradianceScale: 1.2,
     /** 地面反射辐照度对云体的补光倍率（非负）；越大云下部越亮，独立于地表增益 irradianceScale。 */
-    groundIrradianceScale: 1.3,
+    groundIrradianceScale: 0.8,
     /** 穿云光 haze 介质密度缩放（非负）；越大散射和消光越强，0 关闭额外穿云光，建议小于 0.0001。 */
     hazeDensityScale: 0.08 * 0.0001,
     /** true 在参与云影投射的云底附近积分世界固定薄层，可独立开启近地雾；false 使用行星表面以上的指数高度雾。 */
@@ -82,15 +101,15 @@ export const DEFAULT_OPTIONS = {
     /** 云的时域积累与空间重建配置；平衡静止时的稳定性、运动拖影和细节保留。 */
     denoise: {
       /** 普通时域积累的当前帧权重 [0,1]；越小越依赖历史、降噪越强，但可能拖影。 */
-      temporalAlpha: 0.04,
+      temporalAlpha: 0.12,
       /** 时域升采样中本帧采样相位的当前帧权重 [0,1]；越大新采样越快生效，但更易暴露噪声。 */
-      currentFrameAlpha: 0.08,
+      currentFrameAlpha: 0.35,
       /** 相机运动时的当前帧权重下限 [0,1]；越大拖影越少但噪声越明显，0 保持普通降噪权重。 */
-      motionAlpha: 0.25,
+      motionAlpha: 0.6,
       /** 历史颜色方差裁剪的标准差倍率（正有限数）；越大保留历史越宽松，越小越严格排除旧色。 */
-      varianceGamma: 2,
+      varianceGamma: 1.25,
       /** 深度/透明度感知的邻域重建混合强度 [0,1]；越大越平滑但细节更少，0 关闭此邻域平滑。 */
-      spatialFilterStrength: 0.8,
+      spatialFilterStrength: 0.35,
     },
   },
   /**
@@ -100,10 +119,12 @@ export const DEFAULT_OPTIONS = {
    * 此开关只决定光源方向的来源，不调节光照强度。
    */
   systemLight: true,
-  /** 初始化时是否统一设置 HDR、对数深度、gamma 和地形深度测试；false 由调用方自行配置场景。 */
+  /** 是否应用已配置的场景设置；false 由调用方自行配置场景，null 场景字段始终沿用宿主。 */
   applySceneSettings: true,
-  /** 场景 HDR 开关；true 保留更宽的亮度范围供色调映射使用，初始化时受 applySceneSettings 控制。 */
+  /** 默认启用宿主 HDR 以统一曝光；null 显式沿用宿主，false 使用 LDR 兼容合成。 */
   highDynamicRange: true,
+  /** 默认让地形遮挡模型；null 沿用宿主，受 applySceneSettings 控制。 */
+  depthTestAgainstTerrain: true,
   /** 场景对数深度缓冲开关；改善远近同框时的深度精度，初始化时受 applySceneSettings 控制。 */
   logarithmicDepthBuffer: true,
   /** 场景显示 Gamma（正数）；一般增大会提亮中间调，初始化时受 applySceneSettings 控制。 */
@@ -117,19 +138,19 @@ export const DEFAULT_OPTIONS = {
     /** 是否启用 HBAO；关闭时保留全部数值配置。 */
     enabled: true,
     /** AO 强度指数（建议 ≥0）；越大接触遮蔽越暗，0 不产生 AO 对比。 */
-    intensity: 100,
+    intensity: 20,
     /** 视空间遮蔽邻域的最大半径（米）；越大影响范围越广，过大可能产生暗边或跨物体污染。 */
-    maxRadius: 30,
+    maxRadius: 5,
     /** 遮蔽切线的角度偏移（弧度）；增大可减少自遮蔽伪影，但会弱化细小接触阴影。 */
     bias: 0.1,
     /** AO 处理的相机视空间深度上限（米）；超过此距离的远景跳过遮蔽计算。 */
     frustumLength: 100000,
     /** AO 调制颜色曲线的输入黑点（建议 [0,1)）；越大暗部截断越多，不能设为 1。 */
-    blackPoint: 0.05,
+    blackPoint: 0,
     /** AO 调制颜色曲线的输出亮度倍率（建议 [0,1]）；越大被遮蔽部分越亮，0 为黑色。 */
-    whitePoint: 0.9,
+    whitePoint: 0.85,
     /** AO 调制曲线的幂指数（正数）；越大中间亮度越暗，独立于场景 gamma 和降噪 varianceGamma。 */
-    gamma: 2.5,
+    gamma: 1,
     /** HBAO 双边滤波降噪开关；仅构造时设置。 */
     denoise: true,
   },
@@ -264,6 +285,35 @@ function validateHbao(options) {
   }
 }
 
+function validateLighting(options) {
+  assertKeys(options, Object.keys(DEFAULT_OPTIONS.lighting), "lighting");
+  for (const [key, value] of Object.entries(options)) {
+    const path = `lighting.${key}`;
+    if (key !== "shadows") { number(value, path, 0); continue; }
+    assertKeys(value, Object.keys(DEFAULT_OPTIONS.lighting.shadows), path);
+    for (const [shadowKey, shadowValue] of Object.entries(value)) {
+      const shadowPath = `${path}.${shadowKey}`;
+      if (["enabled", "softShadows"].includes(shadowKey)) boolean(shadowValue, shadowPath);
+      else if (shadowKey === "size") {
+        number(shadowValue, shadowPath, 1);
+        if (!Number.isInteger(shadowValue) || !Number.isInteger(Math.log2(shadowValue))) {
+          throw new Error(`[BetterSky] ${shadowPath} 必须是正整数且为 2 的幂。`);
+        }
+      } else number(shadowValue, shadowPath, 0, Infinity, true);
+    }
+  }
+}
+
+function validateGaussianSplat(options) {
+  assertKeys(options, Object.keys(DEFAULT_OPTIONS.gaussianSplat), "gaussianSplat");
+  for (const [key, value] of Object.entries(options)) {
+    const path = `gaussianSplat.${key}`;
+    if (key === "colorSpace") enumeration(value, path, ["auto", "srgb", "linear"]);
+    else if (key === "daylightResponse") boolean(value, path);
+    else number(value, path);
+  }
+}
+
 /** Validate the whole command, including time, before a caller can commit any state. */
 export function prepareOptions(input) {
   assertKeys(input, Object.keys(DEFAULT_OPTIONS), "");
@@ -274,6 +324,11 @@ export function prepareOptions(input) {
   }
   if (isPlainObject(input.hbao)) assertKeys(input.hbao, HBAO_KEYS, "hbao");
   if (isPlainObject(input.volumetricLight)) assertKeys(input.volumetricLight, Object.keys(DEFAULT_OPTIONS.volumetricLight), "volumetricLight");
+  if (isPlainObject(input.lighting)) {
+    assertKeys(input.lighting, Object.keys(DEFAULT_OPTIONS.lighting), "lighting");
+    if (isPlainObject(input.lighting.shadows)) assertKeys(input.lighting.shadows, Object.keys(DEFAULT_OPTIONS.lighting.shadows), "lighting.shadows");
+  }
+  if (isPlainObject(input.gaussianSplat)) assertKeys(input.gaussianSplat, Object.keys(DEFAULT_OPTIONS.gaussianSplat), "gaussianSplat");
   const options = cloneOptions(input);
   // Undefined optional fields behave as omitted; time explicitly preserves the host clock.
   const removeUndefined = object => {
@@ -285,8 +340,10 @@ export function prepareOptions(input) {
   removeUndefined(options);
   let time;
   for (const [key, value] of Object.entries(options)) {
-    if (["enabled", "systemLight", "applySceneSettings", "highDynamicRange", "logarithmicDepthBuffer", "smaa", "snow", "rain"].includes(key)) boolean(value, key);
-    else if (["coverage", "aerialPerspectiveStrength"].includes(key)) number(value, key, 0, 1);
+    if (["enabled", "systemLight", "applySceneSettings", "logarithmicDepthBuffer", "smaa", "snow", "rain"].includes(key)) boolean(value, key);
+    else if (["highDynamicRange", "depthTestAgainstTerrain"].includes(key)) {
+      if (value !== null) boolean(value, key);
+    } else if (["coverage", "aerialPerspectiveStrength"].includes(key)) number(value, key, 0, 1);
     else if (key === "nightGlowIntensity") number(value, key);
     else if (key === "toneMappingMode") enumeration(value, key, [2, 4, 7, 8, 9, 10, 11, 12]);
     else if (key === "gamma") number(value, key, 0, Infinity, true);
@@ -294,6 +351,8 @@ export function prepareOptions(input) {
     else if (key === "cloud") validateCloud(value);
     else if (key === "volumetricLight") validateVolumetricLight(value);
     else if (key === "hbao") validateHbao(value);
+    else if (key === "lighting") validateLighting(value);
+    else if (key === "gaussianSplat") validateGaussianSplat(value);
     else if (key === "time") {
       if (value !== null && value !== undefined) {
         if (typeof value !== "string" || !value.length) throw new Error("[BetterSky] time 必须是 ISO 8601 字符串、null 或 undefined。");

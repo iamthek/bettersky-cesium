@@ -1,6 +1,4 @@
 
-#version 300 es
-#define LOG_DEPTH
 #define SHADER_TYPE RawShaderMaterial
 #define SHADER_NAME ShadowMaterial
 #define SHADOW 1

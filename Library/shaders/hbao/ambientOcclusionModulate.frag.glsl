@@ -12,20 +12,26 @@ uniform float blackPoint;
 uniform float whitePoint;
 uniform float gamma;
 uniform float frustumLength;
+uniform bool bsActive;
 
 in vec2 v_textureCoordinates;
 
 vec3 shade(vec3 color, float a, float b, float p) {
-  return clamp(
+  return max(
     b * pow(max(color - a, 0.0), vec3(p)) / pow(1.0 - a, p),
-    vec3(0.0),
-    vec3(1.0)
+    vec3(0.0)
   );
 }
 
 void main() {
   vec4 base = texture(colorTexture, v_textureCoordinates);
+  if (!bsActive) {
+    out_FragColor = base;
+    return;
+  }
   vec4 ao = texture(ambientOcclusionTexture, v_textureCoordinates);
+  if (!betterSkyFinite4(ao)) ao = vec4(1.0, 0.5, 0.5, 1.0);
+  ao.x = clamp(ao.x, 0.0, 1.0);
 
   #if OUTPUT_TYPE == 1 // Occlusion
   out_FragColor = vec4(vec3(ao.x), base.a);

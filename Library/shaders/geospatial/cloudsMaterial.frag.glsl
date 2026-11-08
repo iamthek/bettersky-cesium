@@ -1,6 +1,4 @@
 
-#version 300 es
-#define LOG_DEPTH
 #define SHADER_TYPE RawShaderMaterial
 #define SHADER_NAME CloudsMaterial
 #define PI 3.141592653589793
@@ -1094,131 +1092,17 @@ bool insideLayerIntervals(const float height) {
     return any(bvec3(gt.x && lt.x, gt.y && lt.y, gt.z && lt.z));
 }
 /*__CLOUD_LAYER_DENSITY__*/
-struct WeatherSample {
-    vec4 heightFraction; // Normalized height of each layer
-    
-    vec4 density;
-};
-vec4 shapeAlteringFunction(const vec4 heightFraction, const vec4 bias) {
-    // Apply a semi-circle transform to round the clouds towards the top.
-    vec4 biased = pow(heightFraction, bias);
-    vec4 x = clamp(biased * 2.0 - 1.0, -1.0, 1.0);
-    return 1.0 - x * x;
-}
-WeatherSample sampleWeather(const vec2 uv, const float height, const float mipLevel) {
-    WeatherSample weather;
-    weather.heightFraction = remapClamped(vec4(height), minLayerHeights, maxLayerHeights);
-    vec4 localWeather = pow(
-    textureLod(
-    localWeatherTexture, uv * localWeatherRepeat + localWeatherOffset, mipLevel
-    ).LOCAL_WEATHER_CHANNELS, weatherExponents
-    );
-    #ifdef SHADOW
-        localWeather *= shadowLayerMask;
-    #endif // SHADOW
-    
-    vec4 heightScale = shapeAlteringFunction(weather.heightFraction, cloudHeightBias(shapeAlteringBiases));
-    
-    // Modulation to control weather by coverage parameter.
-    
-    // Reference: https://github.com/Prograda/Skybolt/blob/master/Assets/Core/Shaders/Clouds.h#L63
-    vec4 factor = 1.0 - coverage * heightScale;
-    weather.density = remapClamped(
-    mix(localWeather, vec4(1.0), coverageFilterWidths), factor, factor + coverageFilterWidths
-    );
-    return weather;
-}
-vec4 getLayerDensity(const vec4 heightFraction) {
-    // prettier-ignore
-    return densityProfile.expTerms * exp(densityProfile.exponents * heightFraction) +
-    densityProfile.linearTerms * heightFraction +
-    densityProfile.constantTerms;
-}
-struct MediaSample {
-    float density;
-    vec4 weight;
-    float scattering;
-    float extinction;
-};
-in vec3 vCameraPosition;
-in vec3 vEllipsoidCenter;
-uniform float shapeTexelsPerMeterPerPixel;
-MediaSample sampleMedia(
-const WeatherSample weather, const vec3 position, const vec2 uv, const float mipLevel, const float jitter, inout ivec3 sampleCount
-) {
-    vec4 density = weather.density;
-    
-    // TODO: Define in physical length.
-    
-    vec3 surfaceNormal = normalize(position);
-    float localWeatherSpeed = length(localWeatherOffset);
-    vec3 evolution = -surfaceNormal * localWeatherSpeed * 2e4;
-    vec3 turbulence = vec3(0.0);
-    #ifdef TURBULENCE
-        vec2 turbulenceUv = uv * localWeatherRepeat * turbulenceRepeat;
-        turbulence = turbulenceDisplacement *
-        (texture(turbulenceTexture, turbulenceUv).rgb * 2.0 - 1.0) *
-        dot(density, remapClamped(weather.heightFraction, vec4(0.3), vec4(0.0)));
-    #endif // TURBULENCE
-    
-    vec3 shapePosition = (position + evolution + turbulence) * shapeRepeat + shapeOffset;
-    float cameraDistance = length(position - (vCameraPosition - vEllipsoidCenter));
-    float shapeLod = log2(max(1.0, cameraDistance * shapeTexelsPerMeterPerPixel));
-    int shapeSamples;
-    vec4 shape = sampleCloudLayerShape(shapePosition, density, shapeLod, shapeSamples);
-    density = remapClamped(density, (vec4(1.0) - shape) * shapeAmounts, vec4(1.0));
-    #ifdef DEBUG_SHOW_SAMPLE_COUNT
-        sampleCount.y += shapeSamples;
-    #endif // DEBUG_SHOW_SAMPLE_COUNT
-    
-    #ifdef SHAPE_DETAIL
-        // Fade detail continuously; stochastic LOD toggles also changed density.
-        // Fade erosion that is smaller than a raymarch pixel, not just weather-map detail.
-        float detailFootprint = cameraDistance * shapeTexelsPerMeterPerPixel *
-            (shapeDetailRepeat.x / max(shapeRepeat.x, 1e-7)) *
-            (float(textureSize(shapeDetailTexture, 0).x) / float(textureSize(shapeTexture, 0).x));
-        float detailWeight = (1.0 - smoothstep(0.0, 1.5, mipLevel)) *
-            (1.0 - smoothstep(0.5, 2.0, detailFootprint));
-        if (detailWeight > 0.0) {
-            vec3 detailPosition = (position + turbulence) * shapeDetailRepeat + shapeDetailOffset;
-            float detailLod = cloudLodRange.y > cloudLodRange.x ? log2(max(1.0, detailFootprint)) : 0.0;
-            float detail = textureLod(shapeDetailTexture, detailPosition, detailLod).r;
-            // Fluffy at the top and whippy at the bottom.
-            
-            vec4 modifier = mix(
-            vec4(pow(detail, 6.0)), vec4(1.0 - detail), remapClamped(weather.heightFraction, vec4(0.2), vec4(0.4))
-            );
-            modifier = mix(vec4(0.0), modifier, shapeDetailAmounts);
-            vec4 detailedDensity = remapClamped(density * 2.0, vec4(modifier * 0.5), vec4(1.0));
-            density = mix(density, detailedDensity, detailWeight);
-            #ifdef DEBUG_SHOW_SAMPLE_COUNT
-                ++sampleCount.z;
-            #endif // DEBUG_SHOW_SAMPLE_COUNT
-        }
-    #endif // SHAPE_DETAIL
-    // Nicely decrease the density at the bottom.
-    density = saturate(density * densityScales * getLayerDensity(weather.heightFraction));
-    MediaSample media;
-    float densitySum = density.x + density.y + density.z + density.w;
-    media.density = densitySum;
-    media.weight = density / max(densitySum, 1e-7);
-    media.scattering = densitySum * scatteringCoefficient;
-    media.extinction = densitySum * absorptionCoefficient + media.scattering;
-    return media;
-}
-MediaSample sampleMedia(
-const WeatherSample weather, const vec3 position, const vec2 uv, const float mipLevel, const float jitter
-) {
-    ivec3 sampleCount = ivec3(0);
-    return sampleMedia(weather, position, uv, mipLevel, jitter, sampleCount);
-}
 #if !defined(RECIPROCAL_PI4)
     #define RECIPROCAL_PI4 (0.07957747154594767)
 #endif // !defined(RECIPROCAL_PI4)
 uniform sampler2D depthBuffer;
+/*__SCENE_DEPTH__*/
 uniform mat4 viewMatrix;
 uniform mat4 reprojectionMatrix;
 uniform vec3 previousCameraPosition;
+uniform vec2 previousWeatherOffset;
+uniform vec3 previousShapeOffset;
+uniform vec3 previousDetailOffset;
 uniform float cameraNear;
 uniform float cameraFar;
 uniform float cameraHeight;
@@ -1276,18 +1160,13 @@ in GroundIrradiance vGroundIrradiance;
 in CloudsIrradiance vCloudsIrradiance;
 layout(location = 0) out vec4 outputColor;
 layout(location = 1) out vec4 outputDepthVelocity;
+// Independent cloud prefix in front of a protected model (linear HDR,
+// premultiplied RGB and opacity). Background clouds retain their full integral.
+layout(location = 3) out vec4 outputModelFrontColor;
 #ifdef SHADOW_LENGTH
     layout(location = 2) out float outputShadowLength;
 #endif // SHADOW_LENGTH
 
-float readDepth(const vec2 uv) {
-    // #if DEPTH_PACKING == 3201
-    //     return unpackRGBAToDepth(texture(depthBuffer, uv));
-    // #else // DEPTH_PACKING == 3201
-    //     return texture(depthBuffer, uv).r;
-    // #endif // DEPTH_PACKING == 3201
-    return czm_unpackDepth(texture(depthBuffer, uv));
-}
 // float getViewZ(const float depth) {
 //     #ifdef PERSPECTIVE_CAMERA
 //         return perspectiveDepthToViewZ(depth, cameraNear, cameraFar);
@@ -1673,35 +1552,58 @@ vec2 henyeyGreenstein(const vec2 g, const float cosTheta) {
 float phaseFunction(const float cosTheta) {
     return phaseFunction(cosTheta, 1.0);
 }
+bool cloudPreviousPosition(vec3 position, float mipLevel, out vec3 previousPosition) {
+    vec2 previousUv = getGlobeUv(position) +
+        (localWeatherOffset - previousWeatherOffset) / max(localWeatherRepeat, vec2(1e-6));
+    // The cube projection is discontinuous at face changes. Never transport
+    // history across that discontinuity as if it were continuous sky motion.
+    if (any(lessThan(previousUv, vec2(0.001))) || any(greaterThan(previousUv, vec2(0.999)))) return false;
+    previousPosition = cloudPositionFromUv(previousUv, position);
+    vec2 oldUv = getGlobeUv(previousPosition);
+    if (length(oldUv - previousUv) > 0.001) return false;
+    float height = length(position) - bottomRadius;
+    WeatherSample currentWeather = sampleWeather(getGlobeUv(position), height, mipLevel);
+    WeatherSample oldWeather = sampleWeatherAtOffset(oldUv, height, mipLevel, previousWeatherOffset);
+    ivec3 ignored = ivec3(0);
+    MediaSample currentMedia = sampleMedia(currentWeather, position, getGlobeUv(position), mipLevel, 0.5, ignored);
+    MediaSample oldMedia = sampleMediaAtOffsets(oldWeather, previousPosition, oldUv, mipLevel, 0.5, ignored,
+        previousWeatherOffset, previousShapeOffset, previousDetailOffset);
+    float difference = abs(currentMedia.extinction - oldMedia.extinction) /
+        max(currentMedia.extinction + oldMedia.extinction, 0.001);
+    return difference < 0.35 && !any(isnan(previousPosition)) && !any(isinf(previousPosition));
+}
+float secondaryRayLength(const float baseDistance, const float growth) {
+    return baseDistance * (1.0 + growth) * 0.5;
+}
+// Expected location of a Beer-weighted contribution inside a uniform cell.
+// The series avoids cancellation for thin edges; unlike a sample midpoint it
+// remains accurate when a single thick cell extinguishes most of the ray.
+float cloudCellCentroid(const float extinction, const float stepLength) {
+    float opticalDepth = extinction * stepLength;
+    if (opticalDepth < 0.01) return stepLength * (0.5 - opticalDepth / 12.0);
+    return 1.0 / extinction - stepLength / (exp(min(opticalDepth, 80.0)) - 1.0);
+}
 float marchOpticalDepth(
 const vec3 rayOrigin, const vec3 rayDirection, const int maxIterationCount, const float mipLevel, const float jitter, out float rayDistance
 ) {
-    // Keep the lighting sample count deterministic: random LOD counts shimmer at distance.
     int iterationCount = max(1, maxIterationCount);
-    float stepSize = minSecondaryStepSize / float(iterationCount);
-    float nextDistance = stepSize * 0.5;
+    // Sampling quality changes the partition, never the length or the start of
+    // the shadow-map tail. Integrate non-overlapping midpoint cells.
+    float lightDistance = secondaryRayLength(minSecondaryStepSize, secondaryStepScale);
+    float cellStart = 0.0;
     float opticalDepth = 0.0;
-    float cameraDistance = length(rayOrigin - (vCameraPosition - vEllipsoidCenter));
-    float quality = cloudDistanceLod(cameraDistance) * smoothstep(0.5, 2.0, cameraDistance * shapeTexelsPerMeterPerPixel);
-    float previousStep = 0.0;
     for (int i = 0; i < iterationCount; ++i) {
-        rayDistance = nextDistance;
-        // Transfer the omitted sample's interval to its fixed neighbour without shortening the light ray.
-        float weight = stepSize;
-        if (i % 2 == 0 && i + 1 < iterationCount) weight *= 1.0 - quality;
-        if (i % 2 == 1) weight += previousStep * quality;
-        if (weight > 0.0) {
-            vec3 position = rayDistance * rayDirection + rayOrigin;
-            vec2 uv = getGlobeUv(position);
-            float height = length(position) - bottomRadius;
-            WeatherSample weather = sampleWeather(uv, height, mipLevel);
-            MediaSample media = sampleMedia(weather, position, uv, mipLevel, jitter);
-            opticalDepth += media.extinction * weight;
-        }
-        nextDistance += stepSize;
-        previousStep = stepSize;
-        stepSize *= secondaryStepScale;
+        float cellEnd = lightDistance * float(i + 1) / float(iterationCount);
+        float midpoint = (cellStart + cellEnd) * 0.5;
+        vec3 position = midpoint * rayDirection + rayOrigin;
+        vec2 uv = getGlobeUv(position);
+        float height = length(position) - bottomRadius;
+        WeatherSample weather = sampleWeather(uv, height, mipLevel);
+        MediaSample media = sampleMedia(weather, position, uv, mipLevel, jitter);
+        opticalDepth += media.extinction * (cellEnd - cellStart);
+        cellStart = cellEnd;
     }
+    rayDistance = cellStart;
     return opticalDepth;
 }
 float marchOpticalDepth(
@@ -1936,9 +1838,15 @@ CloudRayIntervals getCloudRayIntervals(const vec3 origin, const vec3 direction, 
     return intervals;
 }
 vec4 marchClouds(
-const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const float cosTheta, const float jitter, const float rayStartTexelsPerPixel, out float frontDepth, out ivec3 sampleCount, out vec4 traceStats
+const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const float cosTheta, const float jitter, const float rayStartTexelsPerPixel, const float modelDistance, out vec4 modelFrontColor, out float modelFrontDepth, out float frontDepth, out ivec3 sampleCount, out vec4 traceStats
 ) {
     vec3 radianceIntegral = vec3(0.0);
+    vec3 modelFrontRadiance = vec3(0.0);
+    float modelFrontTransmittance = 1.0;
+    float modelFrontDistanceSum = 0.0;
+    float modelFrontWeight = 0.0;
+    modelFrontColor = vec4(0.0);
+    modelFrontDepth = -1.0;
     sampleCount = ivec3(0);
     float transmittanceIntegral = 1.0;
     float weightedDistanceSum = 0.0;
@@ -1952,11 +1860,16 @@ const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const floa
     int segmentIndex = 0;
     float cellStart = intervals.segment0.x;
     float remainingLength = intervals.length;
+    float previousExtinction = 0.0;
     for (int i = 0; i < maxIterationCount; ++i) {
         if (segmentIndex >= intervals.count) break;
         vec2 segment = cloudIntervalAt(intervals, segmentIndex);
         float quality = cloudDistanceLod(cellStart) * smoothstep(0.5, 2.0, cellStart * shapeTexelsPerMeterPerPixel);
-        float desiredStep = min(maxStepSize, minStepSize + (perspectiveStepScale - 1.0) * cellStart) * mix(1.0, 2.0, quality);
+        // Coarse empty-space steps still sample each shell at least four times;
+        // use the saved budget at actual translucent cloud edges.
+        float edgeScale = previousExtinction > minExtinction
+            ? mix(0.5, 1.0, smoothstep(0.005, 0.04, previousExtinction)) : 2.0;
+        float desiredStep = min(maxStepSize, minStepSize * edgeScale + (perspectiveStepScale - 1.0) * cellStart) * mix(1.0, 2.0, quality);
         // Reserve four samples in later intervals instead of spending the whole budget on the first shell.
         int available = max(1, maxIterationCount - i - 4 * (intervals.count - segmentIndex - 1));
         float budgetStep = (segment.y - cellStart) / float(available);
@@ -1985,10 +1898,11 @@ const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const floa
         #endif // DEBUG_SHOW_SAMPLE_COUNT
         
         if (!any(greaterThan(weather.density, vec4(minDensity)))) {
+            previousExtinction = 0.0;
             continue;
         }
-        // Sample detailed participating media.
         MediaSample media = sampleMedia(weather, position, uv, mipLevel, jitter, sampleCount);
+        previousExtinction = media.extinction;
         if (media.extinction > minExtinction) {
             vec3 skyIrradiance;
             vec3 sunIrradiance = getCloudsSunSkyIrradiance(position, height, skyIrradiance);
@@ -2011,6 +1925,12 @@ const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const floa
             }
             float scattering = approximateMultipleScattering(opticalDepth, cosTheta);
             vec3 radiance = albedo * sunIrradiance * scattering;
+            #ifdef POWDER
+                // Powder affects the directional solar lobe. Sky and ground
+                // fill must survive in optically thin, translucent cloud edges.
+                float powder = 1.0 - powderScale * exp(-media.extinction * powderExponent);
+                radiance *= mix(1.0, powder, smoothstep(-0.2, 0.6, cosTheta));
+            #endif
             #ifdef GROUND_IRRADIANCE
                 // Fudge factor for the irradiance from ground.
                 if (height < shadowTopHeight && mipLevel < 0.5) {
@@ -2028,9 +1948,6 @@ const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const floa
             // Finally multiply by extinction (redundant but kept for clarity).
             
             radiance *= media.extinction;
-            #ifdef POWDER
-                radiance *= 1.0 - powderScale * exp(-media.extinction * powderExponent);
-            #endif // POWDER
             
             #ifdef DEBUG_SHOW_CASCADES
                 if (height < shadowTopHeight) {
@@ -2042,14 +1959,33 @@ const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const floa
             float transmittance = exp(-media.extinction * stepSize);
             float clampedExtinction = max(media.extinction, 1e-7);
             vec3 scatteringIntegral = (radiance - radiance * transmittance) / clampedExtinction;
+            // Share density and lighting samples with the background integration.
+            // Only the part of this cell before the model can occlude it. A
+            // partial cell uses its own Beer transmittance, not a depth mask on
+            // the already accumulated background-cloud colour.
+            float prefixLength = modelDistance > 0.0
+                ? clamp(modelDistance - (cellEnd - stepSize), 0.0, stepSize) : 0.0;
+            if (prefixLength > 0.0) {
+                float prefixTransmittance = exp(-media.extinction * prefixLength);
+                float prefixWeight = modelFrontTransmittance * (1.0 - prefixTransmittance);
+                modelFrontRadiance += modelFrontTransmittance * radiance *
+                    (1.0 - prefixTransmittance) / clampedExtinction;
+                modelFrontTransmittance *= prefixTransmittance;
+                modelFrontDistanceSum += prefixWeight * (cellEnd - stepSize - rayNearFar.x +
+                    cloudCellCentroid(media.extinction, prefixLength));
+                modelFrontWeight += prefixWeight;
+            }
+            float opacityWeight = transmittanceIntegral * (1.0 - transmittance);
+            weightedDistanceSum += opacityWeight * (cellEnd - stepSize - rayNearFar.x +
+                cloudCellCentroid(media.extinction, stepSize));
+            transmittanceSum += opacityWeight;
             radianceIntegral += transmittanceIntegral * scatteringIntegral;
             transmittanceIntegral *= transmittance;
             
             // Aerial perspective affecting clouds
             
             // See 5.9.1 in https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/s2016-pbs-frostbite-sky-clouds-new.pdf
-            weightedDistanceSum += rayDistance * transmittanceIntegral;
-            transmittanceSum += transmittanceIntegral;
+
         }
         if (transmittanceIntegral <= minTransmittance) {
             traceStats.y = 0.0;
@@ -2059,6 +1995,8 @@ const vec3 rayOrigin, const vec3 rayDirection, const vec2 rayNearFar, const floa
     if (segmentIndex >= intervals.count) traceStats.y = 0.0;
     // The final product of 5.9.1 and we'll evaluate this in aerial perspective.
     frontDepth = transmittanceSum > 0.0 ? weightedDistanceSum / transmittanceSum : -1.0;
+    modelFrontColor = vec4(modelFrontRadiance, remapClamped(modelFrontTransmittance, 1.0, minTransmittance));
+    modelFrontDepth = modelFrontWeight > 0.0 ? modelFrontDistanceSum / modelFrontWeight : -1.0;
     return vec4(radianceIntegral, remapClamped(transmittanceIntegral, 1.0, minTransmittance));
 }
 #ifdef SHADOW_LENGTH
@@ -2443,15 +2381,11 @@ vec2 getRayNearFar(const IntersectionResult intersections) {
     }
 #endif // HAZE
 float getRayDistanceToScene(const vec3 rayDirection) {
-    float depth = readDepth(vUv * targetUvScale + temporalJitter);
-    if (depth < 1.0 - 1e-7) {
-        depth = czm_reverseLogDepth(depth);
-        float viewZ = getViewZ(depth);
-        return -viewZ / dot(rayDirection, vCameraDirection);
-    }
-    return -1.0;
+    float distance = betterSkySceneDistance(depthBuffer, vUv * targetUvScale + temporalJitter);
+    return distance > 0.0 ? distance : -1.0;
 }
 void main() {
+    outputModelFrontColor = vec4(0.0);
     #ifdef DEBUG_SHOW_SHADOW_MAP
         outputColor = getCascadedShadowMaps(vUv);
         outputDepthVelocity = vec4(0.0);
@@ -2490,6 +2424,10 @@ void main() {
     float frontDepth = rayNearFar.y;
     vec4 depthVelocity = vec4(0.0);
     float shadowLength = 0.0;
+    vec2 sceneUv = vUv * targetUvScale + temporalJitter;
+    vec4 modelDepth = texture(u_betterSkyDepth, sceneUv);
+    float modelDistance = u_betterSkyModelDepthAvailable && modelDepth.a >= 1.0 / 255.0
+        ? modelDepth.b : 0.0;
     // Derivatives must run on both sides of terrain silhouettes, before divergent tracing.
     vec3 lodRayOrigin = max(cameraNear, rayNearFar.x) * rayDirection + cameraPosition;
     vec2 globeUv = getGlobeUv(lodRayOrigin);
@@ -2507,10 +2445,12 @@ void main() {
         #endif // DEBUG_SHOW_UV
         
         float marchedFrontDepth;
+        float modelFrontDepth;
+        vec4 modelFrontColor;
         ivec3 sampleCount = ivec3(0);
         vec4 traceStats;
         color = marchClouds(
-        rayOrigin, rayDirection, rayNearFar, cosTheta, mix(stbn, 0.5, smoothstep(25000.0, 100000.0, rayNearFar.x)), pow(2.0, mipLevel), marchedFrontDepth, sampleCount, traceStats
+        rayOrigin, rayDirection, rayNearFar, cosTheta, mix(stbn, 0.5, smoothstep(25000.0, 100000.0, rayNearFar.x)), pow(2.0, mipLevel), modelDistance, modelFrontColor, modelFrontDepth, marchedFrontDepth, sampleCount, traceStats
         );
         #ifdef DEBUG_SHOW_SAMPLE_COUNT
             outputColor = vec4(vec3(sampleCount) / vec3(2048.0, 8192.0, 2048.0), 1.0);
@@ -2548,16 +2488,28 @@ void main() {
         // Apply aerial perspective.
         vec3 frontPosition = cameraPosition + frontDepth * rayDirection;
         applyAerialPerspective(cameraPosition, frontPosition, shadowLength, color);
+        if (modelFrontDepth >= 0.0 && modelFrontColor.a > 0.0) {
+            vec3 modelFrontPosition = cameraPosition + (rayNearFar.x + modelFrontDepth) * rayDirection;
+            applyAerialPerspective(cameraPosition, modelFrontPosition,
+                min(shadowLength, modelDistance), modelFrontColor);
+            outputModelFrontColor = modelFrontColor;
+        }
         
         // Velocity for temporal resolution.
         
-        vec3 frontPositionWorld = ECEFToWorld(frontPosition);
+        vec3 previousFrontPosition = frontPosition;
+        bool reliableMotion = cloudPreviousPosition(frontPosition, mipLevel, previousFrontPosition);
+        vec3 frontPositionWorld = ECEFToWorld(previousFrontPosition);
         vec4 prevClip = reprojectionMatrix * vec4(frontPositionWorld, 1.0);
-        prevClip /= prevClip.w;
-        vec2 prevUv = prevClip.xy * 0.5 + 0.5;
-        vec2 velocity = (vUv * targetUvScale - prevUv) * resolution;
-        float previousDepth = length(frontPositionWorld - previousCameraPosition);
-        depthVelocity = vec4(frontDepth, velocity, previousDepth);
+        if (reliableMotion && prevClip.w > 1e-6 && !any(isnan(prevClip)) && !any(isinf(prevClip))) {
+            vec2 prevUv = prevClip.xy / prevClip.w * 0.5 + 0.5;
+            vec2 velocity = (vUv * targetUvScale - prevUv) * resolution;
+            float previousDepth = length(frontPositionWorld - previousCameraPosition);
+            depthVelocity = vec4(frontDepth, velocity, previousDepth);
+        } else {
+            // Zero expected depth explicitly rejects the history at this sample.
+            depthVelocity = vec4(frontDepth, 0.0, 0.0, 0.0);
+        }
     }
     else {
         #ifdef SHADOW_LENGTH

@@ -1,6 +1,4 @@
 
-#version 300 es
-#define LOG_DEPTH
 #define SHADER_TYPE RawShaderMaterial
 #define SHADER_NAME CloudsMaterial
 #define PI 3.141592653589793
@@ -491,7 +489,7 @@ void sampleSunSkyIrradiance(const vec3 positionECEF) {
 void main() {
     vUv = position.xy * 0.5 + 0.5;
     vec2 rayClip = vUv * targetUvScale * 2.0 - 1.0;
-    vec4 viewPosition = inverseProjectionMatrix * vec4(rayClip, position.z, 1.0);
+    vec4 viewPosition = inverseProjectionMatrix * vec4(rayClip, 0.0, 1.0);
     vec4 worldDirection = inverseViewMatrix * vec4(viewPosition.xyz, 0.0);
     mat3 rotation = mat3(inverseEllipsoidMatrix);
     vCameraPosition = rotation * cameraPosition;

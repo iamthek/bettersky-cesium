@@ -111,7 +111,7 @@ import { BetterSky } from 'bettersky-cesium'
 const betterSkyInstance = new BetterSky(viewer, {
   time: null, // Preserve the application's time.
   coverage: 0.5,
-  cloud: { densityScales: [0.12, 0.09, 0.0015, 0] },
+  cloud: { densityScales: [0.12, 0.025, 0.001, 0] },
 })
 
 betterSkyInstance.update({ cloud: { heights: [1300, 1800, 650, 0] } })
@@ -122,6 +122,23 @@ betterSkyInstance.update({ enabled: true })
 `new BetterSky(viewerOrScene, options?)` accepts a Viewer or Scene. Passing a Scene does not set a Viewer clock. The instance registers its render stages and per-frame updates automatically; do not add `betterSkyInstance.stage` again or manually call lower-level updates.
 
 Constructor options merge with the defaults; `update()` merges with the accepted configuration. Nested objects merge by field, and arrays are replaced as a whole. Omitted fields keep their values. Explicit `undefined` is treated as omission except for `time`; use `null` only for fields that explicitly support it. Invalid fields or values are rejected during parameter validation.
+
+The default uses unified natural lighting: native terrain and PBR models, the calibrated Gaussian layer, and the sky are composited in linear HDR before one exposure, tone map, and display encoding. PBR models retain their textures, normals, and roughness, with direct sunlight and dynamic sky environment lighting. Gaussian scans use source-color-space conversion and EV calibration while retaining their baked self-shadows. Clouds and atmosphere in front still occlude both model types; transparent holes show the background.
+
+HDR is enabled by default. `highDynamicRange: null` explicitly inherits the host, while `false` selects LDR-compatible compositing. Terrain depth testing defaults to `true`; explicitly use `null` to inherit the host. Explicit scene settings are governed by `applySceneSettings`; disabling or disposing restores host values captured before this instance took control.
+
+```js
+betterSkyInstance.update({
+  lighting: {
+    sunIntensity: 2.0,
+    ambientIntensity: 1.2,
+    shadows: { enabled: true, maximumDistance: 1500, size: 1024, softShadows: true },
+  },
+  gaussianSplat: { colorSpace: 'srgb', exposureOffset: -0.5, daylightResponse: true },
+})
+```
+
+`gaussianSplat.colorSpace: 'auto'` reads asset color-space metadata. For legacy SPZ2 assets without that metadata, explicitly configure the source space as demo2 does. Splats blend in their source space before conversion to unified linear color; darkening them does not change alpha. Daylight response is not PBR relighting using proxy normals. The unpublished `preserveModelColors` pixel-restoration option has been removed.
 
 ### Configuration snapshots and asset loading
 
@@ -197,10 +214,10 @@ Adjust surface and cloud fill lighting separately instead of relying only on glo
 
 ```js
 betterSkyInstance.update({
-  irradianceScale: 0.15,
+  irradianceScale: 1.0,
   aerialPerspectiveStrength: 0.2,
   volumetricLight: { mode: 'volumetric', intensity: 2 },
-  cloud: { skyIrradianceScale: 1.8, groundIrradianceScale: 1.3 },
+  cloud: { skyIrradianceScale: 1.2, groundIrradianceScale: 0.8 },
 })
 ```
 
@@ -263,22 +280,37 @@ The defaults below match `BetterSky.getDefaultOptions()` in version 1.0.0. All n
 | Parameter | Type | Default | Meaning / range |
 | --- | --- | --- | --- |
 | `enabled` | boolean | `true` | Master switch coordinating configured HBAO, SMAA, and volumetric light; retains resources when disabled. |
-| `coverage` | number | `0.34` | Overall weather coverage `[0, 1]`, controlled separately from per-layer density. |
+| `coverage` | number | `0.3` | Overall weather coverage `[0, 1]`, controlled separately from per-layer density. |
 | `localWeatherVelocity` | 2D vector | `[0.0003, 0.0001]` | Weather map UV offset per second. Negative values reverse direction; `[0, 0]` stops weather map movement. |
-| `toneMappingMode` | number | `9` | `2` Reinhard2, `4` Uncharted2, `7` AgX, `8` Neutral, `9` ACES, `10` Linear, `11` Reinhard, `12` Cineon. Changes rebuild the sky stage. Mode `3` is unsupported. |
-| `toneMappingExposure` | number | `2.8` | Nonnegative brightness multiplier; higher values are brighter. Not measured in EV. |
-| `irradianceScale` | number | `0.15` | Nonnegative surface irradiance multiplier, separate from cloud fill lighting. |
+| `toneMappingMode` | number | `8` | `2` Reinhard2, `4` Uncharted2, `7` AgX, `8` PBR Neutral, `9` ACES, `10` Linear, `11` Reinhard, `12` Cineon. Mode `3` is unsupported. |
+| `toneMappingExposure` | number | `1.0` | Nonnegative unified HDR brightness multiplier for terrain, models, and sky; not measured in EV. |
+| `irradianceScale` | number | `1.0` | Nonnegative terrain lighting gain, separate from PBR environment fill and cloud fill. |
 | `aerialPerspectiveStrength` | number | `0.15` | Surface aerial perspective blend strength `[0, 1]`; `0` disables this blend. |
 | `nightGlowIntensity` | number | `0.5` | Night sky glow modulation. Any finite number is accepted; `[0, 1]` is recommended. |
 | `bloomIntensity` | number | `0.002` | Nonnegative bloom intensity; `0` removes its intensity contribution without releasing the stage. |
 | `systemLight` | boolean | `true` | Follows Cesium's sun direction; keeping `true` is recommended. See [Notes](#notes). |
 | `applySceneSettings` | boolean | `true` | Controls whether scene settings apply in the current call. See [Scene settings and disposal](#scene-settings-and-disposal). |
-| `highDynamicRange` | boolean | `true` | Scene HDR, governed by `applySceneSettings` in the current call. |
+| `highDynamicRange` | boolean / null | `true` | Unified HDR by default; `null` explicitly inherits the host and `false` selects LDR-compatible compositing, governed by `applySceneSettings`. |
+| `depthTestAgainstTerrain` | boolean / null | `true` | Terrain depth testing; `null` inherits the host, explicit booleans are governed by `applySceneSettings`. |
 | `logarithmicDepthBuffer` | boolean | `true` | Scene logarithmic depth, governed by `applySceneSettings` in the current call. |
 | `gamma` | number | `2.2` | Positive scene display gamma, separate from HBAO gamma. |
-| `hbao` | boolean / object | HBAO options below | `false` disables; `true` enables; an object overrides specified values and enables HBAO. Re-enabling restores saved values. |
+| `hbao` | object | HBAO options below | Weak contact occlusion with about 15% maximum default darkening; `enabled` controls the switch independently. |
 | `smaa` | boolean | `true` | SMAA anti-aliasing for the final image. |
 | `time` | string / null / undefined | `"2026-05-01T06:00Z"` | Valid ISO 8601 time; `Z` means UTC. Omitting it during construction uses the preset time; explicit `null` / `undefined` preserves the application clock. Omitting it in `update()` also preserves the clock. Has no effect when only a Scene is provided. |
+
+### Natural lighting and Gaussian calibration
+
+| Option | Type | Default | Meaning and range |
+| --- | --- | --- | --- |
+| `lighting.sunIntensity` | number | `2.0` | Nonnegative direct sunlight intensity, separate from sky fill. |
+| `lighting.ambientIntensity` | number | `1.2` | Nonnegative environment-map brightness for PBR shadow detail; does not alter materials. |
+| `lighting.shadows.enabled` | boolean | `true` | Nearby building shadows received by terrain; no proxy building shadows from splats. |
+| `lighting.shadows.maximumDistance` | number | `1500` | Positive finite shadow distance in meters. |
+| `lighting.shadows.size` | number | `1024` | Positive power-of-two shadow-map edge length. |
+| `lighting.shadows.softShadows` | boolean | `true` | Native soft-shadow filtering. |
+| `gaussianSplat.colorSpace` | string | `auto` | `auto`, `srgb`, or `linear` for source color-space conversion. |
+| `gaussianSplat.exposureOffset` | number | `-0.5` | Finite EV offset, possibly negative; `-1` halves linear brightness and `+1` doubles it. |
+| `gaussianSplat.daylightResponse` | boolean | `true` | Smooth solar-elevation response while preserving baked scan detail and self-shadows. |
 
 ### Cloud layers and visibility
 
@@ -289,12 +321,12 @@ The defaults below match `BetterSky.getDefaultOptions()` in version 1.0.0. All n
 | `cloud.layerTypes` | Three-element array / null | `["cumulus", "altocumulus", "cirrus"]` | Each element is `cumulus`, `altocumulus`, or `cirrus`; `null` uses generic cloud shapes. |
 | `cloud.altitudes` | 4D vector | `[4000, 6000, 10000, 0]` | Cloud base altitudes in meters; each component must be finite. |
 | `cloud.heights` | 4D vector | `[1300, 1800, 650, 0]` | Nonnegative cloud thicknesses in meters; cloud top = base altitude + thickness. |
-| `cloud.densityScales` | 4D vector | `[0.12, 0.09, 0.0015, 0]` | Nonnegative cloud density multipliers; `0` removes the medium in that layer. |
-| `cloud.shapeDetailAmounts` | 4D vector | `[0.18, 0.12, 0, 0]` | Each component is `[0, 1]`; higher values produce more eroded cloud edges. |
+| `cloud.densityScales` | 4D vector | `[0.12, 0.025, 0.001, 0]` | Nonnegative cloud density multipliers; `0` removes the medium in that layer. |
+| `cloud.shapeDetailAmounts` | 4D vector | `[0.25, 0.15, 0.05, 0]` | Each component is `[0, 1]`; higher values produce more eroded cloud edges. |
 | `cloud.lodRange` | Two-element array / null | `[200000, 500000]` | Near/far camera distance thresholds for detail, in meters, with `0 ≤ near < far`; `null` disables distance-based LOD. |
 | `cloud.altitudeFadeRange` | Two-element array / null | `[30000, 90000]` | Fade range based on camera ellipsoid height, in meters, with `0 ≤ start < end`; affects clouds, cloud shadows, and related light shafts. `null` disables fading. |
-| `cloud.skyIrradianceScale` | number | `1.8` | Nonnegative sky fill multiplier affecting clouds and legacy haze. |
-| `cloud.groundIrradianceScale` | number | `1.3` | Nonnegative ground-reflected fill multiplier for clouds, separate from `irradianceScale`. |
+| `cloud.skyIrradianceScale` | number | `1.2` | Nonnegative sky fill multiplier affecting clouds and legacy haze. |
+| `cloud.groundIrradianceScale` | number | `0.8` | Nonnegative ground-reflected fill multiplier for clouds, separate from `irradianceScale`. |
 
 Distance-based LOD does not move the clouds or disable camera altitude fading. By default, clouds fade out completely at a camera altitude of 90 km. Adjust the range or pass `null` if clouds should remain visible at higher altitudes.
 
@@ -342,15 +374,19 @@ These fields control the older haze path in `legacy` mode. `cloud.maxShadowLengt
 
 Haze is also modulated by effective cloud coverage after camera altitude fading: its contribution is zero at coverage ≤ 0.2 and increases gradually between 0.2–0.4. Local mode also requires at least one of the first two layers to be active and cast cloud shadows. Increasing haze density alone cannot bypass these conditions.
 
+Required sky assets and GPU commands prepare while the native scene continues rendering. Sky takeover, Gaussian redirection and HDR tone mapping switch together at a frame boundary. Failed required resources retain native rendering; `retryAssets()` prepares a new activation. `loadAssets()` describes asset readiness, not the first visible rendered frame.
+
 ### Cloud denoising
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `cloud.denoise.temporalAlpha` | number | `0.04` | Current-frame weight [0, 1]; lower values rely more on history and reduce noise more strongly. |
-| `cloud.denoise.currentFrameAlpha` | number | `0.08` | Current-frame weight [0, 1] for newly sampled pixels; higher values reveal new detail sooner but can expose more noise. |
-| `cloud.denoise.motionAlpha` | number | `0.25` | Raises the accumulation baseline during camera motion, in [0, 1]; the final blend weight still adapts. |
-| `cloud.denoise.varianceGamma` | number | `2` | Positive finite variance clipping multiplier; higher values allow a wider range of historical colors. |
-| `cloud.denoise.spatialFilterStrength` | number | `0.8` | Depth/transparency-aware reconstruction strength [0, 1]; higher values smooth more but lose more detail. |
+| `cloud.denoise.temporalAlpha` | number | `0.12` | Current-frame weight [0, 1]; lower values rely more on history and reduce noise more strongly. |
+| `cloud.denoise.currentFrameAlpha` | number | `0.35` | Current-frame weight [0, 1] for newly sampled pixels; higher values reveal new detail sooner but can expose more noise. |
+| `cloud.denoise.motionAlpha` | number | `0.6` | Raises the accumulation baseline during camera motion, in [0, 1]; the final blend weight still adapts. |
+| `cloud.denoise.varianceGamma` | number | `1.25` | Positive finite variance clipping multiplier; higher values allow a wider range of historical colors. |
+| `cloud.denoise.spatialFilterStrength` | number | `0.35` | Depth/transparency-aware reconstruction strength [0, 1]; higher values smooth more but lose more detail. |
+
+Cloud motion reprojection includes weather advection as well as camera motion. Invalid depth, newly exposed regions and changing coverage reject history independently; the motion weight remains a lower bound for distant clouds. Internal HDR pre-exposure keeps the solar disk finite and is reversed before tone mapping, without changing material exposure. Lens flare follows solar visibility rather than arbitrary bright clouds.
 
 Greater reliance on history reduces noise but can increase ghosting; stronger spatial filtering softens detail. SMAA handles final-image edges and does not replace cloud denoising.
 
@@ -363,13 +399,13 @@ Enabled by default with the values below and `denoise: true`. Use the object for
 | Parameter | Type | Default | Meaning / range |
 | --- | --- | --- | --- |
 | `hbao.enabled` | boolean | `true` | Enables HBAO while retaining all numeric values when false. |
-| `hbao.intensity` | number | `100` | Nonnegative occlusion intensity exponent; higher values deepen contact shadows. |
-| `hbao.maxRadius` | number | `30` | Nonnegative sample radius in meters; large values may cause dark halos. |
+| `hbao.intensity` | number | `20` | Nonnegative occlusion intensity exponent; higher values deepen contact shadows. |
+| `hbao.maxRadius` | number | `5` | Nonnegative sample radius in meters; large values may cause dark halos. |
 | `hbao.bias` | number | `0.1` | Finite angular bias in radians; increasing it can reduce self-occlusion. |
 | `hbao.frustumLength` | number | `100000` | Positive maximum processing depth in meters. |
-| `hbao.blackPoint` | number | `0.05` | Input black point, `[0, 1)`. |
-| `hbao.whitePoint` | number | `0.9` | Nonnegative output brightness multiplier. |
-| `hbao.gamma` | number | `2.5` | Positive AO curve exponent, separate from scene `gamma`. |
+| `hbao.blackPoint` | number | `0` | Input black point in `[0, 1)`; no shadow clipping by default. |
+| `hbao.whitePoint` | number | `0.85` | Nonnegative output multiplier; defaults retain at least about 85% brightness. |
+| `hbao.gamma` | number | `1.0` | Positive AO curve exponent, separate from scene `gamma`; no extra midtone compression by default. |
 | `hbao.denoise` | boolean | `true` | Bilateral filtering switch, configurable only during construction; dispose and recreate to change it. |
 
 The `BetterSkyUpdateOptions` type excludes `hbao.denoise`. JavaScript runtime validation also rejects changing it; supplying its current value does not throw.
@@ -394,15 +430,15 @@ const betterSkyInstance = new BetterSky(viewer, options)
 
 | When | Effect on the host |
 | --- | --- |
-| Construction with `applySceneSettings: true` | Sets HDR, logarithmic depth, and gamma, and enables terrain depth testing. |
+| Construction with `applySceneSettings: true` | Applies lighting, default HDR, logarithmic depth, and gamma; terrain depth testing is enabled by default. |
 | Construction / update with a valid time string | Changes the Viewer clock; `null` or omitted update time preserves it, and a Scene has no separate clock. |
 | First enabled frame | Temporarily takes over the built-in sky, atmosphere, sun, fog, and some globe settings; sets the tile cache to 2000 and maximum screen-space error to 2. |
-| Disable / dispose | Restores the sky and globe settings captured when enabled. |
+| Disable / dispose | Restores captured sky, globe, light, environment, HDR, shadow, and anti-aliasing state. |
 | `update()` | Persists `applySceneSettings` and applies supplied scene fields only while it is true; an omitted value retains the previous switch. |
 
-`applySceneSettings: false` prevents SDK-managed scene fields from changing until a later update explicitly sets it back to true. Re-enabling it applies the scene fields retained in the accepted configuration; calls made while it stays true apply only scene fields supplied in that call. It does not prevent sky takeover or an explicit time update.
+`applySceneSettings: false` prevents SDK-managed scene fields from changing until a later update explicitly sets it back to true. Re-enabling it applies the scene fields retained in the accepted configuration; calls made while it stays true apply only scene fields supplied in that call. `null` HDR and terrain-depth settings always leave the host value alone. It does not prevent sky takeover or an explicit time update.
 
-Clock, HDR, gamma, logarithmic depth, and terrain depth testing are not automatically restored on disable / disposal. Save and restore their original values in the application if needed. Disposal releases rendering resources owned by the instance but leaves installed context helper methods in place. Do not continue using cached Pass or stage references.
+The Viewer clock is controlled by explicit time parameters; save it in the application if clock rollback is required. Disposal releases rendering resources owned by the instance without destroying host lights, environment maps, or terrain providers. Do not continue using cached Pass or stage references.
 
 ### Continuous rendering and performance
 

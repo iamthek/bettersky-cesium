@@ -1,9 +1,10 @@
 uniform sampler2D u_volumetricLightBefore;
 uniform sampler2D u_volumetricLightAfter;
 uniform sampler2D u_volumetricLightDepth;
-uniform sampler2D u_volumetricLightSceneDepth;
+uniform sampler2D u_volumetricLightModelPrefix;
 uniform sampler2D u_volumetricLightCloudDepth;
 uniform bool u_volumetricLightEnabled;
+uniform bool u_volumetricLightModelPrefixAvailable;
 uniform float u_volumetricLightMaxDistance;
 uniform mat4 u_volumetricLightInverseProjection;
 uniform mat4 u_volumetricLightInverseView;
@@ -15,10 +16,11 @@ uniform float u_volumetricLightLayerBottom;
 uniform float u_volumetricLightLayerTop;
 
 float volumetricLightCompositeSceneDistance(vec2 uv) {
-    float depth = czm_unpackDepth(texture(u_volumetricLightSceneDepth, uv));
-    if (depth >= 1.0 - 1e-7) return u_volumetricLightMaxDistance + 1.0;
-    vec4 eye = czm_windowToEyeCoordinates(uv * czm_viewport.zw, depth);
-    return min(length(eye.xyz / eye.w), u_volumetricLightMaxDistance + 1.0);
+    // This module is embedded in AerialPerspectiveEffect, whose depthTexture
+    // already names the same native depth. Reuse its sampler unit.
+    float distance = betterSkySceneDistance(depthTexture, uv);
+    return distance > 0.0 ? min(distance, u_volumetricLightMaxDistance + 1.0)
+        : u_volumetricLightMaxDistance + 1.0;
 }
 
 vec2 volumetricLightCompositeSphere(vec3 origin, vec3 ray, float radius) {
@@ -137,5 +139,100 @@ vec3 compositeVolumetricLight(vec2 uv, vec3 baseAtmosphere, vec4 cloud) {
     if (weightSum <= 1e-6) return cloud.rgb + (1.0 - cloud.a) * baseAtmosphere;
     before /= weightSum;
     after /= weightSum;
-    return before.rgb + before.a * (cloud.rgb + (1.0 - cloud.a) * (after.rgb + after.a * baseAtmosphere));
+    return before.rgb * BS_ATMOSPHERE_RADIANCE_SCALE + before.a * (cloud.rgb + (1.0 - cloud.a) *
+        (after.rgb * BS_ATMOSPHERE_RADIANCE_SCALE + after.a * baseAtmosphere));
+}
+
+// A fog prefix may end before the opaque surface. Recovering its back segment
+// uses composition identities, never the fog behind the Gaussian endpoint:
+// prefix = before + Tbefore * after; Tprefix = Tbefore * Tafter.
+vec4 volumetricLightPrefixAfter(vec4 prefix, vec4 before) {
+    return vec4(max(prefix.rgb - before.rgb, vec3(0.0)) / max(before.a, 1e-6),
+        clamp(prefix.a / max(before.a, 1e-6), 0.0, 1.0));
+}
+
+vec3 compositeVolumetricLightToDistance(vec2 uv, vec3 baseAtmosphere, vec4 frontCloud, float modelDistance) {
+    if (!u_volumetricLightEnabled || !u_volumetricLightModelPrefixAvailable || modelDistance <= 0.0) {
+        return frontCloud.rgb + (1.0 - frontCloud.a) * baseAtmosphere;
+    }
+    float cloudDistance = texture(u_volumetricLightCloudDepth, uv).r;
+    bool hasCloud = frontCloud.a > 0.001 && cloudDistance > 0.0;
+    vec2 dimensions = vec2(textureSize(u_volumetricLightModelPrefix, 0));
+    vec2 grid = uv * dimensions - 0.5;
+    vec2 anchor = floor(grid);
+    vec2 fraction = fract(grid);
+    vec4 before = vec4(0.0);
+    vec4 after = vec4(0.0);
+    float totalWeight = 0.0;
+    float frontFraction = -1.0;
+    for (int tap = 0; tap < 4; ++tap) {
+        vec2 offset = vec2(tap % 2, tap / 2);
+        vec2 sampleUv = clamp((anchor + offset + 0.5) / dimensions, 0.5 / dimensions, 1.0 - 0.5 / dimensions);
+        vec4 sourceModel = texture(u_betterSkyDepth, sampleUv);
+        if (sourceModel.b <= 0.0 || sourceModel.a < 1.0 / 255.0) continue;
+        float error = abs(sourceModel.b - modelDistance) / max(20.0, modelDistance * 0.02);
+        if (error > 3.0) continue;
+        vec4 prefix = texture(u_volumetricLightModelPrefix, sampleUv);
+        vec4 sampleBefore = prefix;
+        vec4 sampleAfter = vec4(0.0, 0.0, 0.0, 1.0);
+        if (hasCloud && cloudDistance < modelDistance) {
+            vec4 geometry = texture(u_volumetricLightDepth, sampleUv);
+            if (geometry.x < 0.0) continue;
+            float cloudError = abs(geometry.z - cloudDistance) / max(60.0, cloudDistance * 0.02);
+            if (geometry.w <= 0.001 || cloudError > 1.0) {
+                // Reposition this prefix around the full-resolution cloud front,
+                // as the ordinary fog upsampler does at cloud silhouettes.
+                if (frontFraction < 0.0) {
+                    frontFraction = volumetricLightCompositeFrontFraction(uv, modelDistance, cloudDistance);
+                }
+                float beforeT = pow(max(prefix.a, 1e-6), frontFraction);
+                float afterT = pow(max(prefix.a, 1e-6), 1.0 - frontFraction);
+                vec3 source = prefix.rgb / max(1.0 - prefix.a, 1e-6);
+                sampleBefore = vec4(source * (1.0 - beforeT), beforeT);
+                sampleAfter = vec4(source * (1.0 - afterT), afterT);
+            } else {
+                vec4 opaqueBefore = texture(u_volumetricLightBefore, sampleUv);
+                // The opaque path has temporal filtering, the prefix does not.
+                // Bound the before segment to the current prefix before taking
+                // their difference, so noise cannot create negative scattering.
+                sampleBefore = vec4(clamp(opaqueBefore.rgb, vec3(0.0), max(prefix.rgb, vec3(0.0))),
+                    clamp(opaqueBefore.a, prefix.a, 1.0));
+                sampleAfter = volumetricLightPrefixAfter(prefix, sampleBefore);
+            }
+        }
+        vec2 bilinear = mix(1.0 - fraction, fraction, offset);
+        float weight = max(bilinear.x * bilinear.y, 1e-5) * exp(-error * error);
+        before += sampleBefore * weight;
+        after += sampleAfter * weight;
+        totalWeight += weight;
+    }
+    if (totalWeight <= 1e-6) {
+        // Thin Gaussian edges can miss the coarse proxy grid. Build only the
+        // endpoint's optical fraction instead of applying an opaque-length fog
+        // integral to a nearer model or introducing a hard no-fog outline.
+        vec4 fullBefore = texture(u_volumetricLightBefore, uv);
+        vec4 fullAfter = texture(u_volumetricLightAfter, uv);
+        float totalT = fullBefore.a * fullAfter.a;
+        vec3 totalScatter = fullBefore.rgb + fullBefore.a * fullAfter.rgb;
+        float endpointFraction = volumetricLightCompositeFrontFraction(uv,
+            volumetricLightCompositeSceneDistance(uv), modelDistance);
+        float prefixT = pow(max(totalT, 1e-6), endpointFraction);
+        vec3 source = totalScatter / max(1.0 - totalT, 1e-6);
+        vec4 prefix = vec4(source * (1.0 - prefixT), prefixT);
+        if (hasCloud && cloudDistance < modelDistance) {
+            frontFraction = volumetricLightCompositeFrontFraction(uv, modelDistance, cloudDistance);
+            float beforeT = pow(max(prefix.a, 1e-6), frontFraction);
+            float afterT = pow(max(prefix.a, 1e-6), 1.0 - frontFraction);
+            before = vec4(source * (1.0 - beforeT), beforeT);
+            after = vec4(source * (1.0 - afterT), afterT);
+        } else {
+            before = prefix;
+            after = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+    } else {
+        before /= totalWeight;
+        after /= totalWeight;
+    }
+    return before.rgb * BS_ATMOSPHERE_RADIANCE_SCALE + before.a * (frontCloud.rgb + (1.0 - frontCloud.a) *
+        (after.rgb * BS_ATMOSPHERE_RADIANCE_SCALE + after.a * baseAtmosphere));
 }

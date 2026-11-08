@@ -1,5 +1,4 @@
 
-#version 300 es
 #define SHADER_TYPE RawShaderMaterial
 #define SHADER_NAME CloudsResolveMaterial
 #define TEMPORAL_UPSCALE 1

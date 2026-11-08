@@ -14,6 +14,12 @@ export function lensFlareFeaturesMaterial(index, inputBuffer, textureScale, texe
         vertexShader: vs,
         uniforms: {
             inputBuffer: inputBuffer.name,
+            bsSunDirection: () => that._systemLight ? that._scene.context.uniformState.sunDirectionWC
+                : that._scene.context.uniformState.sunDirectionWC2,
+            bsCloudTexture: () => that.cloudMaterialPass._colorResolveHistoryBuffer ?? that._scene.context.defaultTexture,
+            bsCloudAvailable: () => that.cloudVisibility > 0 && !!that.cloudMaterialPass._historyValid,
+            bsDepthTexture: () => that.sceneDepth.texture ?? that._scene.context.defaultTexture,
+            bsDepthAvailable: () => !!that.sceneDepth.texture,
             texelSize: () => {
                 return texelSize
             },

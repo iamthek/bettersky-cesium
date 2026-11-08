@@ -1,6 +1,4 @@
 
-#version 300 es
-#define LOG_DEPTH
 #define SHADER_TYPE RawShaderMaterial
 #define SHADER_NAME ShadowMaterial
 #define SHADOW 1
@@ -496,121 +494,8 @@ bool insideLayerIntervals(const float height) {
     bvec3 lt = lessThan(vec3(height), maxIntervalHeights);
     return any(bvec3(gt.x && lt.x, gt.y && lt.y, gt.z && lt.z));
 }
+#define BS_CLOUD_SHADOW
 /*__CLOUD_LAYER_DENSITY__*/
-struct WeatherSample {
-    vec4 heightFraction; // Normalized height of each layer
-    
-    vec4 density;
-};
-vec4 shapeAlteringFunction(const vec4 heightFraction, const vec4 bias) {
-    // Apply a semi-circle transform to round the clouds towards the top.
-    vec4 biased = pow(heightFraction, bias);
-    vec4 x = clamp(biased * 2.0 - 1.0, -1.0, 1.0);
-    return 1.0 - x * x;
-}
-WeatherSample sampleWeather(const vec2 uv, const float height, const float mipLevel) {
-    WeatherSample weather;
-    weather.heightFraction = remapClamped(vec4(height), minLayerHeights, maxLayerHeights);
-    vec4 localWeather = pow(
-    textureLod(
-    localWeatherTexture, uv * localWeatherRepeat + localWeatherOffset, mipLevel
-    ).LOCAL_WEATHER_CHANNELS, weatherExponents
-    );
-    #ifdef SHADOW
-        localWeather *= shadowLayerMask;
-    #endif // SHADOW
-    
-    vec4 heightScale = shapeAlteringFunction(weather.heightFraction, cloudHeightBias(shapeAlteringBiases));
-    
-    // Modulation to control weather by coverage parameter.
-    
-    // Reference: https://github.com/Prograda/Skybolt/blob/master/Assets/Core/Shaders/Clouds.h#L63
-    vec4 factor = 1.0 - coverage * heightScale;
-    weather.density = remapClamped(
-    mix(localWeather, vec4(1.0), coverageFilterWidths), factor, factor + coverageFilterWidths
-    );
-    return weather;
-}
-vec4 getLayerDensity(const vec4 heightFraction) {
-    // prettier-ignore
-    return densityProfile.expTerms * exp(densityProfile.exponents * heightFraction) +
-    densityProfile.linearTerms * heightFraction +
-    densityProfile.constantTerms;
-}
-struct MediaSample {
-    float density;
-    vec4 weight;
-    float scattering;
-    float extinction;
-};
-// Set per cascade before raymarching; derivatives inside the march would be divergent.
-float shadowTexelsPerPixel;
-MediaSample sampleMedia(
-const WeatherSample weather, const vec3 position, const vec2 uv, const float mipLevel, const float jitter, inout ivec3 sampleCount
-) {
-    vec4 density = weather.density;
-    
-    // TODO: Define in physical length.
-    
-    vec3 surfaceNormal = normalize(position);
-    float localWeatherSpeed = length(localWeatherOffset);
-    vec3 evolution = -surfaceNormal * localWeatherSpeed * 2e4;
-    vec3 turbulence = vec3(0.0);
-    #ifdef TURBULENCE
-        vec2 turbulenceUv = uv * localWeatherRepeat * turbulenceRepeat;
-        turbulence = turbulenceDisplacement *
-        (texture(turbulenceTexture, turbulenceUv).rgb * 2.0 - 1.0) *
-        dot(density, remapClamped(weather.heightFraction, vec4(0.3), vec4(0.0)));
-    #endif // TURBULENCE
-    
-    vec3 shapePosition = (position + evolution + turbulence) * shapeRepeat + shapeOffset;
-    int shapeSamples;
-    vec4 shape = sampleCloudLayerShape(shapePosition, density, log2(max(1.0, shadowTexelsPerPixel)), shapeSamples);
-    density = remapClamped(density, (vec4(1.0) - shape) * shapeAmounts, vec4(1.0));
-    #ifdef DEBUG_SHOW_SAMPLE_COUNT
-        sampleCount.y += shapeSamples;
-    #endif // DEBUG_SHOW_SAMPLE_COUNT
-    
-    #ifdef SHAPE_DETAIL
-        // Match the cloud density's continuous detail fade across shadow LODs.
-        float detailFootprint = shadowTexelsPerPixel *
-            (shapeDetailRepeat.x / max(shapeRepeat.x, 1e-7)) *
-            (float(textureSize(shapeDetailTexture, 0).x) / float(textureSize(shapeTexture, 0).x));
-        float detailWeight = (1.0 - smoothstep(0.0, 1.5, mipLevel)) *
-            (1.0 - smoothstep(0.5, 2.0, detailFootprint));
-        if (detailWeight > 0.0) {
-            vec3 detailPosition = (position + turbulence) * shapeDetailRepeat + shapeDetailOffset;
-            float detailLod = cloudLodRange.y > cloudLodRange.x ? log2(max(1.0, detailFootprint)) : 0.0;
-            float detail = textureLod(shapeDetailTexture, detailPosition, detailLod).r;
-            // Fluffy at the top and whippy at the bottom.
-            
-            vec4 modifier = mix(
-            vec4(pow(detail, 6.0)), vec4(1.0 - detail), remapClamped(weather.heightFraction, vec4(0.2), vec4(0.4))
-            );
-            modifier = mix(vec4(0.0), modifier, shapeDetailAmounts);
-            vec4 detailedDensity = remapClamped(density * 2.0, vec4(modifier * 0.5), vec4(1.0));
-            density = mix(density, detailedDensity, detailWeight);
-            #ifdef DEBUG_SHOW_SAMPLE_COUNT
-                ++sampleCount.z;
-            #endif // DEBUG_SHOW_SAMPLE_COUNT
-        }
-    #endif // SHAPE_DETAIL
-    // Nicely decrease the density at the bottom.
-    density = saturate(density * densityScales * getLayerDensity(weather.heightFraction));
-    MediaSample media;
-    float densitySum = density.x + density.y + density.z + density.w;
-    media.density = densitySum;
-    media.weight = density / max(densitySum, 1e-7);
-    media.scattering = densitySum * scatteringCoefficient;
-    media.extinction = densitySum * absorptionCoefficient + media.scattering;
-    return media;
-}
-MediaSample sampleMedia(
-const WeatherSample weather, const vec3 position, const vec2 uv, const float mipLevel, const float jitter
-) {
-    ivec3 sampleCount = ivec3(0);
-    return sampleMedia(weather, position, uv, mipLevel, jitter, sampleCount);
-}
 uniform mat4 inverseShadowMatrices[CASCADE_COUNT];
 uniform mat4 reprojectionMatrices[CASCADE_COUNT];
 

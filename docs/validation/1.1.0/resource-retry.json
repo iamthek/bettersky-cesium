@@ -1,0 +1,13 @@
+{
+  "failed": {
+    "state": "error",
+    "active": false,
+    "sky": true,
+    "gsEnabled": false,
+    "frame": 51
+  },
+  "retried": {
+    "state": "ready",
+    "active": true
+  }
+}

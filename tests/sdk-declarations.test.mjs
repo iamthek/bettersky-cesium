@@ -37,7 +37,12 @@ test('TypeScript emits only the documented public facade without implementation 
   assert.match(source, /getAssetState\(\): BetterSkyAssetState/);
   assert.doesNotMatch(source, /export default|BetterSkyPass|readonly assetsReady|readonly defaultOptions/);
   assert.match(source, /@param viewerOrScene/);
-  assert.match(source, /@default 0\.34/);
+  assert.match(source, /@default 0\.3/);
+  assert.doesNotMatch(source, /preserveModelColors/);
+  assert.match(source, /lighting\?: BetterSkyLightingOptions/);
+  assert.match(source, /gaussianSplat\?: BetterSkyGaussianSplatOptions/);
+  assert.match(source, /highDynamicRange\?: boolean \| null/);
+  assert.match(source, /depthTestAgainstTerrain\?: boolean \| null/);
   assert.doesNotMatch(source, /RuntimeBetterSky|BetterSky\.js|Library\/|\.\.\/|sourceMappingURL|sourceURL/);
   const facade = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
   assert.doesNotThrow(() => validateDeclarationContract(source, facade));
@@ -58,6 +63,11 @@ const defaults: BetterSkyResolvedOptions = BetterSky.getDefaultOptions();
 defaults.cloud.altitudes[0] = 4500;
 const enabled: boolean = defaults.hbao.enabled;
 const denoise: boolean = defaults.hbao.denoise;
+const sunIntensity: number = defaults.lighting.sunIntensity;
+const shadowDistance: number = defaults.lighting.shadows.maximumDistance;
+const splatExposureEv: number = defaults.gaussianSplat.exposureOffset;
+const inheritedHdr: boolean | null = defaults.highDynamicRange;
+const inheritedTerrainTest: boolean | null = defaults.depthTestAgainstTerrain;
 const preset = { time: undefined, cloud: { altitudes: [4000, 6000, 10000, 0], hazeSunColor: [1, 0.78, 0.42], layerTypes: ['cumulus', 'altocumulus', 'cirrus'], lodRange: [200000, 500000] }, localWeatherVelocity: [0, 0] } as const;
 const options: BetterSkyOptions = preset;
 const namedPreload: Promise<void> = BetterSky.preloadAssets();
@@ -68,6 +78,8 @@ const snapshot: BetterSkyResolvedOptions = betterSkyInstance.getOptions();
 const completeAltitude: number = snapshot.cloud.altitudes[0];
 const completeDenoise: number = snapshot.cloud.denoise.temporalAlpha;
 betterSkyInstance.update({ toneMappingMode: 2, hbao: { enabled: true, intensity: 80 }, snow: true, rain: false, nightGlowIntensity: 0.5 });
+betterSkyInstance.update({ lighting: { sunIntensity: 1.8, shadows: { enabled: true } }, highDynamicRange: null, depthTestAgainstTerrain: null });
+betterSkyInstance.update({ gaussianSplat: { colorSpace: 'srgb', exposureOffset: -0.5, daylightResponse: true }, highDynamicRange: false, depthTestAgainstTerrain: true });
 const unsubscribe = betterSkyInstance.subscribeAssets((state: BetterSkyAssetState) => {
   const status: string = state.status;
   // @ts-expect-error Resource snapshots are read-only.
@@ -82,6 +94,14 @@ const retried: Promise<void> = betterSkyInstance.retryAssets();
 betterSkyInstance.update({ hbao: { denoise: false } });
 // @ts-expect-error Unsupported historical mode must fail within the unified update API.
 betterSkyInstance.update({ toneMappingMode: 3 });
+// @ts-expect-error The pixel-preservation path has been removed.
+betterSkyInstance.update({ preserveModelColors: true });
+// @ts-expect-error Gaussian color encoding must use a supported color space.
+betterSkyInstance.update({ gaussianSplat: { colorSpace: 'display-p3' } });
+// @ts-expect-error Shadows use an options object.
+betterSkyInstance.update({ lighting: { shadows: true } });
+// @ts-expect-error Scene inheritance accepts null, not string values.
+betterSkyInstance.update({ highDynamicRange: 'inherit', depthTestAgainstTerrain: 'true' });
 // @ts-expect-error HBAO requires an object.
 betterSkyInstance.update({ hbao: false });
 // @ts-expect-error Unknown public option.

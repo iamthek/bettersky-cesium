@@ -1,0 +1,38 @@
+{
+  "rows": [
+    {
+      "disposed": {
+        "stages": 0,
+        "hdr": false,
+        "depth": false,
+        "disposed": "disposed"
+      },
+      "rebuilt": {
+        "active": true,
+        "state": "ready",
+        "intercepted": true
+      }
+    },
+    {
+      "disposed": {
+        "stages": 0,
+        "hdr": false,
+        "depth": false,
+        "disposed": "disposed"
+      },
+      "rebuilt": {
+        "active": true,
+        "state": "ready",
+        "intercepted": true
+      }
+    }
+  ],
+  "final": {
+    "errors": [],
+    "size": [
+      1585,
+      919
+    ],
+    "active": true
+  }
+}

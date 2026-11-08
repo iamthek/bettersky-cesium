@@ -111,7 +111,7 @@ import { BetterSky } from 'bettersky-cesium'
 const betterSkyInstance = new BetterSky(viewer, {
   time: null, // 保留业务时间。
   coverage: 0.5,
-  cloud: { densityScales: [0.12, 0.09, 0.0015, 0] },
+  cloud: { densityScales: [0.12, 0.025, 0.001, 0] },
 })
 
 betterSkyInstance.update({ cloud: { heights: [1300, 1800, 650, 0] } })
@@ -122,6 +122,23 @@ betterSkyInstance.update({ enabled: true })
 `new BetterSky(viewerOrScene, options?)` 接受 Viewer 或 Scene。传入 Scene 时不设置 Viewer 时钟。实例自动注册渲染阶段与逐帧更新，不需要再次添加 `betterSkyInstance.stage` 或手动调用底层更新。
 
 构造参数合并默认值，`update()` 合并已有配置；嵌套对象逐字段合并，数组整体替换。未传字段保持原值；除 `time` 外会把显式 `undefined` 当作省略，`null` 仅用于明确支持它的字段。非法字段和值会在参数校验阶段拒绝。
+
+默认使用统一自然光照：原生地形和 PBR 模型、校准后的高斯扫描层与天空在线性 HDR 中合成，再进行一次曝光、色调映射和显示编码。普通模型保留材质贴图、法线与粗糙度，并通过太阳直射和动态天空环境光呈现明暗；高斯使用独立的源颜色空间和 EV 校准，扫描自阴影仍沿用资产烘焙结果。前方的云与大气正常遮挡两类模型，透明孔隙显示其后的背景。
+
+HDR 默认开启；`highDynamicRange: null` 显式沿用宿主，`false` 使用 LDR 兼容合成。地形深度测试默认 `true`，显式设置 `null` 可沿用宿主。显式场景设置受 `applySceneSettings` 控制；关闭或销毁会恢复本实例接管前记录的宿主状态。
+
+```js
+betterSkyInstance.update({
+  lighting: {
+    sunIntensity: 2.0,
+    ambientIntensity: 1.2,
+    shadows: { enabled: true, maximumDistance: 1500, size: 1024, softShadows: true },
+  },
+  gaussianSplat: { colorSpace: 'srgb', exposureOffset: -0.5, daylightResponse: true },
+})
+```
+
+`gaussianSplat.colorSpace: 'auto'` 读取资产颜色空间元数据；旧 SPZ2 资产缺少元数据时，应像 demo2 一样明确指定其源颜色空间。高斯先在源空间内完成透明混合，再转换为统一线性颜色；调暗高斯不改变 alpha。夜间环境响应不等于使用代理法线重新进行 PBR 打光。上一轮未发布的 `preserveModelColors` 逐像素恢复选项已移除。
 
 ### 配置快照与资源加载
 
@@ -193,14 +210,14 @@ unsubscribe()
 
 ### 常用配置
 
-分别调整地表与云体补光，避免只提高全局曝光：
+分别调整地形增益、模型天空补光与云体补光：
 
 ```js
 betterSkyInstance.update({
-  irradianceScale: 0.15,
+  irradianceScale: 1.0,
   aerialPerspectiveStrength: 0.2,
   volumetricLight: { mode: 'volumetric', intensity: 2 },
-  cloud: { skyIrradianceScale: 1.8, groundIrradianceScale: 1.3 },
+  cloud: { skyIrradianceScale: 1.2, groundIrradianceScale: 0.8 },
 })
 ```
 
@@ -263,22 +280,37 @@ viewer.destroy() // 仅在应用也需要销毁 Viewer 时调用。
 | 参数 | 类型 | 默认值 | 含义与范围 |
 | --- | --- | --- | --- |
 | `enabled` | boolean | `true` | 效果总开关，联动已配置的 HBAO、SMAA 和体积光；关闭后保留资源。 |
-| `coverage` | number | `0.34` | 整体天气覆盖度 `[0, 1]`，与各层密度分别控制。 |
+| `coverage` | number | `0.3` | 整体天气覆盖度 `[0, 1]`，与各层密度分别控制。 |
 | `localWeatherVelocity` | 二维向量 | `[0.0003, 0.0001]` | 天气图 UV 每秒偏移量，负值反向，`[0, 0]` 停止天气图移动。 |
-| `toneMappingMode` | number | `9` | `2` Reinhard2、`4` Uncharted2、`7` AgX、`8` Neutral、`9` ACES、`10` Linear、`11` Reinhard、`12` Cineon；切换会重建天空阶段。模式 `3` 不支持。 |
-| `toneMappingExposure` | number | `2.8` | 非负亮度倍率，越大越亮；单位不是 EV。 |
-| `irradianceScale` | number | `0.15` | 非负地表辐照度增益，与云体补光分别控制。 |
+| `toneMappingMode` | number | `8` | `2` Reinhard2、`4` Uncharted2、`7` AgX、`8` PBR Neutral、`9` ACES、`10` Linear、`11` Reinhard、`12` Cineon；模式 `3` 不支持。 |
+| `toneMappingExposure` | number | `1.0` | 非负统一 HDR 亮度倍率，作用于地形、模型与天空；单位不是 EV。 |
+| `irradianceScale` | number | `1.0` | 非负地形光照增益，与 PBR 环境补光、云体补光分别控制。 |
 | `aerialPerspectiveStrength` | number | `0.15` | 地表大气透视混合强度 `[0, 1]`；`0` 关闭此混合。 |
 | `nightGlowIntensity` | number | `0.5` | 夜间天空辉光调制系数；允许有限数，建议 `[0, 1]`。 |
 | `bloomIntensity` | number | `0.002` | 非负泛光强度，`0` 移除此强度贡献，不释放对应阶段。 |
 | `systemLight` | boolean | `true` | 跟随 Cesium 太阳方向；建议保持 `true`，详见注意事项。 |
 | `applySceneSettings` | boolean | `true` | 控制本次调用是否应用场景设置，详见场景设置与销毁。 |
-| `highDynamicRange` | boolean | `true` | 场景 HDR，受本次 `applySceneSettings` 控制。 |
+| `highDynamicRange` | boolean / null | `true` | 默认统一 HDR；`null` 显式沿用宿主，`false` 使用 LDR 兼容合成，受 `applySceneSettings` 控制。 |
+| `depthTestAgainstTerrain` | boolean / null | `true` | 地形深度测试；`null` 沿用宿主，显式布尔值受 `applySceneSettings` 控制。 |
 | `logarithmicDepthBuffer` | boolean | `true` | 场景对数深度，受本次 `applySceneSettings` 控制。 |
 | `gamma` | number | `2.2` | 正数，场景显示 Gamma，与 HBAO 的 Gamma 分别控制。 |
-| `hbao` | boolean / object | 下方 HBAO 参数对象 | `false` 关闭；`true` 启用；对象覆盖指定数值并启用。重开会恢复保存的数值。 |
+| `hbao` | object | 下方 HBAO 参数对象 | 弱接触遮蔽，默认最大压暗约 15%；`enabled` 独立控制开关。 |
 | `smaa` | boolean | `true` | 最终画面的 SMAA 抗锯齿。 |
 | `time` | string / null / undefined | `"2026-05-01T06:00Z"` | 有效 ISO 8601 时间；`Z` 表示 UTC。构造时省略会采用预设时间，显式 `null` / `undefined` 保留业务时钟；`update()` 省略也保留时钟。只传 Scene 时无效。 |
+
+### 自然光照与高斯校准
+
+| 参数 | 类型 | 默认值 | 含义与范围 |
+| --- | --- | --- | --- |
+| `lighting.sunIntensity` | number | `2.0` | 非负太阳直射强度，不代替天空补光。 |
+| `lighting.ambientIntensity` | number | `1.2` | 非负环境图亮度倍率，用于改善普通模型暗面；不修改材质。 |
+| `lighting.shadows.enabled` | boolean | `true` | 普通建筑近景投影，地形接收阴影；高斯不投射代理建筑阴影。 |
+| `lighting.shadows.maximumDistance` | number | `1500` | 正有限米数，近景阴影覆盖距离。 |
+| `lighting.shadows.size` | number | `1024` | 阴影图边长，正整数且为 2 的幂。 |
+| `lighting.shadows.softShadows` | boolean | `true` | 原生软阴影过滤。 |
+| `gaussianSplat.colorSpace` | string | `auto` | `auto`、`srgb` 或 `linear`；用于源颜色空间转换。 |
+| `gaussianSplat.exposureOffset` | number | `-0.5` | 有限 EV 偏移，可为负；`-1` 使线性亮度减半，`+1` 加倍。 |
+| `gaussianSplat.daylightResponse` | boolean | `true` | 根据太阳高度平滑调整扫描明暗，保留烘焙细节与自阴影。 |
 
 ### 云层与可见性
 
@@ -289,12 +321,12 @@ viewer.destroy() // 仅在应用也需要销毁 Viewer 时调用。
 | `cloud.layerTypes` | 三项数组 / null | `["cumulus", "altocumulus", "cirrus"]` | 每项可选 `cumulus` 积云、`altocumulus` 高积云、`cirrus` 卷云；`null` 使用通用云形。 |
 | `cloud.altitudes` | 四维向量 | `[4000, 6000, 10000, 0]` | 云底高度，单位米，各分量为有限数。 |
 | `cloud.heights` | 四维向量 | `[1300, 1800, 650, 0]` | 非负云层厚度，单位米；云顶 = 云底 + 厚度。 |
-| `cloud.densityScales` | 四维向量 | `[0.12, 0.09, 0.0015, 0]` | 非负云密度倍率；`0` 移除对应层介质。 |
-| `cloud.shapeDetailAmounts` | 四维向量 | `[0.18, 0.12, 0, 0]` | 各分量 `[0, 1]`，越大云边缘越破碎。 |
+| `cloud.densityScales` | 四维向量 | `[0.12, 0.025, 0.001, 0]` | 非负云密度倍率；`0` 移除对应层介质。 |
+| `cloud.shapeDetailAmounts` | 四维向量 | `[0.25, 0.15, 0.05, 0]` | 各分量 `[0, 1]`，越大云边缘越破碎。 |
 | `cloud.lodRange` | 两项数组 / null | `[200000, 500000]` | 距相机的细节近、远阈值，单位米，`0 ≤ near < far`；`null` 关闭距离细节分级。 |
 | `cloud.altitudeFadeRange` | 两项数组 / null | `[30000, 90000]` | 相机椭球高度淡出范围，单位米，`0 ≤ start < end`；联动云、云影及相关光束，`null` 关闭淡出。 |
-| `cloud.skyIrradianceScale` | number | `1.8` | 非负天空补光倍率，影响云体及 legacy haze。 |
-| `cloud.groundIrradianceScale` | number | `1.3` | 非负云体地面反射补光倍率，与 `irradianceScale` 分别控制。 |
+| `cloud.skyIrradianceScale` | number | `1.2` | 非负天空补光倍率，影响云体及 legacy haze。 |
+| `cloud.groundIrradianceScale` | number | `0.8` | 非负云体地面反射补光倍率，与 `irradianceScale` 分别控制。 |
 
 距离细节分级不移动云层，也不关闭相机高度淡出。默认在相机高度达到 90 km 时云完全淡出；需要高空仍显示云时可调整范围或传 `null`。
 
@@ -343,15 +375,17 @@ betterSkyInstance.update({ cloud: { hazeDensityScale: 0.000008 } }) // 切换至
 Haze 还受相机高度淡出后的有效云覆盖度调制：覆盖度 ≤ 0.2 时贡献为零，0.2–0.4 之间逐步增强。局部模式要求前两层中至少有一层有效且参与云影投射，单纯增加 haze 密度不能绕过这些条件。
 
 
+必需天空资源及 GPU 命令准备期间继续显示原生场景；天空接管、高斯重定向和 HDR 色调映射在帧边界统一切换。必需资源失败时保留原生渲染，`retryAssets()` 重新准备激活。`loadAssets()` 表示资源就绪，不代表首帧已显示。
+
 ### 云体降噪
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `cloud.denoise.temporalAlpha` | number | `0.04` | 当前帧权重 [0, 1]；越小越依赖历史，降噪更强。 |
-| `cloud.denoise.currentFrameAlpha` | number | `0.08` | 新采样像素的当前帧权重 [0, 1]；越大新细节越快生效，也更易显露噪声。 |
-| `cloud.denoise.motionAlpha` | number | `0.25` | 相机运动时用于提高积累基值，范围 [0, 1]；最终混合权重仍会自适应调整。 |
-| `cloud.denoise.varianceGamma` | number | `2` | 正有限方差裁剪倍率；越大允许保留的历史颜色范围越宽。 |
-| `cloud.denoise.spatialFilterStrength` | number | `0.8` | 深度/透明度感知重建强度 [0, 1]；越大越平滑，也会损失更多细节。 |
+| `cloud.denoise.temporalAlpha` | number | `0.12` | 当前帧权重 [0, 1]；越小越依赖历史，降噪更强。 |
+| `cloud.denoise.currentFrameAlpha` | number | `0.35` | 新采样像素的当前帧权重 [0, 1]；越大新细节越快生效，也更易显露噪声。 |
+| `cloud.denoise.motionAlpha` | number | `0.6` | 相机运动时用于提高积累基值，范围 [0, 1]；最终混合权重仍会自适应调整。 |
+| `cloud.denoise.varianceGamma` | number | `1.25` | 正有限方差裁剪倍率；越大允许保留的历史颜色范围越宽。 |
+| `cloud.denoise.spatialFilterStrength` | number | `0.35` | 深度/透明度感知重建强度 [0, 1]；越大越平滑，也会损失更多细节。 |
 
 增强历史依赖可以减少噪点，但可能增加拖影；增强空间过滤会柔化细节。SMAA 负责最终画面的边缘，不替代云体降噪。
 
@@ -364,13 +398,13 @@ Haze 还受相机高度淡出后的有效云覆盖度调制：覆盖度 ≤ 0.2 
 | 参数 | 类型 | 默认值 | 含义与范围 |
 | --- | --- | --- | --- |
 | `hbao.enabled` | boolean | `true` | 是否启用 HBAO；关闭时保留全部数值。 |
-| `hbao.intensity` | number | `100` | 非负遮蔽强度指数，越大接触阴影越深。 |
-| `hbao.maxRadius` | number | `30` | 非负采样半径，单位米，过大可能出现暗边。 |
+| `hbao.intensity` | number | `20` | 非负遮蔽强度指数，越大接触阴影越深。 |
+| `hbao.maxRadius` | number | `5` | 非负采样半径，单位米，过大可能出现暗边。 |
 | `hbao.bias` | number | `0.1` | 有限角度偏移，单位弧度；增大可减轻自遮蔽。 |
 | `hbao.frustumLength` | number | `100000` | 正数，最大处理深度，单位米。 |
-| `hbao.blackPoint` | number | `0.05` | 输入黑点，`[0, 1)`。 |
-| `hbao.whitePoint` | number | `0.9` | 非负输出亮度倍率。 |
-| `hbao.gamma` | number | `2.5` | 正数，AO 曲线幂指数，与场景 `gamma` 分别控制。 |
+| `hbao.blackPoint` | number | `0` | AO 曲线黑点，`[0, 1)`；默认不截断暗部。 |
+| `hbao.whitePoint` | number | `0.85` | 遮蔽调制亮度倍率；默认保留至少约 85% 亮度。 |
+| `hbao.gamma` | number | `1.0` | 正数，AO 曲线幂指数；默认不额外压暗中间调。 |
 | `hbao.denoise` | boolean | `true` | 双边滤波开关，仅构造时配置；运行时更改需销毁并重建。 |
 
 `BetterSkyUpdateOptions` 从类型上排除 `hbao.denoise`；JavaScript 运行时也会拒绝更改它，重复当前值不会报错。
@@ -395,15 +429,15 @@ const betterSkyInstance = new BetterSky(viewer, options)
 
 | 时机 | 对宿主的影响 |
 | --- | --- |
-| 构造且 `applySceneSettings: true` | 设置 HDR、对数深度、Gamma，并启用地形深度测试。 |
+| 构造且 `applySceneSettings: true` | 应用光照、默认 HDR、对数深度与 Gamma；默认开启地形深度测试。 |
 | 构造 / 更新且提供有效时间字符串 | 修改 Viewer 时钟；`null` 或更新时省略会保留当前时间，仅传 Scene 没有独立时钟。 |
 | 首次启用的帧 | 暂时接管内置天空、大气、太阳、雾及部分地球设置；设置瓦片缓存为 2000、最大屏幕空间误差为 2。 |
-| 关闭 / 销毁 | 恢复启用时记录的天空与地球设置。 |
+| 关闭 / 销毁 | 恢复本实例接管前记录的天空、地球、光源、环境光、HDR、阴影与抗锯齿状态。 |
 | `update()` | 持久保存 `applySceneSettings`，仅在当前值为 true 时应用本次提供的场景字段；省略会保留原值。 |
 
-`applySceneSettings: false` 会阻止 SDK 管理场景字段，直到后续显式设回 true。重新启用时会应用已接受配置中保留的场景字段；保持开启期间，每次更新只应用该次调用显式提供的场景字段。它不阻止天空接管或明确的时间更新。
+`applySceneSettings: false` 会阻止 SDK 管理场景字段，直到后续显式设回 true。重新启用时会应用已接受配置中保留的场景字段；保持开启期间，每次更新只应用该次调用显式提供的场景字段。HDR 与地形深度测试配置为 `null` 时始终沿用宿主。它不阻止天空接管或明确的时间更新。
 
-时钟、HDR、Gamma、对数深度及地形深度测试不会在关闭 / 销毁时自动还原，业务若需要恢复，应自行保存原值。销毁会释放实例拥有的渲染资源，但不移除已安装的上下文辅助方法；不要继续使用缓存的 Pass 或阶段引用。
+Viewer 时钟由显式时间参数控制，业务若需要恢复时钟，仍应自行保存原值。销毁释放实例拥有的渲染资源，不销毁宿主光源、环境图或地形提供器；不要继续使用缓存的 Pass 或阶段引用。
 
 ### 持续渲染与性能
 
@@ -446,3 +480,5 @@ SDK 使用 Cesium 渲染器内部接口。升级 Cesium 或 three 后，应验�
 | 暂停时间后云仍移动 | 单独设置 `localWeatherVelocity: [0, 0]`，其他底层运动控制分别处理。 |
 | 调用资源状态或快照 API 报错 | 确认所安装的 SDK 版本。销毁后仍可读取快照与资源状态，但不能更新参数或重试加载。 |
 | Demo 底图或地形不符合预期 | 未配置服务凭据时使用本地 NaturalEarthII 底图和椭球地形，详见 [Demo 说明](demo/README.md)。 |
+
+云重投影同时处理天气平流和相机运动；深度无效、重新显露与覆盖率变化分别拒绝历史，远云仍遵守运动权重下限。内部 HDR 预曝光防止太阳盘溢出，并在色调映射前恢复，不改变材质曝光。镜头光晕跟随太阳可见性，不由普通亮云触发。

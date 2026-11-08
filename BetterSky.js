@@ -21,6 +21,10 @@ import { Cartesian2, Cartesian3, Cartesian4, JulianDate, PerspectiveFrustum, Sce
 import GeospatialPipelinePass from "./Library/GeospatialPipelinePass.js";
 import HBAOEffectPass from "./Library/HBAOEffectPass.js";
 import SMAAStage from "./Library/SMAAStage.js";
+import GaussianSplatPass from "./Library/GaussianSplatPass.js";
+import LightingController from "./Library/internal/LightingController.js";
+import SceneStateLease from "./Library/internal/SceneStateLease.js";
+import { moveStagesToFront } from "./Library/internal/CesiumAdapter.js";
 import preloadAssets from "./Library/internal/preloadAssets.js";
 import { installViewportCommands } from "./Library/viewportQuadCommand.js";
 import { DEFAULT_OPTIONS, cloneOptions, isPlainObject, mergeOptions, prepareOptions } from "./src/options.js";
@@ -101,6 +105,7 @@ export class BetterSky {
     this._hbaoOptions = cloneOptions(this._options.hbao);
     this._options.time = Object.hasOwn(options, "time") ? options.time ?? null : this._options.time;
     this._disposed = false;
+    this._renderActive = false;
     this._assetSubscriptions = new Set();
     const clock = this._viewer?.clock;
     const initialTime = defined(clock) && defined(this._options.time)
@@ -120,15 +125,26 @@ export class BetterSky {
 
     // 1) 在 context 上安装支持自定义顶点着色器的视口命令
     installViewportCommands(scene.context);
+    this._hostLease = new SceneStateLease({ restore: "if-unchanged" });
+    this._aaLease = new SceneStateLease({ restore: "if-unchanged" });
 
     // 2) 必要的场景设置
-    if (this._options.applySceneSettings) {
-      if (defined(this._options.highDynamicRange)) scene.highDynamicRange = !!this._options.highDynamicRange;
-      if (defined(this._options.logarithmicDepthBuffer)) scene.logarithmicDepthBuffer = !!this._options.logarithmicDepthBuffer;
-      if (defined(this._options.gamma)) scene.gamma = this._options.gamma;
-      scene.globe.depthTestAgainstTerrain = true;
+    if (this._options.applySceneSettings && this._options.enabled) {
+      this._writeHostSettings(this._options);
     }
     if (defined(initialTime)) clock.currentTime = initialTime;
+
+    this._lighting = new LightingController(scene, this._options.lighting);
+    this._models = new GaussianSplatPass(scene, {
+      show: false, options: this._options.gaussianSplat,
+      onError: (error) => {
+        this._runtimeError = error;
+        this._options.enabled = false;
+        this._applyEnabled();
+        this._geo?.restoreScene();
+        console.error("[BetterSky] 模型辅助渲染失败，效果已停止并保留原生场景：", error);
+      },
+    });
 
     // 3) HBAO 环境光遮蔽（可选，先于天空效果加入，在地表几何上叠加柔和接触阴影）
     const hbaoEnabled = this._options.hbao.enabled;
@@ -141,7 +157,13 @@ export class BetterSky {
       showSSR: false,
       showFields: false,
       show: this._options.enabled,
+      activationManaged: true,
     });
+    this._hbao.sceneDepth = this._geo.sceneDepth;
+    if (this._geo.sceneDepth) this._geo.sceneDepth.modelColorPass = this._models;
+    if (this._geo.sceneDepth?._callbacks) this._geo.sceneDepth._callbacks.skipNativeTonemapping = () =>
+      this._renderActive && scene.highDynamicRange && !!this._geo?.stage?.ready;
+    this._geo.gaussianSplatPass = this._models;
 
     // 5) 加入官方后处理集合
     scene.postProcessStages.add(this._geo.stage);
@@ -152,9 +174,11 @@ export class BetterSky {
       this._smaa = new SMAAStage(scene, { show: true });
       scene.postProcessStages.add(this._smaa.stage);
     }
+    this._orderStages();
 
     // 7) 应用预设参数
     this._applyPreset(this._options);
+    this._setRenderActive(false);
 
     // 8) 每帧驱动：在渲染前计算行星半径/太阳月亮/风偏移并更新离屏 Pass
     this._removePreRender = scene.preRender.addEventListener(() => {
@@ -169,11 +193,27 @@ export class BetterSky {
       }
       try {
         const useLog = getUseLogDepth(scene);
+        // Flush deferred failures before deciding this frame's ownership. The
+        // preceding frame may still need its captured Gaussian contribution.
+        this._models?.flushPendingFailure?.();
+        if (this._runtimeError) return;
+        if (this._geo?.sceneDepth) this._geo.sceneDepth.backgroundOnly = false;
         if (this._hbao) this._hbao.update(scene.context, useLog);
         if (this._geo) this._geo.update(scene.context, useLog);
         if (this._smaa) this._smaa.update(scene.context, useLog);
+        const active = this._options.enabled && this._geo.canActivate &&
+          (!this._options.hbao.enabled || this._hbao.ready) &&
+          (!this._options.smaa || this._smaa.ready) && this.getAssetState().status === "ready";
+        this._setRenderActive(active);
+        this._lighting?.updateFrame();
+        if (this._models) {
+          this._models.daylightFactor = this._lighting?.daylightFactor ?? 1;
+          this._models.updateFrame();
+        }
       } catch (e) {
-        // 单帧异常不应中断渲染循环
+        this._runtimeError = e;
+        this._options.enabled = false;
+        this._applyEnabled();
         console.error("[BetterSky] update error:", e);
       }
     });
@@ -282,17 +322,78 @@ export class BetterSky {
     if (opt.smaa && !this._smaa) {
       this._smaa = new SMAAStage(this._scene, { show: true });
       this._scene.postProcessStages.add(this._smaa.stage);
+      // A dynamically enabled SMAA stage belongs before model restoration.
+      // The final stage owns no GPU history, so re-registering is unnecessary:
+      // the adapter moves it without invoking collection.remove()/destroy().
+      this._orderStages();
       this._subscribeSmaaAssets();
     }
+    if ("gaussianSplat" in opt) this._models?.update(this._options.gaussianSplat);
+    if ("lighting" in opt || "irradianceScale" in opt) this._updateLighting();
     if ("hbao" in opt || "smaa" in opt || "enabled" in opt) this._applyEnabled();
   }
 
   /** Keep configured switches distinct from their effective, master-gated state. */
   _applyEnabled() {
     const enabled = this._options.enabled;
+    if (!enabled) this._setRenderActive(false);
     if (this._geo) this._geo.enabled = enabled;
     if (this._hbao) this._hbao.enabled = enabled && this._options.hbao.enabled;
     if (this._smaa) this._smaa.enabled = enabled && this._options.smaa;
+    if (this._models) this._models.enabled = enabled && this._renderActive;
+    if (!enabled || !this._options.applySceneSettings) {
+      this._hostLease?.restore();
+      this._hostSettingsActive = false;
+    } else if (!this._hostSettingsActive) this._writeHostSettings(this._options);
+    this._applyAaSettings();
+    this._updateLighting();
+  }
+
+  _setRenderActive(value) {
+    const active = !!value;
+    const changed = active !== this._renderActive;
+    this._renderActive = active;
+    this._geo?.setActive(active);
+    if (this._hbao) this._hbao.active = active;
+    if (this._smaa) this._smaa.active = active;
+    if (this._models) this._models.enabled = active;
+    if (changed) {
+      this._updateLighting();
+      this._applyAaSettings();
+    }
+  }
+
+  _orderStages() {
+    const stages = [this._hbao?.stage, this._geo?.stage, this._smaa?.stage].filter(Boolean);
+    moveStagesToFront(this._scene.postProcessStages, stages);
+  }
+
+  _updateLighting() {
+    this._lighting?.update({ ...this._options.lighting, irradianceScale: this._options.irradianceScale },
+      this._options.enabled && this._renderActive && this._options.applySceneSettings);
+    if (this._geo) {
+      const scale = this._options.lighting.sunIntensity / 2;
+      if (this._geo.sunIntensityScale !== scale) this._geo.cloudMaterialPass?.invalidateHistory();
+      this._geo.sunIntensityScale = scale;
+    }
+  }
+
+  _writeHostSettings(fields) {
+    const lease = this._hostLease;
+    if (!lease) return;
+    this._hostSettingsActive = true;
+    for (const key of ["highDynamicRange", "logarithmicDepthBuffer", "gamma"]) {
+      if (defined(fields[key])) lease.write(this._scene, key, fields[key]);
+    }
+    if (defined(fields.depthTestAgainstTerrain)) lease.write(this._scene.globe, "depthTestAgainstTerrain", fields.depthTestAgainstTerrain);
+    this._applyAaSettings();
+  }
+
+  _applyAaSettings() {
+    const fxaa = this._scene.postProcessStages.fxaa;
+    if (this._options.enabled && this._renderActive && this._options.applySceneSettings && this._options.smaa && fxaa) {
+      this._aaLease?.write(fxaa, "enabled", false);
+    } else this._aaLease?.restore();
   }
 
   _assertMutable() {
@@ -410,16 +511,20 @@ export class BetterSky {
     this._options = nextOptions;
     this._hbaoOptions = cloneOptions(hbaoOptions);
     if (nextOptions.applySceneSettings) {
-      const sceneFields = previousApplySceneSettings ? options : {
+      const sceneFields = previousApplySceneSettings && this._hostSettingsActive ? options : {
         highDynamicRange: nextOptions.highDynamicRange,
         logarithmicDepthBuffer: nextOptions.logarithmicDepthBuffer,
         gamma: nextOptions.gamma,
+        depthTestAgainstTerrain: nextOptions.depthTestAgainstTerrain,
       };
-      if (defined(sceneFields.highDynamicRange)) this._scene.highDynamicRange = !!sceneFields.highDynamicRange;
-      if (defined(sceneFields.logarithmicDepthBuffer)) this._scene.logarithmicDepthBuffer = !!sceneFields.logarithmicDepthBuffer;
-      if (defined(sceneFields.gamma)) this._scene.gamma = sceneFields.gamma;
-      if (!previousApplySceneSettings) this._scene.globe.depthTestAgainstTerrain = true;
+      if (nextOptions.enabled) this._writeHostSettings(sceneFields);
     }
+    if (!nextOptions.applySceneSettings) {
+      this._hostLease?.restore();
+      this._hostSettingsActive = false;
+    }
+    this._applyAaSettings();
+    this._updateLighting();
     if (defined(time) && defined(this._viewer?.clock)) this._viewer.clock.currentTime = time;
     this._applyPreset(options);
   }
@@ -434,6 +539,10 @@ export class BetterSky {
     this._removePreRender = undefined;
     const pps = this._scene.postProcessStages;
     if (this._geo) cleanup(() => this._geo.restoreScene());
+    if (this._models) cleanup(() => this._models.destroy());
+    if (this._lighting) cleanup(() => this._lighting.destroy());
+    cleanup(() => this._hostLease?.restore());
+    cleanup(() => this._aaLease?.restore());
     const removeStage = (pass) => {
       if (!defined(pass)) return;
       const stage = pass.stage;

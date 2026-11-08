@@ -1,4 +1,5 @@
 import { usesLogDepthOptimization } from "./internal/CesiumAdapter.js";
+import { sceneDepthGLSL, sceneDepthUniformMap } from "./internal/SceneDepth.js";
 import PostProcessStage from "./PostProcessStage.js";
 import ambientOcclusionGenerate from "./hbao/ambientOcclusionGenerate.js";
 import ambientOcclusionModulate from "./hbao/ambientOcclusionModulate.js";
@@ -44,10 +45,15 @@ export default class HBAOEffectPass {
     this.id = createGuid();
 
     this._scene = scene;
+    this.sceneDepth = options.sceneDepth;
+    this._sceneDepthUniforms = sceneDepthUniformMap(() => this.sceneDepth, scene.context);
     this._hbaoEffect = undefined;
     this._lastViewPosition = new Cartesian3();
     this._cameraFov = 0;
     this._destroyed = false;
+    // Kept enabled while the SDK prepares its full colour chain; standalone
+    // users retain the usual immediate effect by default.
+    this.active = true;
 
     this._show = defaultValue(options.show, true);
 
@@ -64,8 +70,8 @@ export default class HBAOEffectPass {
     this._useGlobeDepth = defaultValue(options.useGlobeDepth, true)
     this._denoise = defaultValue(options.denoise, true)
     this._textureScale = defaultValue(options.textureScale, 1)
-    this._directions = defaultValue(options.directions, 8)
-    this._steps = defaultValue(options.steps, 8)
+    this._directions = defaultValue(options.directions, 4)
+    this._steps = defaultValue(options.steps, 4)
     this._outputType = defaultValue(options.outputType, null)
     this._accurateNormalReconstruction = true
 
@@ -115,6 +121,7 @@ export default class HBAOEffectPass {
             ${this._steps !== null ? `#define NUM_STEPS (${this._steps})` : ''}
             ${this._accurateNormalReconstruction ? '#define USE_ACCURATE_NORMAL' : ''}
             ${this._outputType !== null ? `#define OUTPUT_TYPE (${this._outputType})` : ''}
+            ${sceneDepthGLSL}
             ${this._useGlobeDepth ? globeDepth : depth}
             ${packing}
             ${highPassRandom}
@@ -124,6 +131,8 @@ export default class HBAOEffectPass {
             `,
       timeSlicingEnabled: true,
       uniforms: {
+        ...this._sceneDepthUniforms,
+        bsActive: () => this.active,
         textureScale: () => { return this._textureScale },
         intensity: () => { return this._intensity },
         maxRadius: () => { return this._maxRadius },
@@ -139,6 +148,7 @@ export default class HBAOEffectPass {
       name: `${prefix}_ambient_occlusion_modulate`,
       fragmentShader: `
             ${this._outputType !== null ? `#define OUTPUT_TYPE (${this._outputType})` : ''}
+            ${sceneDepthGLSL}
             ${this._useGlobeDepth ? globeDepth : depth}
             ${packing}
             ${reconstructPosition}
@@ -147,6 +157,8 @@ export default class HBAOEffectPass {
             `,
       timeSlicingEnabled: true,
       uniforms: {
+        ...this._sceneDepthUniforms,
+        bsActive: () => this.active,
         color: () => { return this._color },
         frustumLength: () => { return this._frustumLength },
         blackPoint: () => { return this._blackPoint },
@@ -257,6 +269,7 @@ function createBilateralFilterStage(that, generate) {
     fragmentShader: `
         #define DIRECTION (0)
         ${that._outputType !== null ? `#define OUTPUT_TYPE (${that._outputType})` : ''}
+        ${sceneDepthGLSL}
         ${that._useGlobeDepth ? globeDepth : depth}
         ${packing}
         ${reconstructPosition}
@@ -264,6 +277,7 @@ function createBilateralFilterStage(that, generate) {
       `,
     timeSlicingEnabled: true,
     uniforms: {
+      ...that._sceneDepthUniforms,
       colorTexture2: generate.name,
       textureScale: () => { return that._textureScale },
       frustumLength: () => { return that._frustumLength },
@@ -280,6 +294,7 @@ function createBilateralFilterStage(that, generate) {
     fragmentShader: `
         #define DIRECTION (1)
         ${that._outputType !== null ? `#define OUTPUT_TYPE (${that._outputType})` : ''}
+        ${sceneDepthGLSL}
         ${that._useGlobeDepth ? globeDepth : depth}
         ${packing}
         ${reconstructPosition}
@@ -287,6 +302,7 @@ function createBilateralFilterStage(that, generate) {
       `,
     timeSlicingEnabled: true,
     uniforms: {
+      ...that._sceneDepthUniforms,
       colorTexture2: generate.name,
       textureScale: () => { return that._textureScale },
       frustumLength: () => { return that._frustumLength },

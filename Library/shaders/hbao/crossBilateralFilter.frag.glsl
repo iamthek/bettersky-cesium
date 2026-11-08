@@ -23,6 +23,8 @@ float computeWeight(
   const vec3 normal0,
   const float depth0
 ) {
+  if (!betterSkyFinite3(normal) || !betterSkyFinite3(normal0) ||
+      !betterSkyFinite(depth) || !betterSkyFinite(depth0)) return 0.0;
   // Weights are described here: http://sci.utah.edu/~duong/papers/hoang-mssao-cgi-2011-paper.pdf
   float normalWeight = pow(
     clamp(dot(normal0, normal), 0.0, 1.0),
@@ -41,12 +43,16 @@ void addWeight(
   inout float ao,
   inout float weight
 ) {
+  if (any(lessThan(uv + d, vec2(0.0))) || any(greaterThan(uv + d, vec2(1.0)))) return;
   vec4 aon = texture(colorTexture2, uv + d);
+  float distance = readDepth(depthTexture, uv + dd);
+  if (!betterSkyFinite4(aon) || !betterSkyValidDistance(distance)) return;
   vec3 normal = unpackNormal(aon.yzw);
   // It will be much faster if we were able to write linear depths in the
   // generate phase.
   float depth = readPosition(depthTexture, uv + dd).z;
   float w = computeWeight(normal, depth, normal0, depth0);
+  if (!betterSkyFinite(w) || w <= 0.0) return;
   ao = aon.x * w + ao;
   weight += w;
 }
@@ -56,11 +62,11 @@ void main() {
   vec4 center = texture(colorTexture2, uv);
   float depth0 = readPosition(depthTexture, uv).z;
 
-  if (-depth0 > frustumLength) {
+  if (!betterSkyFinite4(center) || !betterSkyValidDistance(-depth0) || -depth0 > frustumLength) {
     #if OUTPUT_TYPE == 4 // Weight
-    out_FragColor = vec4(vec3(0.0), center.yzw);
+    out_FragColor = vec4(0.0, packNormal(vec3(0.0, 0.0, 1.0)));
     #else
-    out_FragColor = vec4(vec3(1.0), center.yzw);
+    out_FragColor = vec4(1.0, packNormal(vec3(0.0, 0.0, 1.0)));
     #endif // OUTPUT_TYPE
     return;
   }
@@ -104,6 +110,7 @@ void main() {
   out_FragColor = vec4(prevWeight + weight * 0.05, center.yzw);
   #endif // DIRECTION
   #else
-  out_FragColor = vec4(ao / weight, center.yzw);
+  float filtered = ao / max(weight, 1e-7);
+  out_FragColor = vec4(betterSkyFinite(filtered) ? clamp(filtered, 0.0, 1.0) : 1.0, center.yzw);
   #endif // OUTPUT_TYPE
 }

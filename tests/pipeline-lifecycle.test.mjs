@@ -282,6 +282,46 @@ async function flushLoads(harness, reject = false) {
     await new Promise(resolve => setImmediate(resolve));
 }
 
+test("preparation waits for assets and command targets, and rebuilding restores the native sky", async () => {
+    const h = await createHarness();
+    Object.assign(h.scene, {
+        skyAtmosphere: { show: true }, skyBox: { show: true }, sun: { show: true }, fog: { enabled: true },
+        globe: { showGroundAtmosphere: true, tileCacheSize: 100, maximumScreenSpaceError: 4 },
+    });
+    const pipeline = new h.Pipeline(h.scene, { activationManaged: true });
+    const markCommandsReady = stage => {
+        if (stage.length !== undefined) {
+            for (let i = 0; i < stage.length; i++) markCommandsReady(stage.get(i));
+        } else {
+            stage.ready = true;
+            stage._command = { framebuffer: {}, shaderProgram: {} };
+        }
+    };
+    markCommandsReady(pipeline.stage);
+    pipeline.precomputed();
+    assert.equal(pipeline.canActivate, false);
+    assert.equal(h.scene.skyAtmosphere.show, true);
+    await flushLoads(h);
+    assert.equal(pipeline.getAssetState().status, "ready");
+    assert.equal(pipeline.canActivate, true);
+    assert.equal(pipeline._active, false, "asynchronous completion cannot change scene ownership");
+    pipeline.setActive(true);
+    assert.equal(h.scene.skyAtmosphere.show, false);
+    assert.equal(h.scene.sun.show, false);
+    assert.equal(h.scene.fog.enabled, false);
+    pipeline.init(true);
+    assert.equal(pipeline._active, false);
+    assert.equal(pipeline.canActivate, false, "new stage targets must be prepared independently");
+    assert.equal(h.scene.skyAtmosphere.show, true);
+    assert.equal(h.scene.sun.show, true);
+    assert.equal(h.scene.fog.enabled, true);
+    assert.equal(h.scene.globe.tileCacheSize, 100);
+    pipeline.destroy();
+    assert.equal(h.liveTextures.size, 0);
+    assert.equal(h.liveFramebuffers.size, 0);
+    assert.equal(h.shaderReferences, 0);
+});
+
 test("disposal releases owned resources once and ignores asset completions after disposal", async () => {
     const harness = await createHarness();
     const pipeline = new harness.Pipeline(harness.scene, { showSnow: true });
@@ -300,6 +340,44 @@ test("disposal releases owned resources once and ignores asset completions after
     assert.equal(harness.shaderReferences, 0);
     assert.equal(harness.scene.context.defaultTexture3D, hostDefault3D);
     assert.equal(harness.errors.length, 0);
+});
+
+test("model-front clouds keep only low-resolution independent history and expire after invalidation or a skipped frame", async () => {
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    const clouds = pipeline.cloudMaterialPass;
+    assert.equal(clouds._passState.framebuffer.options.colorTextures.length, 4);
+    assert.equal(clouds._passState2.framebuffer.options.colorTextures.length, 3);
+    assert.equal(clouds._passState.framebuffer.options.colorTextures[3], clouds._modelFrontColor);
+    assert.equal(clouds._modelFrontPassState.framebuffer.options.colorTextures.length, 1);
+    assert.equal(clouds._modelFrontPassState.framebuffer.options.colorTextures[0], clouds._modelFrontResolveBuffer);
+    const separate = [clouds._outputColor, clouds._colorResolveHistoryBuffer,
+        clouds._modelFrontColor, clouds._modelFrontResolveBuffer, clouds._modelFrontHistoryBuffer];
+    assert.equal(new Set(separate).size, separate.length);
+    for (const texture of [clouds._modelFrontColor, clouds._modelFrontResolveBuffer, clouds._modelFrontHistoryBuffer]) {
+        assert.equal(texture.options.width, clouds._lowResWidth);
+        assert.equal(texture.options.height, clouds._lowResHeight);
+    }
+    assert.equal(clouds.modelFrontByteLength, clouds._lowResWidth * clouds._lowResHeight * 3 * 8);
+    assert(clouds.modelFrontByteLength < clouds._width * clouds._height * 2,
+        "prefix history must not add full-resolution RGBA16F surfaces");
+    assert.equal(clouds.modelFrontTexture, undefined);
+    clouds._modelFrontRenderedFrame = pipeline._frame;
+    assert.equal(clouds.modelFrontTexture, clouds._modelFrontHistoryBuffer);
+    ++pipeline._frame;
+    assert.equal(clouds.modelFrontTexture, undefined);
+    clouds._historyValid = true;
+    clouds._modelFrontHistoryValid = true;
+    clouds._modelFrontRenderedFrame = pipeline._frame;
+    clouds.invalidateHistory();
+    assert.equal(clouds._historyValid, false);
+    assert.equal(clouds._modelFrontHistoryValid, false);
+    assert.equal(clouds.modelFrontTexture, undefined);
+    assert(clouds.modelFrontByteLength > 0);
+    pipeline.destroy();
+    assert.equal(clouds.modelFrontByteLength, 0);
+    assert.equal(harness.liveTextures.size, 0);
+    assert.equal(harness.liveFramebuffers.size, 0);
 });
 
 test("preloaded raw assets survive pipeline initialization, disposal, and reconstruction", async () => {

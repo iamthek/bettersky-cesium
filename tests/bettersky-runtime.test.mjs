@@ -3,13 +3,17 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 import * as Cesium from "cesium";
+import SceneStateLease from "../Library/internal/SceneStateLease.js";
+import { moveStagesToFront } from "../Library/internal/CesiumAdapter.js";
 
 // Exercise the public entry against observable host mutations, using real Cesium
 // scene-mode/frustum values and counted pass wrappers instead of a WebGL device.
 async function createHarness({ globals = {}, failPreRender = false, preloadAssets = () => Promise.resolve() } = {}) {
   const passes = [];
+  const modelPasses = [];
+  const lightingControllers = [];
   const errors = [];
-  const counters = { installs: 0, updates: 0, preloads: 0 };
+  const counters = { installs: 0, updates: 0, modelUpdates: 0, preloads: 0 };
   const context = vm.createContext({
     Float16Array: Uint16Array,
     structuredClone,
@@ -21,10 +25,11 @@ async function createHarness({ globals = {}, failPreRender = false, preloadAsset
       this.scene = scene;
       this.options = options;
       this.enabled = options.show;
-      this.stage = { enabled: options.show, destroyed: false,
+      this.stage = { enabled: options.show, destroyed: false, ready: true,
         isDestroyed() { return this.destroyed; },
         destroy() { assert.equal(this.destroyed, false); this.destroyed = true; } };
       this.cloudMaterialPass = { hazeSunColor: new Cesium.Cartesian3(), invalidateHistory() {} };
+      this.sceneDepth = { _callbacks: {} };
       this._customDarkParam = {};
       this.assetStatus = "ready";
       this.assetErrors = Object.freeze([]);
@@ -34,6 +39,9 @@ async function createHarness({ globals = {}, failPreRender = false, preloadAsset
       passes.push(this);
     }
     update() { counters.updates++; }
+    get ready() { return this.stage.ready; }
+    get canActivate() { return this.stage.ready && this.assetState.status === "ready"; }
+    setActive(value) { this.active = value; }
     setVolumetricLightOptions(options) { this.volumetricLight = options; }
     getAssetState() { return this.assetState; }
     captureAssets(options) {
@@ -50,13 +58,41 @@ async function createHarness({ globals = {}, failPreRender = false, preloadAsset
       if (!this.stage.isDestroyed()) this.stage.destroy();
     }
   }
+  class GaussianPass {
+    constructor(scene, options) {
+      this.scene = scene;
+      this.options = structuredClone(options.options ?? {});
+      this.enabled = options.show;
+      this.destroyed = false;
+      modelPasses.push(this);
+    }
+    update(options) { this.options = { ...this.options, ...structuredClone(options) }; }
+    updateFrame() { counters.modelUpdates++; }
+    isDestroyed() { return this.destroyed; }
+    destroy() { assert.equal(this.destroyed, false); this.destroyed = true; }
+  }
+  class LightingController {
+    constructor(scene, options) { this.scene = scene; this.options = options; this.daylightFactor = 1; this.destroyed = false; lightingControllers.push(this); }
+    update(options, enabled) { this.options = structuredClone(options); this.enabled = enabled; }
+    updateFrame() {}
+    destroy() { assert.equal(this.destroyed, false); this.destroyed = true; }
+    isDestroyed() { return this.destroyed; }
+  }
   const source = await readFile(new URL("../BetterSky.js", import.meta.url), "utf8");
   const optionsSource = await readFile(new URL("../src/options.js", import.meta.url), "utf8");
   async function loadEntry() {
     const entry = new vm.SourceTextModule(source, { context });
     await entry.link(specifier => {
       if (specifier === "./src/options.js") return new vm.SourceTextModule(optionsSource, { context });
-      const exports = specifier === "cesium" ? Cesium : specifier.endsWith("preloadAssets.js")
+      const exports = specifier === "cesium" ? Cesium : specifier.endsWith("GaussianSplatPass.js")
+        ? { default: GaussianPass }
+        : specifier.endsWith("LightingController.js")
+        ? { default: LightingController }
+        : specifier.endsWith("SceneStateLease.js")
+        ? { default: SceneStateLease }
+        : specifier.endsWith("CesiumAdapter.js")
+        ? { moveStagesToFront }
+        : specifier.endsWith("preloadAssets.js")
         ? { default() { counters.preloads++; return preloadAssets(); } }
         : specifier.endsWith("viewportQuadCommand.js")
         ? { installViewportCommands() { counters.installs++; } }
@@ -80,9 +116,16 @@ async function createHarness({ globals = {}, failPreRender = false, preloadAsset
       gamma: 1,
       context: Object.fromEntries(["webgl2", "floatingPointTexture", "halfFloatingPointTexture", "colorBufferFloat", "colorBufferHalfFloat", "textureFloatLinear", "textureHalfFloatLinear"].map(key => [key, true])),
       postProcessStages: {
+        _stages: [],
+        fxaa: { enabled: true },
         contains: stage => stages.has(stage),
-        add(stage) { stages.add(stage); },
-        remove(stage) { stages.delete(stage); stage.destroy(); },
+        add(stage) { stages.add(stage); this._stages.push(stage); return stage; },
+        remove(stage) {
+          stages.delete(stage);
+          const index = this._stages.indexOf(stage);
+          if (index >= 0) this._stages.splice(index, 1);
+          stage.destroy();
+        },
       },
       preRender: { addEventListener(callback) {
         if (failPreRender) throw new Error("injected callback registration failure");
@@ -93,7 +136,7 @@ async function createHarness({ globals = {}, failPreRender = false, preloadAsset
     return { scene, clock: { currentTime: Cesium.JulianDate.fromIso8601("2024-01-01T00:00Z") },
       stages, callbacks, render: () => [...callbacks].forEach(callback => callback()) };
   }
-  return { BetterSky: await loadEntry(), loadEntry, createViewer, passes, errors, counters };
+  return { BetterSky: await loadEntry(), loadEntry, createViewer, passes, modelPasses, lightingControllers, errors, counters };
 }
 
 test("static preloading forwards completion and failure without constructing an instance", async () => {
@@ -144,6 +187,8 @@ test("only one active public instance is allowed across duplicate bundles and di
   const rebuilt = new DuplicateBetterSky(otherViewer);
   rebuilt.dispose();
   assert(harness.passes.every(pass => pass.destroyed && pass.stage.destroyed));
+  assert(harness.modelPasses.every(pass => pass.destroyed));
+  assert(harness.lightingControllers.every(controller => controller.destroyed));
 });
 
 test("unsupported scenes and required browser capabilities fail before any host or GPU mutation", async () => {
@@ -187,11 +232,13 @@ test("an unsupported frame stops all passes once and requires dispose and recons
     const effects = new harness.BetterSky(viewer);
     viewer.render();
     assert.equal(harness.counters.updates, 3);
+    assert.equal(harness.counters.modelUpdates, 1);
     invalidate(viewer);
     for (let frame = 0; frame < 3; frame++) viewer.render();
     assert.equal(harness.counters.updates, 3);
     assert.equal(harness.errors.length, 1);
     assert(harness.passes.every(pass => !pass.enabled));
+    assert(harness.modelPasses.every(pass => !pass.enabled));
     Object.assign(viewer.scene, { mode: Cesium.SceneMode.SCENE3D, globe: {} });
     viewer.scene.camera.frustum = new Cesium.PerspectiveFrustum();
     assert.throws(() => effects.update({ enabled: true }), /重建/);
@@ -207,7 +254,7 @@ test("a failed public constructor releases passes and singleton lease and restor
   const harness = await createHarness({ failPreRender: true });
   const viewer = harness.createViewer();
   const originalTime = Cesium.JulianDate.clone(viewer.clock.currentTime);
-  assert.throws(() => new harness.BetterSky(viewer), /injected/);
+  assert.throws(() => new harness.BetterSky(viewer, { highDynamicRange: true, depthTestAgainstTerrain: true }), /injected/);
   assert.equal(viewer.scene.highDynamicRange, false);
   assert.equal(viewer.scene.logarithmicDepthBuffer, false);
   assert.equal(viewer.scene.gamma, 1);
@@ -216,6 +263,7 @@ test("a failed public constructor releases passes and singleton lease and restor
   assert.equal(viewer.stages.size, 0);
   assert.equal(viewer.callbacks.size, 0);
   assert(harness.passes.every(pass => pass.destroyed));
+  assert(harness.modelPasses.every(pass => pass.destroyed));
   assert.throws(() => new harness.BetterSky(viewer), /injected/);
 });
 
@@ -226,9 +274,14 @@ test("default snapshots preserve the shipped preset and never share caller-owned
   const defaults = harness.BetterSky.getDefaultOptions();
   assert.equal(defaults.time, "2026-05-01T06:00Z");
   assert.equal(defaults.gamma, 2.2);
+  assert.equal("preserveModelColors" in defaults, false);
+  assert.equal(defaults.lighting.sunIntensity, 2);
+  assert.equal(defaults.gaussianSplat.exposureOffset, -0.5);
+  assert.equal(defaults.highDynamicRange, true);
+  assert.equal(defaults.depthTestAgainstTerrain, true);
   assert.equal(defaults.volumetricLight.mode, "volumetric");
   assert.equal(defaults.cloud.hazeQuality, "high");
-  assert.equal(defaults.hbao.intensity, 100);
+  assert.equal(defaults.hbao.intensity, 20);
   assert.equal(defaults.hbao.enabled, true);
   assert.equal(defaults.hbao.denoise, true);
   assert.equal(defaults.snow, false);
@@ -239,10 +292,11 @@ test("default snapshots preserve the shipped preset and never share caller-owned
   const effects = new harness.BetterSky(viewer);
   const original = snapshot(effects);
   assert.equal(original.cloud.altitudes[0], 4000);
-  assert.equal(original.hbao.gamma, 2.5);
+  assert.equal(original.hbao.gamma, 1);
   assert.equal(original.hbao.denoise, true);
   assert.equal(viewer.scene.gamma, 2.2);
   assert.equal(viewer.scene.highDynamicRange, true);
+  assert.equal(viewer.scene.globe.depthTestAgainstTerrain, true);
   assert.equal(harness.passes[0].options.denoise, true);
   assert(Cesium.JulianDate.equals(viewer.clock.currentTime, Cesium.JulianDate.fromIso8601("2026-05-01T06:00Z")));
   const copy = effects.getOptions();
@@ -297,7 +351,11 @@ test("invalid commands reject all fields before committing configuration, host s
     { unknown: true }, { cloud: { unknown: true } }, { hbao: { unknown: 1 } }, { volumetricLight: { unknown: 1 } },
     { coverage: Infinity }, { coverage: -0.1 }, { coverage: 1.1 }, { toneMappingMode: 3 }, { gamma: 0 },
     { toneMappingExposure: NaN }, { irradianceScale: -1 }, { bloomIntensity: -1 }, { nightGlowIntensity: NaN },
-    { aerialPerspectiveStrength: 2 }, { enabled: 1 }, { smaa: null }, { snow: 1 }, { rain: null }, { hbao: null }, { hbao: false }, { cloud: [] },
+    { aerialPerspectiveStrength: 2 }, { enabled: 1 }, { preserveModelColors: true },
+    { lighting: { sunIntensity: -1 } }, { lighting: { shadows: { size: 1000 } } },
+    { gaussianSplat: { exposureOffset: Infinity } }, { gaussianSplat: { colorSpace: "invalid" } },
+    { highDynamicRange: "true" }, { highDynamicRange: 1 }, { depthTestAgainstTerrain: 1 },
+    { smaa: null }, { snow: 1 }, { rain: null }, { hbao: null }, { hbao: false }, { cloud: [] },
     { localWeatherVelocity: [0, Infinity] }, { localWeatherVelocity: [1] },
     { cloud: { altitudes: [1, 2, NaN, 0] } }, { cloud: { heights: [1, -2, 3, 0] } },
     { cloud: { densityScales: [0, 0, Infinity, 0] } }, { cloud: { shapeDetailAmounts: [0, 2, 0, 0] } },
@@ -314,7 +372,7 @@ test("invalid commands reject all fields before committing configuration, host s
     assert.throws(() => effects.update({ coverage: 0.8, gamma: 3, ...invalid }), /BetterSky/);
     assert.deepEqual(snapshot(effects), original);
     assert.equal(viewer.scene.gamma, 2.2);
-    assert.equal(harness.passes[1].coverage, 0.34);
+    assert.equal(harness.passes[1].coverage, 0.30);
     assert(Cesium.JulianDate.equals(viewer.clock.currentTime, originalTime));
   }
   effects.dispose();
@@ -366,7 +424,7 @@ test("invalid constructor options reject before scene changes and validate time 
   }
   const effects = new harness.BetterSky(harness.createViewer().scene, { time: null });
   assert.throws(() => effects.update({ coverage: 0.8, time: "invalid time" }), /ISO 8601/);
-  assert.equal(effects.getOptions().coverage, 0.34);
+  assert.equal(effects.getOptions().coverage, 0.30);
   effects.dispose();
 });
 
@@ -377,8 +435,9 @@ test("scene settings stay gated until explicitly re-enabled and snapshots retain
   const effects = new harness.BetterSky(viewer, { applySceneSettings: false, time: undefined });
   assert.equal(effects.getOptions().gamma, 2.2);
   assert.equal(effects.getOptions().highDynamicRange, true);
+  assert.equal(effects.getOptions().depthTestAgainstTerrain, true);
   assert(Cesium.JulianDate.equals(viewer.clock.currentTime, originalTime));
-  effects.update({ applySceneSettings: false, gamma: 4, highDynamicRange: true });
+  effects.update({ applySceneSettings: false, gamma: 4, highDynamicRange: true, depthTestAgainstTerrain: true });
   assert.equal(viewer.scene.gamma, 1);
   assert.equal(effects.getOptions().gamma, 4);
   assert.equal(effects.getOptions().applySceneSettings, false);
@@ -393,6 +452,183 @@ test("scene settings stay gated until explicitly re-enabled and snapshots retain
   effects.update({ time: "2025-05-01T00:00Z" });
   effects.update({ gamma: 2.5 });
   assert(Cesium.JulianDate.equals(viewer.clock.currentTime, Cesium.JulianDate.fromIso8601("2025-05-01T00:00Z")));
+  effects.dispose();
+});
+
+test("nullable scene settings inherit host values and only explicit booleans apply", async () => {
+  const harness = await createHarness();
+  for (const hostValue of [false, true]) {
+    const viewer = harness.createViewer();
+    viewer.scene.highDynamicRange = hostValue;
+    viewer.scene.globe.depthTestAgainstTerrain = hostValue;
+    const effects = new harness.BetterSky(viewer, { highDynamicRange: null, depthTestAgainstTerrain: null });
+    assert.equal(viewer.scene.highDynamicRange, hostValue);
+    assert.equal(viewer.scene.globe.depthTestAgainstTerrain, hostValue);
+
+    viewer.scene.highDynamicRange = !hostValue;
+    viewer.scene.globe.depthTestAgainstTerrain = !hostValue;
+    effects.update({ coverage: 0.5, highDynamicRange: null, depthTestAgainstTerrain: null });
+    effects.update({ applySceneSettings: false });
+    effects.update({ applySceneSettings: true });
+    assert.equal(viewer.scene.highDynamicRange, !hostValue);
+    assert.equal(viewer.scene.globe.depthTestAgainstTerrain, !hostValue);
+
+    effects.update({ highDynamicRange: hostValue, depthTestAgainstTerrain: hostValue });
+    assert.equal(viewer.scene.highDynamicRange, hostValue);
+    assert.equal(viewer.scene.globe.depthTestAgainstTerrain, hostValue);
+    effects.update({ highDynamicRange: null, depthTestAgainstTerrain: null });
+    assert.equal(viewer.scene.highDynamicRange, hostValue);
+    assert.equal(viewer.scene.globe.depthTestAgainstTerrain, hostValue);
+    assert.equal(effects.getOptions().highDynamicRange, null);
+    assert.equal(effects.getOptions().depthTestAgainstTerrain, null);
+    effects.dispose();
+
+    const inheritedHdr = viewer.scene.highDynamicRange;
+    const inheritedTerrainDepth = viewer.scene.globe.depthTestAgainstTerrain;
+    const explicitlyConfigured = new harness.BetterSky(viewer, {
+      highDynamicRange: !hostValue,
+      depthTestAgainstTerrain: !hostValue,
+    });
+    assert.equal(viewer.scene.highDynamicRange, !hostValue);
+    assert.equal(viewer.scene.globe.depthTestAgainstTerrain, !hostValue);
+    explicitlyConfigured.dispose();
+    assert.equal(viewer.scene.highDynamicRange, inheritedHdr);
+    assert.equal(viewer.scene.globe.depthTestAgainstTerrain, inheritedTerrainDepth);
+  }
+});
+
+test("Gaussian calibration and natural lighting follow the master switch without losing accepted configuration", async () => {
+  const harness = await createHarness();
+  const viewer = harness.createViewer();
+  const effects = new harness.BetterSky(viewer, { gaussianSplat: { exposureOffset: -1 } });
+  const gaussian = harness.modelPasses[0];
+  assert.equal(viewer.scene.highDynamicRange, true);
+  assert.equal(viewer.scene.postProcessStages.fxaa.enabled, true);
+  viewer.render();
+  assert.equal(viewer.scene.postProcessStages.fxaa.enabled, false);
+  effects.update({ enabled: false, gaussianSplat: { exposureOffset: -2 }, lighting: { ambientIntensity: 1.5 } });
+  assert.equal(gaussian.enabled, false);
+  assert.equal(viewer.scene.highDynamicRange, false);
+  assert.equal(viewer.scene.gamma, 1);
+  assert.equal(viewer.scene.logarithmicDepthBuffer, false);
+  assert.equal(viewer.scene.postProcessStages.fxaa.enabled, true);
+  assert.equal(effects.getOptions().gaussianSplat.exposureOffset, -2);
+  assert.equal(effects.getOptions().lighting.ambientIntensity, 1.5);
+  assert.equal(effects.getOptions().lighting.sunIntensity, 2);
+  effects.update({ enabled: true });
+  assert.equal(gaussian.enabled, false, "re-enabling waits for a frame-boundary activation");
+  viewer.render();
+  assert.equal(gaussian.enabled, true);
+  assert.equal(viewer.scene.highDynamicRange, true);
+  assert.equal(viewer.scene.postProcessStages.fxaa.enabled, false);
+  assert.equal(effects.getOptions().gaussianSplat.daylightResponse, true);
+  effects.dispose();
+  assert.equal(viewer.scene.highDynamicRange, false);
+  assert.equal(viewer.scene.gamma, 1);
+  assert.equal(viewer.scene.postProcessStages.fxaa.enabled, true);
+});
+
+test("native tone mapping is skipped only for active unified HDR and Gaussian shares the current daylight state", async () => {
+  const harness = await createHarness();
+  const viewer = harness.createViewer();
+  const effects = new harness.BetterSky(viewer);
+  const shouldSkipNativeToneMap = harness.passes[1].sceneDepth._callbacks.skipNativeTonemapping;
+  assert.equal(shouldSkipNativeToneMap(), false, "construction preserves the native rendering path");
+  viewer.render();
+  assert.equal(shouldSkipNativeToneMap(), true);
+  effects.update({ highDynamicRange: false });
+  assert.equal(shouldSkipNativeToneMap(), false);
+  effects.update({ highDynamicRange: true });
+  assert.equal(shouldSkipNativeToneMap(), true);
+  harness.lightingControllers[0].daylightFactor = 0.12;
+  viewer.render();
+  assert.equal(harness.modelPasses[0].daylightFactor, 0.12);
+  effects.update({ enabled: false });
+  assert.equal(shouldSkipNativeToneMap(), false);
+  assert.equal(harness.lightingControllers[0].enabled, false);
+  effects.dispose();
+});
+
+test("required resources and current commands activate sky, models and tone mapping atomically at frame boundaries", async () => {
+  const harness = await createHarness();
+  const viewer = harness.createViewer();
+  const effects = new harness.BetterSky(viewer);
+  const [hbao, geo, smaa] = harness.passes;
+  const gaussian = harness.modelPasses[0];
+  const lighting = harness.lightingControllers[0];
+  const shouldSkip = geo.sceneDepth._callbacks.skipNativeTonemapping;
+  const check = active => {
+    assert.equal(geo.active, active);
+    assert.equal(hbao.active, active);
+    assert.equal(smaa.active, active);
+    assert.equal(gaussian.enabled, active);
+    assert.equal(lighting.enabled, active);
+    assert.equal(shouldSkip(), active);
+    assert.equal(viewer.scene.postProcessStages.fxaa.enabled, !active);
+  };
+  const state = status => Object.freeze({ status, errors: Object.freeze([]) });
+  geo.assetState = state("loading");
+  viewer.render();
+  check(false);
+  assert(geo.stage.enabled && hbao.stage.enabled && smaa.stage.enabled,
+    "registered stages remain warm while producing the native input");
+  geo.assetState = state("ready");
+  smaa.assetState = state("loading");
+  viewer.render();
+  check(false);
+  smaa.assetState = state("ready");
+  geo.stage.ready = false;
+  viewer.render();
+  check(false);
+  geo.stage.ready = true;
+  check(false);
+  viewer.render();
+  check(true);
+  geo.assetState = state("error");
+  viewer.render();
+  check(false);
+  geo.assetState = state("ready");
+  check(false);
+  viewer.render();
+  check(true);
+  effects.dispose();
+});
+
+test("unrelated effect updates preserve later host scene changes and disabling SMAA restores host FXAA", async () => {
+  const harness = await createHarness();
+  const viewer = harness.createViewer();
+  const effects = new harness.BetterSky(viewer, { depthTestAgainstTerrain: true });
+  viewer.render();
+  viewer.scene.highDynamicRange = false;
+  viewer.scene.gamma = 1.8;
+  viewer.scene.globe.depthTestAgainstTerrain = false;
+  effects.update({ hbao: { intensity: 12 } });
+  assert.equal(viewer.scene.highDynamicRange, false);
+  assert.equal(viewer.scene.gamma, 1.8);
+  assert.equal(viewer.scene.globe.depthTestAgainstTerrain, false);
+  effects.update({ smaa: false });
+  assert.equal(viewer.scene.postProcessStages.fxaa.enabled, true);
+  assert.equal(viewer.scene.highDynamicRange, false);
+  effects.update({ smaa: true });
+  assert.equal(viewer.scene.postProcessStages.fxaa.enabled, false);
+  effects.dispose();
+  assert.equal(viewer.scene.postProcessStages.fxaa.enabled, true);
+});
+
+test("dynamically enabled SMAA remains the last registered display stage", async () => {
+  const harness = await createHarness();
+  const viewer = harness.createViewer();
+  const effects = new harness.BetterSky(viewer, { smaa: false });
+  const stages = viewer.scene.postProcessStages._stages;
+  assert.equal(stages.length, 2);
+  effects.update({ smaa: true });
+  const smaa = harness.passes.at(-1);
+  assert.equal(stages.at(-1), smaa.stage);
+  assert.equal(smaa.stage.destroyed, false);
+  effects.update({ smaa: false });
+  effects.update({ smaa: true });
+  assert.equal(viewer.stages.size, 3);
+  assert.equal(stages.at(-1), smaa.stage);
   effects.dispose();
 });
 

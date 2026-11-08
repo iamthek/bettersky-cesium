@@ -1,4 +1,5 @@
 import { getCameraPosition } from "../internal/CesiumAdapter.js";
+import { withSceneDepth } from "../internal/SceneDepth.js";
 import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from "../internal/MathTypes.js";
 import cloudsMaterialVertexShaderSource from "../shaders/geospatial/cloudsMaterial.vert.glsl?raw";
 import cloudLayerDensityShaderSource from "../shaders/geospatial/cloudLayerDensity.glsl?raw";
@@ -60,9 +61,63 @@ import { METER_TO_LENGTH_UNIT } from "./AtmosphereConstants.js";
 export const cloudsMaterialVS = cloudsMaterialVertexShaderSource;
 export const cloudLayerDensityGLSL = cloudLayerDensityShaderSource;
 // Inject the same density implementation into cloud rendering and shadow tracing.
-export const cloudsMaterialFS = cloudsMaterialFragmentShaderSource.replace("/*__CLOUD_LAYER_DENSITY__*/", cloudLayerDensityGLSL);
+export const cloudsMaterialFS = withSceneDepth(cloudsMaterialFragmentShaderSource.replace("/*__CLOUD_LAYER_DENSITY__*/", cloudLayerDensityGLSL));
 export const cloudsResolveMaterialVS = cloudsResolveMaterialVertexShaderSource;
-export const cloudsResolveMaterialFS = cloudsResolveMaterialFragmentShaderSource;
+export const cloudsResolveMaterialFS = withSceneDepth(cloudsResolveMaterialFragmentShaderSource);
+// The cloud column in front of a splat has a different endpoint and motion from
+// the background column. Resolve its history in the small ray-march grid, never
+// using full-resolution background-cloud colour or velocity as a substitute.
+export const modelFrontResolveFS = withSceneDepth(`
+precision highp float;
+precision highp sampler2D;
+uniform sampler2D currentFront;
+uniform sampler2D historyFront;
+uniform vec2 targetUvScale;
+uniform vec2 temporalJitter;
+uniform bool historyValid;
+uniform bool cameraMoving;
+uniform bool weatherMoving;
+uniform vec2 previousTemporalJitter;
+uniform float currentWeight;
+/*__SCENE_DEPTH__*/
+vec4 frontModelDepth(ivec2 coordinate, ivec2 size) {
+    vec2 uv = (vec2(coordinate) + 0.5) / vec2(size);
+    return texture(u_betterSkyDepth, uv * targetUvScale + temporalJitter);
+}
+void main() {
+    ivec2 coordinate = ivec2(gl_FragCoord.xy);
+    ivec2 size = textureSize(currentFront, 0);
+    vec4 model = frontModelDepth(coordinate, size);
+    if (!u_betterSkyModelDepthAvailable || model.b <= 0.0 || model.a < 1.0 / 255.0) {
+        out_FragColor = vec4(0.0);
+        return;
+    }
+    vec4 current = texelFetch(currentFront, coordinate, 0);
+    if (any(isnan(current)) || any(isinf(current))) current = vec4(0.0);
+    out_FragColor = current;
+    if (!historyValid || cameraMoving || weatherMoving || current.a <= 1e-5) return;
+    vec2 fullUv = (vec2(coordinate) + 0.5) / vec2(size) * targetUvScale + temporalJitter;
+    vec2 historyUv = (fullUv - previousTemporalJitter) / targetUvScale;
+    if (any(lessThan(historyUv, vec2(0.0))) || any(greaterThan(historyUv, vec2(1.0)))) return;
+    vec4 history = texture(historyFront, historyUv);
+    if (any(isnan(history)) || any(isinf(history)) || history.a <= 1e-5 ||
+        abs(history.a - current.a) > 0.1) return;
+    vec4 minimum = current;
+    vec4 maximum = current;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 neighbor = clamp(coordinate + ivec2(x, y), ivec2(0), size - 1);
+            vec4 neighborDepth = frontModelDepth(neighbor, size);
+            if (neighborDepth.b <= 0.0 || neighborDepth.a < 1.0 / 255.0 ||
+                abs(neighborDepth.b - model.b) > max(1.0, model.b * 0.025)) continue;
+            vec4 sampleColor = texelFetch(currentFront, neighbor, 0);
+            if (any(isnan(sampleColor)) || any(isinf(sampleColor))) continue;
+            minimum = min(minimum, sampleColor);
+            maximum = max(maximum, sampleColor);
+        }
+    }
+    out_FragColor = mix(clamp(history, minimum, maximum), current, max(currentWeight, 0.3));
+}`);
 let vector3Scratch = new Cartesian3;
 let resolutionScratch = new Cartesian2;
 const vectorScratch = ["x", "y", "z", "w"];
@@ -83,6 +138,7 @@ export default class CloudMaterialPass {
         this._show = options.show ?? true;
         this._scene = scene;
         this.pipeline = options.pipeline;
+        this._useLogDepth = !!this.pipeline._useLogDepth;
         this._showTAA = false;
         this.minHeight = 750;
         this.maxHeight = 8000;
@@ -117,20 +173,25 @@ export default class CloudMaterialPass {
         this.targetUvScale = new Cartesian2(1, 1);
         this.previousProjectionMatrix = new Matrix4();
         this.previousViewMatrix = new Matrix4();
-        this._varianceGamma = 1.5;
+        this._varianceGamma = 1.25;
         this._jitterOffset = new Cartesian2();
         this._temporalAlpha = 0.12;
         this._currentFrameAlpha = 0.35;
-        this._motionAlpha = 0.9;
+        this._motionAlpha = 0.6;
         this._activeTemporalAlpha = this._temporalAlpha;
         this._activeCurrentFrameAlpha = this._currentFrameAlpha;
         this._spatialFilterStrength = 0.35;
         this._historyValid = false;
+        this._modelFrontHistoryValid = false;
         this._historyFrames = 0;
         this._previousCameraPosition = new Cartesian3();
         this._previousCameraDirection = new Cartesian3();
         this._previousCameraUp = new Cartesian3();
         this._previousSunDirection = new Cartesian3();
+        this._previousWeatherOffset = new Cartesian2();
+        this._previousShapeOffset = new Cartesian3();
+        this._previousDetailOffset = new Cartesian3();
+        this._previousTemporalJitter = new Cartesian2();
         this._previousFrustumProjection = new Matrix4();
         this._historyTextures = [];
         this._texelSize = new Cartesian2();
@@ -139,7 +200,9 @@ export default class CloudMaterialPass {
         this.reprojectionMatrices = Array.from({ length: 4 }, () => new Matrix4())
         // Primary raymarch
         this.maxIterationCount = defaultsPass.clouds.maxIterationCount;
-        this.minStepSize = defaultsPass.clouds.minStepSize;
+        // Balanced quarter-resolution tracing: retain shell coverage while
+        // reducing repeated density/solar lookups in overhead cloud views.
+        this.minStepSize = 75;
         this.maxStepSize = defaultsPass.clouds.maxStepSize;
         this.minDensity = defaultsPass.clouds.minDensity;
         this.minExtinction = defaultsPass.clouds.minExtinction;
@@ -171,7 +234,7 @@ export default class CloudMaterialPass {
         this.maxRayDistance = defaultsPass.clouds.maxRayDistance;
         this.perspectiveStepScale = defaultsPass.clouds.perspectiveStepScale;
 
-        this.maxIterationCountToSun = defaultsPass.clouds.maxIterationCountToSun;
+        this.maxIterationCountToSun = 2;
         this.maxIterationCountToGround = defaultsPass.clouds.maxIterationCountToGround;
         this.minSecondaryStepSize = defaultsPass.clouds.minSecondaryStepSize;
         this.secondaryStepScale = defaultsPass.clouds.secondaryStepScale;
@@ -185,6 +248,7 @@ export default class CloudMaterialPass {
         this.minShadowLengthStepSize = defaultsPass.clouds.minShadowLengthStepSize;
         this.maxShadowLengthRayDistance = defaultsPass.clouds.maxShadowLengthRayDistance;
         this._cloudsUniform = {
+            ...this.pipeline.sceneDepth?.uniformMap,
 
             shadowBuffer: () => { return this.shadowBuffer },
             shadowTexelSize: () => { return this.shadowTexelSize.set(1 / this.shadowMapSize.x, 1 / this.shadowMapSize.y) },
@@ -219,6 +283,9 @@ export default class CloudMaterialPass {
             hazeAbsorptionCoefficient: () => { return this.hazeAbsorptionCoefficient },
             reprojectionMatrix: () => { return this.reprojectionMatrix },
             previousCameraPosition: () => this._previousCameraPosition,
+            previousWeatherOffset: () => this._previousWeatherOffset,
+            previousShapeOffset: () => this._previousShapeOffset,
+            previousDetailOffset: () => this._previousDetailOffset,
             inverseProjectionMatrix: () => { return this.inverseProjectionMatrix },
             skyIrradianceScale: () => { return this.skyIrradianceScale },
             groundIrradianceScale: () => { return this.groundIrradianceScale },
@@ -300,7 +367,7 @@ export default class CloudMaterialPass {
             inverseViewMatrix: () => { return this._scene.context.uniformState.inverseView },
             cameraPosition: () => { return getCameraPosition(this._scene) },
             ellipsoidRadii: () => { return this.pipeline._ellipsoidRadii },
-            u_solar_irradiance: () => { return this.pipeline.atmosphere.solarIrradiance },
+            u_solar_irradiance: () => this.pipeline.getSolarIrradiance?.() ?? this.pipeline.atmosphere.solarIrradiance,
             u_sun_angular_radius: () => { return this.pipeline.atmosphere.sunAngularRadius },
             u_bottom_radius: () => { return this.pipeline.atmosphere.bottomRadius * METER_TO_LENGTH_UNIT },
             u_top_radius: () => { return this.pipeline.atmosphere.topRadius * METER_TO_LENGTH_UNIT },
@@ -368,6 +435,10 @@ export default class CloudMaterialPass {
                 pixelDatatype: PixelDatatype.HALF_FLOAT,
                 flipY: false,
             });
+            this._modelFrontColor = new Texture({
+                context, width: this._lowResWidth, height: this._lowResHeight,
+                pixelFormat: PixelFormat.RGBA, pixelDatatype: PixelDatatype.HALF_FLOAT, flipY: false,
+            });
             this._depthVelocityBuffer = new Texture({
                 context: this._scene.context,
                 width: this._lowResWidth,
@@ -402,6 +473,14 @@ export default class CloudMaterialPass {
                 pixelFormat: PixelFormat.RGBA,
                 pixelDatatype: PixelDatatype.HALF_FLOAT,
                 flipY: false,
+            });
+            this._modelFrontResolveBuffer = new Texture({
+                context, width: this._lowResWidth, height: this._lowResHeight,
+                pixelFormat: PixelFormat.RGBA, pixelDatatype: PixelDatatype.HALF_FLOAT, flipY: false,
+            });
+            this._modelFrontHistoryBuffer = new Texture({
+                context, width: this._lowResWidth, height: this._lowResHeight,
+                pixelFormat: PixelFormat.RGBA, pixelDatatype: PixelDatatype.HALF_FLOAT, flipY: false,
             });
             // Keep cloud depth aligned with the full-resolution color history.
             const cloudDepthSampler = new Sampler({
@@ -449,7 +528,7 @@ export default class CloudMaterialPass {
 
         if (!this._cloudDrawComomand) {
             const cloudsMaterialShader = new ShaderSource({
-                defines: ["LOG_DEPTH"],
+                defines: this._useLogDepth ? ["LOG_DEPTH"] : [],
                 sources: [cloudsMaterialFS]
             });
             this._passState = new PassState(this._scene.context);
@@ -458,12 +537,13 @@ export default class CloudMaterialPass {
                 primitiveType: PrimitiveType.TRIANGLES
             }, cloudsMaterialVS);
             const cloudsResolveMaterialShader = new ShaderSource({
-                defines: ["LOG_DEPTH"],
+                defines: this._useLogDepth ? ["LOG_DEPTH"] : [],
                 sources: [cloudsResolveMaterialFS]
             });
             this._passState2 = new PassState(this._scene.context);
             this._cloudResolveDrawComomand = this._scene.context.createViewportQuadCommand(cloudsResolveMaterialShader, {
                 uniformMap: {
+                    ...this.pipeline.sceneDepth?.uniformMap,
                     frame: () => { return this.pipeline._frame },
                     varianceGamma: () => { return this._varianceGamma },
                     jitterOffset: () => { return this._jitterOffset },
@@ -472,6 +552,8 @@ export default class CloudMaterialPass {
                     spatialFilterStrength: () => this._spatialFilterStrength,
                     historyValid: () => this._historyValid,
                     cameraMoving: () => this._cameraMoving ?? false,
+                    weatherMoving: () => this._weatherMoving ?? false,
+                    motionAlpha: () => this._motionAlpha,
                     historyFrames: () => this._historyFrames,
                     depthHistoryBuffer: () => this._cloudResolveDepthHistoryBuffer,
                     sceneDepthBuffer: () => this.depthBuffer,
@@ -495,12 +577,30 @@ export default class CloudMaterialPass {
                 },
                 primitiveType: PrimitiveType.TRIANGLES
             }, cloudsResolveMaterialVS);
+            this._modelFrontPassState = new PassState(context);
+            this._modelFrontResolveCommand = context.createViewportQuadCommand(new ShaderSource({
+                defines: this._useLogDepth ? ["LOG_DEPTH"] : [], sources: [modelFrontResolveFS],
+            }), {
+                renderState: RenderState.fromCache({ depthTest: { enabled: false }, depthMask: false }),
+                uniformMap: {
+                    ...this.pipeline.sceneDepth?.uniformMap,
+                    currentFront: () => this._modelFrontColor,
+                    historyFront: () => this._modelFrontHistoryBuffer,
+                    targetUvScale: () => this.targetUvScale,
+                    temporalJitter: () => this.temporalJitter,
+                    historyValid: () => this._modelFrontHistoryValid,
+                    cameraMoving: () => this._cameraMoving ?? false,
+                    weatherMoving: () => this._weatherMoving ?? false,
+                    previousTemporalJitter: () => this._previousTemporalJitter,
+                    currentWeight: () => this._activeTemporalAlpha,
+                },
+            });
         }
         if (!this._passState.framebuffer) {
             this._passState.viewport = new BoundingRectangle(0, 0, this._lowResWidth, this._lowResHeight);
             this._passState.framebuffer = new Framebuffer({
                 context,
-                colorTextures: [this._outputColor, this._depthVelocityBuffer, this._shadowLengthBuffer],
+                colorTextures: [this._outputColor, this._depthVelocityBuffer, this._shadowLengthBuffer, this._modelFrontColor],
                 destroyAttachments: false,
             });
             this._passState2.viewport = new BoundingRectangle(0, 0, this._width, this._height);
@@ -509,18 +609,49 @@ export default class CloudMaterialPass {
                 colorTextures: [this._cloudResolveBuffer, this._shadowResolveLengthBuffer, this._cloudResolveDepthBuffer],
                 destroyAttachments: false,
             })
+            this._modelFrontPassState.viewport = new BoundingRectangle(0, 0, this._lowResWidth, this._lowResHeight);
+            this._modelFrontPassState.framebuffer = new Framebuffer({
+                context, colorTextures: [this._modelFrontResolveBuffer], destroyAttachments: false,
+            });
         }
     }
 
     invalidateHistory() {
         this._historyValid = false;
+        this._modelFrontHistoryValid = false;
+        this._modelFrontRenderedFrame = undefined;
         this._historyFrames = 0;
         this.pipeline.shadowMaterialPass?.invalidateHistory();
         this.pipeline.volumetricLightPass?.invalidateHistory();
     }
 
+    // RGB is linear HDR premultiplied cloud radiance; A is cloud opacity.
+    // The texture contains only the cloud integral before each model's proxy.
+    get modelFrontTexture() {
+        return this._modelFrontRenderedFrame === this.pipeline._frame ? this._modelFrontHistoryBuffer : undefined;
+    }
+
+    get modelFrontByteLength() {
+        return this._modelFrontColor ? this._lowResWidth * this._lowResHeight * 3 * 8 : 0;
+    }
+
+    setUseLogDepth(value) {
+        if (this._useLogDepth === value) return;
+        if (this._useLogDepth === undefined) { this._useLogDepth = value; return; }
+        this._useLogDepth = value;
+        this.invalidateHistory();
+        this._releaseRenderTargets();
+        for (const command of [this._cloudDrawComomand, this._cloudResolveDrawComomand, this._modelFrontResolveCommand]) command?.shaderProgram?.destroy();
+        this._cloudDrawComomand = undefined;
+        this._cloudResolveDrawComomand = undefined;
+        this._modelFrontResolveCommand = undefined;
+        this._width = undefined;
+        this._height = undefined;
+        this.init(true);
+    }
+
     _releaseRenderTargets() {
-        for (const passState of [this._passState, this._passState2]) {
+        for (const passState of [this._passState, this._passState2, this._modelFrontPassState]) {
             if (passState && passState.framebuffer) {
                 passState.framebuffer.destroy();
                 passState.framebuffer = undefined;
@@ -531,6 +662,7 @@ export default class CloudMaterialPass {
             "_cloudResolveBuffer", "_colorResolveHistoryBuffer",
             "_cloudResolveDepthBuffer", "_cloudResolveDepthHistoryBuffer",
             "_shadowResolveLengthBuffer", "_shadowResolveLengthHistoryBuffer",
+            "_modelFrontColor", "_modelFrontResolveBuffer", "_modelFrontHistoryBuffer",
         ]) {
             if (this[key]) {
                 this[key].destroy();
@@ -607,10 +739,14 @@ export default class CloudMaterialPass {
         // During motion, use fresh samples for both Bayer classes. Restore the
         // quieter stationary blend as soon as the camera stops.
         this._cameraMoving = cameraMoving;
-        this._activeTemporalAlpha = cameraMoving
-            ? Math.max(this._temporalAlpha, this._motionAlpha) : this._temporalAlpha;
-        this._activeCurrentFrameAlpha = cameraMoving
-            ? Math.max(this._currentFrameAlpha, this._motionAlpha) : this._currentFrameAlpha;
+        this._weatherMoving = this._historyValid && (
+            Cartesian2.distance(this.pipeline.localWeatherOffset, this._previousWeatherOffset) > 1e-9 ||
+            Cartesian3.distance(this.pipeline.shapeOffset, this._previousShapeOffset) > 1e-9 ||
+            Cartesian3.distance(this.pipeline.shapeDetailOffset, this._previousDetailOffset) > 1e-9
+        );
+        // Motion floors are applied in resolve after the distance weighting.
+        this._activeTemporalAlpha = this._temporalAlpha;
+        this._activeCurrentFrameAlpha = this._currentFrameAlpha;
         const pixelsPerRadian = Math.max(1, Math.abs(projection[5]) * this._lowResHeight * 0.5);
         this.shapeTexelsPerMeterPerPixel = this.pipeline.shapeRepeat.x *
             this.pipeline.shapeTexture.width / pixelsPerRadian;
@@ -635,6 +771,9 @@ export default class CloudMaterialPass {
             this._historyTextures = textures;
         }
         if (!this._historyValid) {
+            Cartesian2.clone(this.pipeline.localWeatherOffset, this._previousWeatherOffset);
+            Cartesian3.clone(this.pipeline.shapeOffset, this._previousShapeOffset);
+            Cartesian3.clone(this.pipeline.shapeDetailOffset, this._previousDetailOffset);
             Cartesian3.clone(camera.positionWC, this._previousCameraPosition);
             Matrix4.clone(context.uniformState.projection, this.previousProjectionMatrix);
             Matrix4.clone(context.uniformState.view, this.previousViewMatrix);
@@ -701,6 +840,15 @@ export default class CloudMaterialPass {
         if (this._cloudDrawComomand)
             this._cloudDrawComomand.execute(this._scene.context, this._passState);
 
+        if (!this._modelFrontPassState.framebuffer.onBindEvent) {
+            this._modelFrontPassState.framebuffer.onBindEvent = (buffers) => {
+                gl.framebufferTexture2D(gl.FRAMEBUFFER, buffers[0],
+                    this._modelFrontResolveBuffer._target, this._modelFrontResolveBuffer._texture, 0);
+            };
+        }
+        installFramebufferCallbacks(this._modelFrontPassState.framebuffer);
+        this._modelFrontResolveCommand.execute(context, this._modelFrontPassState);
+
         if (this._passState2.framebuffer && !this._passState2.framebuffer.onBindEvent) {
             this._passState2.framebuffer.onBindEvent = (buffers) => {
                 gl.framebufferTexture2D(gl.FRAMEBUFFER,
@@ -731,10 +879,17 @@ export default class CloudMaterialPass {
         swapTextures(this._cloudResolveBuffer, this._colorResolveHistoryBuffer);
         swapTextures(this._cloudResolveDepthBuffer, this._cloudResolveDepthHistoryBuffer);
         swapTextures(this._shadowResolveLengthBuffer, this._shadowResolveLengthHistoryBuffer);
+        swapTextures(this._modelFrontResolveBuffer, this._modelFrontHistoryBuffer);
+        this._modelFrontHistoryValid = true;
+        this._modelFrontRenderedFrame = this.pipeline._frame;
         Cartesian3.clone(camera.positionWC, this._previousCameraPosition);
         Cartesian3.clone(camera.directionWC, this._previousCameraDirection);
         Cartesian3.clone(camera.upWC, this._previousCameraUp);
         Cartesian3.clone(sunDirection, this._previousSunDirection);
+        Cartesian2.clone(this.pipeline.localWeatherOffset, this._previousWeatherOffset);
+        Cartesian3.clone(this.pipeline.shapeOffset, this._previousShapeOffset);
+        Cartesian3.clone(this.pipeline.shapeDetailOffset, this._previousDetailOffset);
+        Cartesian2.clone(this.temporalJitter, this._previousTemporalJitter);
         Matrix4.clone(projection, this._previousFrustumProjection);
         this._previousSceneMode = this._scene.mode;
         this._historyValid = true;
@@ -792,11 +947,12 @@ export default class CloudMaterialPass {
         if (this._destroyed) return;
         this._destroyed = true;
         this._releaseRenderTargets();
-        for (const command of [this._cloudDrawComomand, this._cloudResolveDrawComomand]) {
+        for (const command of [this._cloudDrawComomand, this._cloudResolveDrawComomand, this._modelFrontResolveCommand]) {
             if (command) command.shaderProgram = command.shaderProgram?.destroy();
         }
         this._cloudDrawComomand = undefined;
         this._cloudResolveDrawComomand = undefined;
+        this._modelFrontResolveCommand = undefined;
         return destroyObject(this)
     }
 

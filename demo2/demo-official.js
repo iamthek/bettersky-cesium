@@ -16,6 +16,15 @@ import { BetterSky } from "../src/index.ts";
 const DEFAULT_OPTIONS = BetterSky.getDefaultOptions();
 const CONTROL_DEFAULTS = {
   enabled: DEFAULT_OPTIONS.enabled,
+  sunIntensity: DEFAULT_OPTIONS.lighting.sunIntensity,
+  ambientIntensity: DEFAULT_OPTIONS.lighting.ambientIntensity,
+  buildingShadows: DEFAULT_OPTIONS.lighting.shadows.enabled,
+  shadowDistance: DEFAULT_OPTIONS.lighting.shadows.maximumDistance,
+  shadowSize: String(DEFAULT_OPTIONS.lighting.shadows.size),
+  shadowSoftness: DEFAULT_OPTIONS.lighting.shadows.softShadows,
+  gaussianColorSpace: "srgb",
+  gaussianExposureOffset: DEFAULT_OPTIONS.gaussianSplat.exposureOffset,
+  gaussianDaylightResponse: DEFAULT_OPTIONS.gaussianSplat.daylightResponse,
   systemLight: DEFAULT_OPTIONS.systemLight,
   hbaoEnabled: DEFAULT_OPTIONS.hbao.enabled,
   smaaEnabled: DEFAULT_OPTIONS.smaa,
@@ -89,6 +98,7 @@ const CONTROL_DEFAULTS = {
   hbaoWhitePoint: DEFAULT_OPTIONS.hbao.whitePoint,
   hbaoGamma: DEFAULT_OPTIONS.hbao.gamma,
   highDynamicRange: DEFAULT_OPTIONS.highDynamicRange,
+  depthTestAgainstTerrain: DEFAULT_OPTIONS.depthTestAgainstTerrain,
   logarithmicDepthBuffer: DEFAULT_OPTIONS.logarithmicDepthBuffer,
   gamma: DEFAULT_OPTIONS.gamma,
   time: DEFAULT_OPTIONS.time.slice(0, 16),
@@ -107,6 +117,21 @@ function buildPipelineOptions(values) {
   return {
     time: `${values.time}Z`,
     enabled: values.enabled,
+    lighting: {
+      sunIntensity: values.sunIntensity,
+      ambientIntensity: values.ambientIntensity,
+      shadows: {
+        enabled: values.buildingShadows,
+        maximumDistance: values.shadowDistance,
+        size: Number(values.shadowSize),
+        softShadows: values.shadowSoftness,
+      },
+    },
+    gaussianSplat: {
+      colorSpace: values.gaussianColorSpace,
+      exposureOffset: values.gaussianExposureOffset,
+      daylightResponse: values.gaussianDaylightResponse,
+    },
     systemLight: values.systemLight,
     coverage: values.coverage,
     localWeatherVelocity: [values.weatherX, values.weatherY],
@@ -116,6 +141,7 @@ function buildPipelineOptions(values) {
     aerialPerspectiveStrength: values.aerialPerspectiveStrength,
     nightGlowIntensity: values.nightGlowIntensity,
     highDynamicRange: values.highDynamicRange,
+    depthTestAgainstTerrain: values.depthTestAgainstTerrain,
     logarithmicDepthBuffer: values.logarithmicDepthBuffer,
     gamma: values.gamma,
     bloomIntensity: values.bloomIntensity,
@@ -351,7 +377,7 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
       },
       refreshHelp() {
         const description = typeof help === "function" ? help() : help;
-        const initial = typeof defaultValue === "boolean" ? (defaultValue ? "开启" : "关闭") : String(defaultValue);
+        const initial = defaultValue === null ? "沿用宿主" : typeof defaultValue === "boolean" ? (defaultValue ? "开启" : "关闭") : String(defaultValue);
         helpCard.textContent = `${description}\n\n默认值（本示例）：${initial}。`;
       },
     };
@@ -504,6 +530,21 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
     state[key] = value;
     apply(value);
   };
+  const addSceneBoolean = (section, key, labelText, readHostValue, help) => {
+    const commit = commitValue(key, (value) => betterSkyInstance.update({ [key]: value }));
+    addSelect(section, key, labelText, [
+      ["null", "沿用宿主"], ["true", "开启"], ["false", "关闭"],
+    ], (value) => {
+      commit(value === "null" ? null : value === "true");
+      controls.get(key).refreshHostValue();
+    }, help);
+    const control = controls.get(key);
+    control.refreshHostValue = () => {
+      const text = `沿用宿主（当前${readHostValue() ? "开启" : "关闭"}）`;
+      if (control.inputs[0].options[0].textContent !== text) control.inputs[0].options[0].textContent = text;
+    };
+    control.refreshHostValue();
+  };
   const updateCloud = (key, value) => betterSkyInstance.update({ cloud: { [key]: value } });
   const updateVolumetricLight = (key, value) => betterSkyInstance.update({
     volumetricLight: { mode: state.volumetricLightMode, [key]: value },
@@ -538,6 +579,7 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
       controls.get(key).wrapper.hidden = volumetricEnabled;
     }
     if (activeHelp?.wrapper.hidden) closeHelp();
+    for (const key of ["shadowDistance", "shadowSize", "shadowSoftness"]) setDependency(key, state.buildingShadows);
     for (const key of ["hbaoIntensity", "hbaoMaxRadius", "hbaoBias", "hbaoFrustumLength", "hbaoBlackPoint", "hbaoWhitePoint", "hbaoGamma"]) {
       setDependency(key, state.hbaoEnabled);
     }
@@ -583,6 +625,30 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
       commitValue(key, () => betterSkyInstance.update({ localWeatherVelocity: [state.weatherX, state.weatherY] })),
       `API：localWeatherVelocity[${axis === "X" ? 0 : 1}]。天气纹理坐标的 ${axis} 分量速度，不是地理东西/南北风。\n单位：纹理坐标/秒，不能当作 m/s；绝对值调大移动更快，调小更慢，0 停止该方向，负值反向。\n两轴一起组成风向；速度不改变云量或采样预算，过快运动可能放大时域噪声和拖影。`);
   }
+
+  const surfaceLighting = createSection("自然光照与高斯校准", true);
+  const updateLighting = () => betterSkyInstance.update({ lighting: buildPipelineOptions(state).lighting });
+  const updateGaussian = () => betterSkyInstance.update({ gaussianSplat: buildPipelineOptions(state).gaussianSplat });
+  addRange(surfaceLighting, "sunIntensity", "太阳直射强度", 0, 5, 0.05, commitValue("sunIntensity", updateLighting),
+    "API：lighting.sunIntensity。普通模型与地形使用的太阳直射强度。\n与天空环境补光分别控制；调大受光面更亮，阴影方向仍由时间决定。不会重新生成高斯扫描自阴影。");
+  addRange(surfaceLighting, "ambientIntensity", "天空环境补光", 0, 4, 0.05, commitValue("ambientIntensity", updateLighting),
+    "API：lighting.ambientIntensity。PBR 模型的天空环境图亮度倍率。\n调大改善暗面纹理，过大可能削弱明暗层次；不是全局曝光，也不修改材质贴图或粗糙度。");
+  addToggle(surfaceLighting, "buildingShadows", "普通建筑近景投影", commitValue("buildingShadows", () => {
+    updateLighting();
+    refreshDependencies();
+  }), "API：lighting.shadows.enabled。让普通建筑投影到地形及接收阴影的模型上。\n高斯继续使用扫描时烘焙的阴影；投影距离与分辨率影响画质和开销。");
+  addRange(surfaceLighting, "shadowDistance", "投影最远距离", 100, 5000, 50, commitValue("shadowDistance", updateLighting),
+    "API：lighting.shadows.maximumDistance，单位米。\n限制近景阴影范围，调大覆盖更远建筑；远景关闭投影以控制开销。");
+  addSelect(surfaceLighting, "shadowSize", "阴影图尺寸", [["512", "512"], ["1024", "1024"], ["2048", "2048"]],
+    commitValue("shadowSize", updateLighting), "API：lighting.shadows.size。阴影图边长，必须是 2 的幂。\n更大可改善边缘精度，也增加绘制和显存开销。");
+  addToggle(surfaceLighting, "shadowSoftness", "软阴影过滤", commitValue("shadowSoftness", updateLighting),
+    "API：lighting.shadows.softShadows。启用 Cesium 原生软阴影过滤，改善近景投影边缘。");
+  addSelect(surfaceLighting, "gaussianColorSpace", "高斯源颜色空间", [["auto", "自动读取元数据"], ["srgb", "sRGB 扫描颜色"], ["linear", "线性颜色"]],
+    commitValue("gaussianColorSpace", updateGaussian), "API：gaussianSplat.colorSpace。高斯先在源颜色空间内混合，再统一转换与曝光。\n旧 SPZ2 数据缺少元数据时可显式选择 sRGB；选错可能导致发白或过暗。");
+  addRange(surfaceLighting, "gaussianExposureOffset", "高斯曝光校准（EV）", -4, 4, 0.1, commitValue("gaussianExposureOffset", updateGaussian),
+    "API：gaussianSplat.exposureOffset，单位 EV。\n0 保持校准前亮度，-1 使线性亮度减半，+1 加倍；不修改 alpha、扫描细节或原有阴影。");
+  addToggle(surfaceLighting, "gaussianDaylightResponse", "高斯响应昼夜明暗", commitValue("gaussianDaylightResponse", updateGaussian),
+    "API：gaussianSplat.daylightResponse。根据太阳高度平滑调整扫描层明暗。\n属于环境响应，不是使用代理法线重新进行 PBR 打光；前方云和大气仍正常遮挡高斯。");
 
   const cloud = createSection("三层云", true);
   addToggle(cloud, "layerTypesEnabled", "启用分层云型", commitValue("layerTypesEnabled", updateLayerTypes),
@@ -655,7 +721,7 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
   addSelect(godray, "volumetricQuality", "体积光质量", [
     ["low", "低 · low"], ["balanced", "平衡 · balanced"], ["high", "高 · high"],
   ], commitValue("volumetricQuality", (value) => updateVolumetricLight("quality", value)),
-  "API：volumetricLight.quality。分辨率比例 / 积分步数 / 可见性图尺寸：low = 0.25 / 24 / 512；balanced = 0.5 / 48 / 1024；high = 0.5 / 64 / 2048。\n仅 volumetric 模式生效；更高预算增加 GPU 工作，不保证在任意场景达到固定耗时。切换会重建对应资源并清除独立体积光历史。");
+  "API：volumetricLight.quality。分辨率比例 / 积分步数 / 可见性图尺寸：low = 0.25 / 24 / 512；balanced = 0.5 / 32 / 1024；high = 0.5 / 64 / 2048。\n仅 volumetric 模式生效；更高预算增加 GPU 工作，不保证在任意场景达到固定耗时。切换会重建对应资源并清除独立体积光历史。");
   addRange(godray, "sunShaftsIntensity", "穿云光介质强度", 0, 1, 0.01,
     commitValue("sunShaftsIntensity", (value) => updateCloud("hazeDensityScale", value * 0.0001)),
     `API：cloud.hazeDensityScale = sunShaftsIntensity × 0.0001。控制 haze 介质密度，不是云密度或曝光。\n单位：面板为缩放量；项目默认 ${CONTROL_DEFAULTS.sunShaftsIntensity} 对应 ${DEFAULT_OPTIONS.cloud.hazeDensityScale}。调大散射和消光都更强，调小更透明，0 关闭额外穿云光。\n需要有效太阳、云影、介质和视线交会；过大易形成灰幕。覆盖率及高度淡出会联动，改变会清历史。`);
@@ -751,10 +817,10 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
   "API：toneMappingMode。选择 HDR 到显示亮度的映射曲线。\n枚举（无单位）：7 AgX 压缩高光并控制高亮色彩；8 Neutral 较中性的高光压缩；9 ACES 电影式对比；10 Linear 线性映射，强光易裁白；11 Reinhard 渐进压缩亮度；12 Cineon 胶片式曲线。没有调大/调小的统一含义。\n与曝光、Gamma 联动，不增加真实光束；切换会重建相关管线，应避免连续反复切换。");
   addRange(color, "toneMappingExposure", "曝光", 0, 20, 0.1,
     commitValue("toneMappingExposure", (value) => betterSkyInstance.update({ toneMappingExposure: value })),
-    "API：toneMappingExposure。色调映射前的亮度倍率，不是以 EV 为单位的快门设置。\n单位：无量纲；调大全局效果更亮，调小更暗，0 会压掉该映射输入亮度。\n与色调曲线和 HDR 联动，过大可能裁白天空/云/地表；不增加散射或云影，不应拿曝光伪造 Godray，不改变采样预算。");
+    "API：toneMappingExposure。色调映射前的亮度倍率，不是以 EV 为单位的快门设置。\n单位：无量纲；统一作用于地形、普通模型、高斯和天空；调大更亮，调小更暗，0 会压掉该映射输入亮度。\n与色调曲线和 HDR 联动，过大可能裁白天空/云/地表；不增加散射或云影，不应拿曝光伪造 Godray，不改变采样预算。");
   addRange(color, "irradianceScale", "地表光照增益", 0, 2, 0.01,
     commitValue("irradianceScale", (value) => betterSkyInstance.update({ irradianceScale: value })),
-    "API：irradianceScale。独立控制地表光照增益，不改变云体补光。\n单位：非负无量纲倍率；调大地表更亮，调小更暗。官方 Cesium 已完成底图光照，示例用 0.15 避免与曝光叠加泛白。\n与地表原始材质及色调映射联动，不增加样本预算；别通过抬高此值增强天空光束。");
+    "API：irradianceScale。独立控制地表光照增益，不改变云体补光。\n单位：非负无量纲倍率；调大地表更亮，调小更暗。默认 1 保持统一自然光照的地形基准；太阳方向与环境光由 lighting 控制。\n与地表原始材质及色调映射联动，不增加样本预算；别通过抬高此值增强天空光束。");
   addRange(color, "aerialPerspectiveStrength", "地表大气透视", 0, 1, 0.01,
     commitValue("aerialPerspectiveStrength", (value) => betterSkyInstance.update({ aerialPerspectiveStrength: value })),
     "API：aerialPerspectiveStrength。地表合成时的大气透视混合强度。\n单位：0–1；调大远景更受大气衰减/散射影响，调小保留更多原始地表对比，0 关闭这项混合。\n不改变天空/云的散射，也不是 Godray 密度；过大可能让底图发白，采样预算不随强度增加。");
@@ -789,8 +855,10 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
     "API：hbao.gamma。AO 调制曲线的幂指数。\n单位：正无量纲；调大使归一化中间亮度更暗，调小使中间亮度更亮。\n不等于场景 gamma 或历史 varianceGamma；过高丢失暗部层次，与黑/白点联动，不改变采样预算，关闭 HBAO 时保留。");
 
   const scene = createSection("场景时间");
-  addToggle(scene, "highDynamicRange", "高动态范围 HDR", commitValue("highDynamicRange", (value) => betterSkyInstance.update({ highDynamicRange: value })),
-    "API：highDynamicRange。Cesium 场景的 HDR 开关。\n单位：布尔值；开启保留更宽亮度范围供色调映射，关闭更易在强光处裁剪。不是曝光增益。\n与材质、色调映射及 framebuffer 格式联动，可能改变显存和渲染成本；应统一验证天空与地表输出。");
+  addSceneBoolean(scene, "highDynamicRange", "宿主 HDR", () => viewer.scene.highDynamicRange,
+    "API：highDynamicRange。默认开启，将地形、PBR 模型、高斯和天空在线性 HDR 中合成，再进行一次曝光与显示编码。\n关闭使用 LDR 兼容合成；选择沿用宿主时保存 null，实际状态显示在继承选项中。");
+  addSceneBoolean(scene, "depthTestAgainstTerrain", "地形深度测试", () => viewer.scene.globe.depthTestAgainstTerrain,
+    "API：depthTestAgainstTerrain。默认开启；设为沿用宿主时继承当前状态；开启时，模型会受地形深度遮挡，低于地面的部分可能被隐藏。\n关闭时沿用 Cesium 自身的可见性行为，天空效果仍使用独立保留的地形深度。\n沿用宿主不回滚已应用的选择；HDR 和地形深度设置均受 applySceneSettings 控制。");
   addToggle(scene, "logarithmicDepthBuffer", "对数深度缓冲", commitValue("logarithmicDepthBuffer", (value) => betterSkyInstance.update({ logarithmicDepthBuffer: value })),
     "API：logarithmicDepthBuffer。场景对数深度缓冲开关。\n单位：布尔值；开启改善远近同框的深度精度，关闭回到普通深度分布，远景可能更易 z-fighting。\n云遮挡和 HBAO 都依赖深度，不是距离淡出；切换可能改变深度 shader/资源，需检查地形边界和近处几何。");
   addRange(scene, "gamma", "场景 Gamma", 0.1, 5, 0.1,
@@ -805,6 +873,8 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
   "API：time（ISO8601，提交时追加 Z），同步 viewer.clock 和时间轴。\n单位：UTC 日期/分钟；虽然输入类型叫 datetime-local，本示例明确把显示值当 UTC，不做本地时区转换。提前/推后时间改变太阳方位与高度，不是光束亮度滑块。\n编辑时暂停时钟动画，时间轴继续反向同步输入；系统太阳关闭时光源可能不跟随。太阳和云影变化后需等待时域画面稳定。");
 
   const syncTimeInput = (clock) => {
+    controls.get("highDynamicRange").refreshHostValue();
+    controls.get("depthTestAgainstTerrain").refreshHostValue();
     if (document.activeElement === timeInput) return;
     const value = Cesium.JulianDate.toIso8601(clock.currentTime).slice(0, 16);
     state.time = value;
@@ -859,6 +929,10 @@ window.onload = async () => {
     shouldAnimate: false,
   });
 
+  // 扫描模型与体积效果共用最终 SMAA，避免叠加 MSAA 与 FXAA 的成本。
+  viewer.scene.msaaSamples = 1;
+  viewer.scene.postProcessStages.fxaa.enabled = false;
+
   const imageryProvider = tiandituToken
     ? new Cesium.WebMapTileServiceImageryProvider({
       url: `https://t1.tianditu.gov.cn/img_w/wmts?tk=${encodeURIComponent(tiandituToken)}`,
@@ -898,7 +972,7 @@ window.onload = async () => {
   // 先使用椭球；在线地形异步加载，避免外部服务阻塞天空效果初始化。
   viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
   if (ionToken) {
-    Cesium.createWorldTerrainAsync().then((terrainProvider) => {
+    Cesium.createWorldTerrainAsync({ requestVertexNormals: true }).then((terrainProvider) => {
       if (!viewer.isDestroyed()) viewer.terrainProvider = terrainProvider;
     }).catch((error) => {
       console.warn("[demo-official] 地形加载失败，继续使用椭球地形：", error);
@@ -921,7 +995,8 @@ window.onload = async () => {
   createModelSwitcher(viewer);
 
   // ====== 一行开启天空效果 ======
-  const betterSkyInstance = new BetterSky(viewer);
+  // 当前旧 SPZ2 扫描资产未写颜色空间元数据，因此明确按 sRGB 读取。
+  const betterSkyInstance = new BetterSky(viewer, { gaussianSplat: { colorSpace: "srgb" } });
 
   updateTimelineRange(viewer, CONTROL_DEFAULTS.time);
   createEffectControlPanel(viewer, betterSkyInstance);

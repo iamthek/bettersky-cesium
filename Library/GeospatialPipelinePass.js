@@ -48,8 +48,10 @@ const defaultValue = (a, b) => a ?? b; // 官方 Cesium 不导出 defaultValue
 defaultValue.EMPTY_OBJECT = Object.freeze({});
 import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from "./internal/MathTypes.js";
 import AssetManager from "./internal/AssetManager.js";
+import { getHdrPreExposure } from "./internal/HdrExposure.js";
 import { invalidateAssetBuffer, loadAssetBuffer } from "./internal/AssetCache.js";
 import SceneStateLease from "./internal/SceneStateLease.js";
+import SceneDepth, { withSceneDepth } from "./internal/SceneDepth.js";
 import { getWebGLContext, getCameraPosition, getStageIndex, restoreStageOrder } from "./internal/CesiumAdapter.js";
 import { runCleanup } from "./internal/cleanup.js";
 import Texture3D from "./Texture3D.js";
@@ -228,10 +230,15 @@ export default class GeospatialPipelinePass {
         }
         this._scene = scene;
         this._destroyed = false;
+        this._active = false;
+        this._activationManaged = !!options.activationManaged;
         // Track only textures allocated by this pass; uniforms may also reference host textures.
         this._ownedTextures = new Set();
         this._assets = new AssetManager({ onError: ({ error }) => console.error(error) });
         try {
+        this.sceneDepth = options.sceneDepth ?? new SceneDepth(scene);
+        this._ownsSceneDepth = !options.sceneDepth;
+        this._useLogDepth = !!(scene.frameState?.useLogDepth ?? scene.logarithmicDepthBuffer);
         this.id = createGuid();
         this._showTAA = false;
         this._show = options.show ?? true;
@@ -270,6 +277,9 @@ export default class GeospatialPipelinePass {
         this._u_scattering_texture = this._defaultTexture3D;
         this._u_single_mie_scattering_texture = this._defaultTexture3D;
         this._u_transmittance_texture = this._scene.context.defaultTexture;
+        const solar = new Cartesian3();
+        this.getSolarIrradiance = () => Cartesian3.multiplyByScalar(atmosphere.solarIrradiance,
+            this.sunIntensityScale ?? 1, solar);
         this.localWeatherTexture = this._scene.context.defaultTexture;
         this.cameraHeight = 0.;
         this.toneMappingExposure = 10;
@@ -357,6 +367,7 @@ export default class GeospatialPipelinePass {
         this._customDarkParam = new Cartesian4(10, 0.1, 0, 0.);
         let shadowResolutionScratch = new Cartesian2();
         this.aerialPerspectiveUniforms = {
+            ...this.sceneDepth.uniformMap,
             // 官方 Cesium 无 GBuffer 法线/位置贴图：法线退化为默认贴图（地表光照近似），
             // 位置在着色器中由深度重建（czm_windowToEyeCoordinates），这里仅占位避免空引用。
             normalBuffer: () => {
@@ -384,6 +395,17 @@ export default class GeospatialPipelinePass {
             irradianceScale: () => { return this._irradianceScale },
             aerialPerspectiveStrength: () => this.aerialPerspectiveStrength,
             cloudVisibility: () => this.cloudVisibility,
+            bsInputHDR: () => !!this._scene.highDynamicRange,
+            bsPreExposure: () => this.preExposure,
+            bsExposure: () => this.toneMappingExposure,
+            bsGaussianColor: () => this.gaussianSplatPass?.colorTexture ?? this._scene.context.defaultTexture,
+            bsGaussianAvailable: () => !!this.gaussianSplatPass?.colorTexture,
+            bsGaussianSRGB: () => this.gaussianSplatPass?.colorSpace !== "linear",
+            bsGaussianExposure: () => this.gaussianSplatPass?.exposureMultiplier ?? 1,
+            bsModelFrontCloud: () => this.cloudMaterialPass.modelFrontTexture ?? this._scene.context.defaultTexture,
+            bsModelFrontAvailable: () => !!this.cloudMaterialPass.modelFrontTexture,
+            bsCloudUvScale: () => this.cloudMaterialPass.targetUvScale,
+            bsCloudJitter: () => this.cloudMaterialPass.temporalJitter,
             idealSphereAlpha: () => { return this._idealSphereAlpha },
             moonDirection: () => { return this._scene.context.uniformState.moonDirectionEC },
             moonAngularRadius: () => { return this._moonAngularRadius },
@@ -403,7 +425,7 @@ export default class GeospatialPipelinePass {
             stbnTexture: () => { return this.stbnTexture },
             frame: () => { return this._frame },
             // Uniforms for atmosphere functions
-            u_solar_irradiance: () => { return atmosphere.solarIrradiance },
+            u_solar_irradiance: () => this.getSolarIrradiance(),
             u_sun_angular_radius: () => { return atmosphere.sunAngularRadius },
             u_bottom_radius: () => { return atmosphere.bottomRadius * METER_TO_LENGTH_UNIT },
             u_top_radius: () => { return atmosphere.topRadius * METER_TO_LENGTH_UNIT },
@@ -535,6 +557,10 @@ export default class GeospatialPipelinePass {
 
     init(isUpdate = false) {
         if (this._destroyed) return;
+        this.setActive(false);
+        this._renderGeneration = (this._renderGeneration ?? 0) + 1;
+        this._preparedHdr = !!this._scene.highDynamicRange;
+        this._preparedMsaa = this._scene.msaaSamples;
 
         let stageIndex;
         if (isUpdate && defined(this._stage)) {
@@ -620,8 +646,8 @@ export default class GeospatialPipelinePass {
             this._aerialPerspectiveComoman.shaderProgram = this._aerialPerspectiveComoman.shaderProgram?.destroy();
         }
         const AerialPerspectiveEffectShader = new ShaderSource({
-            defines: ["LOG_DEPTH"],
-            sources: [defines + "\n" + AerialPerspectiveEffectFS.replace("/*__VOLUMETRIC_LIGHT_COMPOSITE__*/", volumetricLightCompositeGLSL)]
+            defines: this._useLogDepth ? ["LOG_DEPTH"] : [],
+            sources: [defines + "\n" + withSceneDepth(AerialPerspectiveEffectFS.replace("/*__VOLUMETRIC_LIGHT_COMPOSITE__*/", volumetricLightCompositeGLSL))]
         });
         this._aerialPerspectiveComoman = this._scene.context.createViewportQuadCommand(AerialPerspectiveEffectShader, {
             uniformMap: this.aerialPerspectiveUniforms,
@@ -641,7 +667,7 @@ export default class GeospatialPipelinePass {
             let resolution = new Cartesian2(1 / width, 1 / height);
             if (i == 0) {
                 const downsampleThresholdMaterialShader = new ShaderSource({
-                    defines: ["LOG_DEPTH"],
+                    defines: this._useLogDepth ? ["LOG_DEPTH"] : [],
                     sources: [downsampleThresholdMaterialFS]
                 });
                 this._downsampleThresholdPassState = new PassState(this._scene.context);
@@ -668,11 +694,12 @@ export default class GeospatialPipelinePass {
                             return resolution
                         },
                         thresholdLevel: () => {
-                            return that._thresholdLevel;
+                            return that._thresholdLevel * that.preExposure;
                         },
                         thresholdRange: () => {
-                            return that._thresholdRange;
+                            return that._thresholdRange * that.preExposure;
                         },
+                        bloomRadianceLimit: () => 64 * that.preExposure,
                     },
                     primitiveType: PrimitiveType.TRIANGLES
                 }, downsampleThresholdMaterialVS);
@@ -721,6 +748,9 @@ export default class GeospatialPipelinePass {
                 inputBuffer: applyBloomStage.name,
                 cameraHeight: () => { return this.cameraHeight },
                 toneMappingExposure: () => { return this.toneMappingExposure },
+                bsInputHDR: () => !!this._scene.highDynamicRange,
+                bsActive: () => this._active,
+                bsPreExposure: () => this.preExposure,
                 WhitePoint: () => { return this.whitePoint },
                 MiddleGrey: () => { return this.middleGrey },
                 AverageLuminance: () => { return this.averageLuminance },
@@ -790,8 +820,16 @@ export default class GeospatialPipelinePass {
         const originalExecute = renderEffect.execute;
         renderEffect.execute = function (context, colorTexture, depthTexture, idTexture) {
 
+            // Keep the registered chain warm while its final stage copies the
+            // native, already tone-mapped input. No placeholder LUT reaches it.
+            if (!that._active) return;
+
             that._depthTexture = depthTexture;
             that._colorTexture = colorTexture;
+            if (that._depthGeneration !== that.sceneDepth.generation) {
+                that._depthGeneration = that.sceneDepth.generation;
+                that.cloudMaterialPass.invalidateHistory();
+            }
             // Fully faded clouds contribute neither color nor shadows; avoid their ray-marching cost.
             if (that.cloudVisibility > 0) {
                 that.shadowMaterialPass.execute(context, colorTexture, depthTexture, idTexture);
@@ -810,23 +848,22 @@ export default class GeospatialPipelinePass {
     update(context, useLogDepth) {
 
         if (this._stage && this._stage.enabled) {
+            const logDepth = useLogDepth ?? this._useLogDepth;
+            const depthModeChanged = this._useLogDepth !== !!logDepth;
+            this._useLogDepth = !!logDepth;
+            this.sceneDepth.beginFrame(this._useLogDepth);
+            this.cloudMaterialPass.setUseLogDepth(this._useLogDepth);
+            this.volumetricLightPass.setUseLogDepth(this._useLogDepth);
+            if (this._depthGeneration !== this.sceneDepth.generation) {
+                this._depthGeneration = this.sceneDepth.generation;
+                this.cloudMaterialPass.invalidateHistory();
+            }
             if (this._width !== this._scene.drawingBufferWidth ||
-                this._height !== this._scene.drawingBufferHeight
+                this._height !== this._scene.drawingBufferHeight || depthModeChanged ||
+                this._preparedHdr !== !!this._scene.highDynamicRange ||
+                this._preparedMsaa !== this._scene.msaaSamples
             ) {
                 this.init(true);
-            }
-
-            // 接管 Cesium 内置天空/大气，避免与自定义管线叠加
-            if (!this._sceneLease) {
-                const scene = this._scene;
-                // Explicit legacy policy: disabling/disposal restores the captured host values.
-                this._sceneLease = new SceneStateLease({ restore: "always" });
-                for (const [target, key, value] of [
-                    [scene.skyAtmosphere, "show", false], [scene.skyBox, "show", false],
-                    [scene.sun, "show", false], [scene.fog, "enabled", false],
-                    [scene.globe, "showGroundAtmosphere", false], [scene.globe, "enableLighting", true],
-                    [scene.globe, "tileCacheSize", 2E3], [scene.globe, "maximumScreenSpaceError", 2],
-                ]) this._sceneLease.write(target, key, value);
             }
 
             if (!this._isPrecomputed) {
@@ -988,6 +1025,7 @@ export default class GeospatialPipelinePass {
             this.shadowMaterialPass.update(context, useLogDepth);
 
             this._stage.update(context, useLogDepth);
+            if (!this._activationManaged) this.setActive(this.canActivate);
         }
     }
 
@@ -1191,6 +1229,12 @@ export default class GeospatialPipelinePass {
         return this._stage;
     }
 
+    get preExposure() {
+        return this._scene.highDynamicRange ? getHdrPreExposure(this.atmosphere.solarIrradiance,
+            this.atmosphere.sunRadianceToRelativeLuminance, this.atmosphere.sunAngularRadius,
+            this.sunIntensityScale ?? 1) : 1;
+    }
+
     get ready() {
 
         return this._stage.ready;
@@ -1199,6 +1243,60 @@ export default class GeospatialPipelinePass {
     get name() {
 
         return this._stage.name;
+    }
+
+    /** Evaluated only at the frame boundary, never from an asynchronous loader. */
+    get canActivate() {
+        if (!this._show || this._destroyed || this.getAssetState({ includeSnow: this._showSnow }).status !== "ready" ||
+            !this._stage?.ready || this._width !== this._scene.drawingBufferWidth ||
+            this._height !== this._scene.drawingBufferHeight || !this._passState?.framebuffer ||
+            !this._downsampleThresholdPassState?.framebuffer) return false;
+        const prepareStage = stage => {
+            if (defined(stage.length)) {
+                for (let i = 0; i < stage.length; ++i) if (!prepareStage(stage.get(i))) return false;
+                return true;
+            }
+            if (!stage.ready || !stage._command?.framebuffer) return false;
+            // ShaderProgram initializes lazily. Validate the current variant
+            // before native Gaussian colors are redirected out of Cesium.
+            void stage._command.shaderProgram.vertexAttributes;
+            return true;
+        };
+        if (!prepareStage(this._stage)) return false;
+        for (const command of [this._aerialPerspectiveComoman, this.downsampleThresholdDrawComomand,
+            this.cloudMaterialPass?._cloudDrawComomand, this.cloudMaterialPass?._cloudResolveDrawComomand,
+            this.cloudMaterialPass?._modelFrontResolveCommand,
+            this.shadowMaterialPass?._shadowDrawComomand, this.shadowMaterialPass?._shadowResolveDrawComomand]) {
+            if (!command?.shaderProgram) return false;
+            void command.shaderProgram.vertexAttributes;
+        }
+        if (this.volumetricLightOptions.mode === "volumetric") {
+            this.focusedCloudShadowPass.prepare(this._scene.context, this.volumetricLightOptions);
+            this.volumetricLightPass.prepare(this._scene.context);
+        }
+        return true;
+    }
+
+    setActive(value) {
+        value = !!value && this._show && !this._destroyed;
+        if (value === this._active) return;
+        this._active = value;
+        this.cloudMaterialPass?.invalidateHistory();
+        this.shadowMaterialPass?.invalidateHistory();
+        this.focusedCloudShadowPass?.invalidateHistory();
+        this.volumetricLightPass?.invalidateHistory();
+        if (!value) {
+            this.restoreScene();
+            return;
+        }
+        const scene = this._scene;
+        this._sceneLease = new SceneStateLease({ restore: "always" });
+        for (const [target, key, setting] of [
+            [scene.skyAtmosphere, "show", false], [scene.skyBox, "show", false],
+            [scene.sun, "show", false], [scene.fog, "enabled", false],
+            [scene.globe, "showGroundAtmosphere", false],
+            [scene.globe, "tileCacheSize", 2E3], [scene.globe, "maximumScreenSpaceError", 2],
+        ]) this._sceneLease.write(target, key, setting);
     }
 
     get enabled() {
@@ -1211,8 +1309,9 @@ export default class GeospatialPipelinePass {
             this.cloudMaterialPass.invalidateHistory();
         }
         this._show = val;
+        if (!val && this.sceneDepth) this.sceneDepth._frameActive = false;
         if (this._stage) { this._stage.enabled = this._show; }
-        if (!val) this.restoreScene();
+        if (!val) this.setActive(false);
     }
 
     restoreScene() {
@@ -1266,6 +1365,7 @@ export default class GeospatialPipelinePass {
                 stages.remove(stage);
             }
         }, () => { if (stage && !stage.isDestroyed()) stage.destroy(); }];
+        if (this._ownsSceneDepth) actions.push(() => this.sceneDepth?.destroy());
         for (const pass of [this.volumetricLightPass, this.focusedCloudShadowPass, this.cloudMaterialPass, this.shadowMaterialPass]) {
             actions.push(() => { if (pass && !pass.isDestroyed()) pass.destroy(); });
         }

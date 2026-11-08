@@ -12,7 +12,7 @@ export type BetterSkyQuality = 'low' | 'balanced' | 'high';
 export type BetterSkyCloudType = 'cumulus' | 'altocumulus' | 'cirrus';
 /**
  * HDR 色调映射曲线：2=Reinhard2、4=Uncharted2、7=AgX、8=Neutral、9=ACES、10=Linear、11=Reinhard、12=Cineon。
- * 历史模式 3 的亮度纹理路径尚未接入，不作为当前 SDK 支持的选项；默认仍为 9（ACES）。
+ * 历史模式 3 的亮度纹理路径尚未接入，不作为当前 SDK 支持的选项；默认 8（PBR Neutral）。
  */
 export type BetterSkyToneMappingMode = 2 | 4 | 7 | 8 | 9 | 10 | 11 | 12;
 
@@ -50,7 +50,7 @@ export interface BetterSkyVolumetricLightOptions {
    */
   anisotropy?: number;
   /**
-   * 宽高分辨率比例/积分步数/聚焦云影图边长：low=0.25/24/512，balanced=0.5/48/1024，high=0.5/64/2048。
+   * 宽高分辨率比例/积分步数/聚焦云影图边长：low=0.25/24/512，balanced=0.5/32/1024，high=0.5/64/2048。
    * 档位越高通常越耗 GPU；切换档位会重建对应渲染目标。
    * @default 'balanced'
    */
@@ -61,27 +61,27 @@ export interface BetterSkyVolumetricLightOptions {
 export interface BetterSkyCloudDenoiseOptions {
   /**
    * 普通时域积累的当前帧基础权重 [0, 1]；越小越依赖历史，降噪更强但可能拖影。
-   * @default 0.04
+   * @default 0.12
    */
   temporalAlpha?: number;
   /**
    * 时域升采样中本帧 Bayer 采样相位的当前帧基础权重 [0, 1]；越大新采样越快生效，也更易显露噪声。
-   * @default 0.08
+   * @default 0.35
    */
   currentFrameAlpha?: number;
   /**
    * 相机运动时用于提高当前帧积累基值的权重 [0, 1]；越大通常拖影越少，最终权重仍会自适应调整。
-   * @default 0.25
+   * @default 0.6
    */
   motionAlpha?: number;
   /**
    * 历史颜色方差裁剪的标准差倍率，必须为正有限数；越大允许保留的历史颜色范围越宽。
-   * @default 2
+   * @default 1.25
    */
   varianceGamma?: number;
   /**
    * 深度/透明度感知的邻域重建混合强度 [0, 1]；越大越平滑，也会损失细节，0 关闭此邻域平滑。
-   * @default 0.8
+   * @default 0.35
    */
   spatialFilterStrength?: number;
 }
@@ -120,22 +120,22 @@ export interface BetterSkyCloudOptions {
   heights?: BetterSkyVector4;
   /**
    * 云密度倍率 [第一层, 第二层, 第三层, 预留]，建议非负；0 移除对应层介质，与 coverage 云量分别控制。
-   * @default [0.12, 0.09, 0.0015, 0]
+   * @default [0.12, 0.025, 0.001, 0]
    */
   densityScales?: BetterSkyVector4;
   /**
    * 云形细节侵蚀 [第一层, 第二层, 第三层, 预留]，各分量为 [0, 1]；越大云边缘越破碎，第四项约定为 0。
-   * @default [0.18, 0.12, 0, 0]
+   * @default [0.25, 0.15, 0.05, 0]
    */
   shapeDetailAmounts?: BetterSkyVector4;
   /**
    * 天空辐照度对云体及 legacy haze 的补光倍率，非负；越大暗面越亮，独立体积光使用太阳直射光。
-   * @default 1.8
+   * @default 1.2
    */
   skyIrradianceScale?: number;
   /**
    * 地面反射辐照度对云体的补光倍率，非负；越大云下部越亮，与地表 irradianceScale 分别控制。
-   * @default 1.3
+   * @default 0.8
    */
   groundIrradianceScale?: number;
   /**
@@ -205,12 +205,12 @@ export interface BetterSkyHbaoOptions {
   enabled?: boolean;
   /**
    * AO 强度指数，建议非负；越大接触遮蔽越深，0 不产生 AO 对比。
-   * @default 100
+   * @default 20
    */
   intensity?: number;
   /**
    * 视空间遮蔽采样邻域的最大半径，单位米；越大影响范围越广，过大可能产生暗边。
-   * @default 30
+   * @default 5
    */
   maxRadius?: number;
   /**
@@ -225,17 +225,17 @@ export interface BetterSkyHbaoOptions {
   frustumLength?: number;
   /**
    * AO 调制曲线的输入黑点，建议 [0, 1)，不能设为 1；越大暗部截断越多。
-   * @default 0.05
+   * @default 0
    */
   blackPoint?: number;
   /**
    * AO 调制曲线的输出亮度倍率，建议 [0, 1]；越大被遮蔽部分越亮，0 为黑色。
-   * @default 0.9
+   * @default 0.85
    */
   whitePoint?: number;
   /**
    * AO 调制曲线的幂指数，正数；越大中间亮度越暗，与场景 gamma 和降噪 varianceGamma 分别控制。
-   * @default 2.5
+   * @default 1
    */
   gamma?: number;
   /**
@@ -245,6 +245,38 @@ export interface BetterSkyHbaoOptions {
   denoise?: boolean;
 }
 
+/** 普通建筑的近景太阳投影，不使用高斯代理深度生成投影。 */
+export interface BetterSkyShadowOptions {
+  /** 开启普通模型投影，地形接收阴影。@default true */
+  enabled?: boolean;
+  /** 最大阴影距离，正有限米数。@default 1500 */
+  maximumDistance?: number;
+  /** 阴影图尺寸，正整数且为 2 的幂。@default 1024 */
+  size?: number;
+  /** 启用原生软阴影过滤。@default true */
+  softShadows?: boolean;
+}
+
+/** 统一日照与天空环境补光；不修改模型贴图、法线或粗糙度。 */
+export interface BetterSkyLightingOptions {
+  /** 太阳直射强度，非负。@default 2 */
+  sunIntensity?: number;
+  /** 天空环境图亮度倍率，非负；不突破 Cesium IBL factor 的范围。@default 1.2 */
+  ambientIntensity?: number;
+  /** 普通建筑的近景投影配置，可局部更新。 */
+  shadows?: BetterSkyShadowOptions;
+}
+
+/** 高斯扫描层的颜色校准；扫描自阴影仍沿用资产的烘焙结果。 */
+export interface BetterSkyGaussianSplatOptions {
+  /** auto 读取颜色空间元数据；旧 SPZ2 数据可显式指定 srgb，linear 表示已线性化。@default 'auto' */
+  colorSpace?: 'auto' | 'srgb' | 'linear';
+  /** 高斯层曝光偏移，有限 EV，可为负；不改变透明度。@default -0.5 */
+  exposureOffset?: number;
+  /** 根据太阳高度平滑调制环境明暗，非 PBR 法线重打光。@default true */
+  daylightResponse?: boolean;
+}
+
 /** BetterSky 公开配置；构造时深合并默认预设，update() 时深合并已有配置，嵌套对象可只传部分字段。 */
 export interface BetterSkyOptions {
   /**
@@ -252,9 +284,13 @@ export interface BetterSkyOptions {
    * @default true
    */
   enabled?: boolean;
+  /** 统一太阳、天空环境光和普通建筑近景投影。 */
+  lighting?: BetterSkyLightingOptions;
+  /** 高斯颜色空间、曝光校准和日照响应；云与大气仍正常遮挡高斯。 */
+  gaussianSplat?: BetterSkyGaussianSplatOptions;
   /**
    * 天气云量覆盖度 [0, 1]，越大云区越广；与每层云密度分别控制，约 ≤0.1 时基本无云。
-   * @default 0.34
+   * @default 0.3
    */
   coverage?: number;
   /**
@@ -264,17 +300,17 @@ export interface BetterSkyOptions {
   localWeatherVelocity?: BetterSkyVector2;
   /**
    * HDR 色调映射曲线，数值含义见 BetterSkyToneMappingMode；运行时切换会重建天空渲染阶段。
-   * @default 9
+   * @default 8
    */
   toneMappingMode?: BetterSkyToneMappingMode;
   /**
-   * 色调映射前的亮度倍率，建议非负；越大越亮，单位不是曝光档位 EV。
-   * @default 2.8
+   * 统一 HDR 色调映射前的亮度倍率，建议非负；作用于地形、模型与天空，单位不是曝光档位 EV。
+   * @default 1
    */
   toneMappingExposure?: number;
   /**
-   * 地表辐照度增益，非负倍率；越大地表越亮，与云体补光分别控制，仍受色调映射影响。
-   * @default 0.15
+   * 地形光照增益，非负倍率；越大地形越亮，与普通模型环境补光、云体补光分别控制。
+   * @default 1
    */
   irradianceScale?: number;
   /**
@@ -283,7 +319,7 @@ export interface BetterSkyOptions {
    */
   aerialPerspectiveStrength?: number;
   /**
-   * 夜间天空辉光调制系数，无量纲，建议 [0, 1]；白天通常不明显。
+   * 夜间天空辉光调制系数，无量纲，建议 [0, 1]；只影响夜空，不给地表直射光设亮度下限。
    * @default 0.5
    */
   nightGlowIntensity?: number;
@@ -303,16 +339,23 @@ export interface BetterSkyOptions {
    */
   systemLight?: boolean;
   /**
-   * 构造时是否设置 HDR、对数深度、gamma 和地形深度测试；false 由宿主自行配置。
-   * 本配置持久保存，省略时保持原值；从 false 切为 true 时应用已保存的场景设置。
+   * 是否应用配置中的光照、HDR、对数深度、Gamma 和地形深度测试；false 由宿主自行配置。
+   * 本配置持久保存，省略时保持原值；从 false 切为 true 时应用已保存的场景设置，null 字段始终沿用宿主。
    * @default true
    */
   applySceneSettings?: boolean;
   /**
-   * 场景 HDR 开关，true 保留更宽亮度范围供色调映射使用；受当前 applySceneSettings 配置控制。
+   * 默认启用 HDR，使原生 PBR、高斯和天空在线性 HDR 中合成并统一曝光。
+   * null 显式沿用宿主，false 使用 LDR 兼容合成；受当前 applySceneSettings 控制。
    * @default true
    */
-  highDynamicRange?: boolean;
+  highDynamicRange?: boolean | null;
+  /**
+   * 地形深度测试；null 沿用宿主，仅显式布尔值且 applySceneSettings 开启时修改。
+   * 设置 null 不回滚之前已应用的值；运行时实际状态从 scene.globe.depthTestAgainstTerrain 读取。
+   * @default true
+   */
+  depthTestAgainstTerrain?: boolean | null;
   /**
    * 场景对数深度缓冲开关，用于改善远近同框时的深度精度；受当前 applySceneSettings 配置控制。
    * @default true
@@ -381,7 +424,7 @@ export type BetterSkyResolvedCloudOptions = Required<Omit<BetterSkyCloudOptions,
 
 /** 已接受的完整配置快照；不表示宿主实时状态，所有嵌套对象和数组均为独立可修改副本。 */
 export type BetterSkyResolvedOptions = Required<Omit<BetterSkyOptions,
-  'localWeatherVelocity' | 'cloud' | 'volumetricLight' | 'hbao' | 'time'>> & {
+  'localWeatherVelocity' | 'cloud' | 'volumetricLight' | 'hbao' | 'time' | 'lighting' | 'gaussianSplat'>> & {
   /** 天气纹理 UV 每秒偏移量，输出固定为数组。 */
   localWeatherVelocity: [number, number];
   /** 完整的归一化云配置。 */
@@ -390,6 +433,13 @@ export type BetterSkyResolvedOptions = Required<Omit<BetterSkyOptions,
   volumetricLight: Required<BetterSkyVolumetricLightOptions>;
   /** 完整的 HBAO 配置，关闭时仍保留数值。 */
   hbao: Required<BetterSkyHbaoOptions>;
+  /** 完整的统一光照配置，包含完整的近景投影参数。 */
+  lighting: Required<Omit<BetterSkyLightingOptions, 'shadows'>> & {
+    /** 完整的近景投影配置。 */
+    shadows: Required<BetterSkyShadowOptions>;
+  };
+  /** 完整的高斯颜色校准配置。 */
+  gaussianSplat: Required<BetterSkyGaussianSplatOptions>;
   /** 最近接受的时钟配置；null 表示保留宿主时间，不表示当前实时钟值。 */
   time: string | null;
 };

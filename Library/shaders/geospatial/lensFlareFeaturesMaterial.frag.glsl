@@ -1,5 +1,4 @@
 
-#version 300 es
 #define varying in
 #define texture2D texture
 #define textureCube texture
@@ -149,11 +148,31 @@ uniform vec2 texelSize;
 uniform float ghostAmount;
 uniform float haloAmount;
 uniform float chromaticAberration;
+uniform vec3 bsSunDirection;
+uniform sampler2D bsCloudTexture;
+uniform sampler2D bsDepthTexture;
+uniform bool bsCloudAvailable;
+uniform bool bsDepthAvailable;
 in vec2 vUv;
 in vec2 vAspectRatio;
+vec3 flareSource(vec2 uv) {
+    vec3 directionEC = czm_viewRotation * normalize(bsSunDirection);
+    vec4 clip = czm_projection * vec4(directionEC, 0.0);
+    if (clip.w <= 0.0) return vec3(0.0);
+    vec2 sunUv = clip.xy / clip.w * 0.5 + 0.5;
+    if (any(lessThan(sunUv, vec2(0.0))) || any(greaterThan(sunUv, vec2(1.0)))) return vec3(0.0);
+    float mask = 1.0 - smoothstep(0.015, 0.06, length((uv - sunUv) / vAspectRatio));
+    float visibility = bsCloudAvailable ? 1.0 - texture(bsCloudTexture, sunUv).a : 1.0;
+    if (bsDepthAvailable) {
+        vec4 depth = texture(bsDepthTexture, sunUv);
+        if (depth.r > 0.0 || depth.g > 0.0) visibility = 0.0;
+        if (depth.b > 0.0) visibility *= 1.0 - depth.a;
+    }
+    return texture(inputBuffer, uv).rgb * mask * clamp(visibility, 0.0, 1.0);
+}
 vec3 sampleGhost(const vec2 direction, const vec3 color, const float offset) {
     vec2 suv = clamp(1.0 - vUv + direction * offset, 0.0, 1.0);
-    vec3 result = texture(inputBuffer, suv).rgb * color;
+    vec3 result = flareSource(suv) * color;
     
     // Falloff at the perimeter.
     
@@ -185,7 +204,7 @@ vec3 sampleHalo(const float radius) {
     vec3 offset = vec3(texelSize.x * chromaticAberration) * vec3(-1.0, 0.0, 1.0);
     vec2 suv = fract(1.0 - vUv + direction * radius);
     vec3 result = vec3(
-    texture(inputBuffer, suv + direction * offset.r).r, texture(inputBuffer, suv + direction * offset.g).g, texture(inputBuffer, suv + direction * offset.b).b
+    flareSource(suv + direction * offset.r).r, flareSource(suv + direction * offset.g).g, flareSource(suv + direction * offset.b).b
     );
     
     // Falloff at the center and perimeter.
@@ -201,6 +220,5 @@ vec4 sampleHalos(const float amount) {
     return vec4(color, 1.0) * amount;
 }
 void main() {
-    out_FragColor += sampleGhosts(ghostAmount);
-    out_FragColor += sampleHalos(haloAmount);
+    out_FragColor = sampleGhosts(ghostAmount) + sampleHalos(haloAmount);
 }

@@ -9,8 +9,11 @@ layout(location = 0) out vec4 outputBefore;
 layout(location = 1) out vec4 outputAfter;
 // x: radiance centroid, y: terrain distance, z: cloud front distance, w: cloud opacity.
 layout(location = 2) out vec4 outputDepth;
+// Camera-to-Gaussian scatter RGB and transmittance A, independent of opaque depth.
+layout(location = 3) out vec4 outputModelPrefix;
 
 uniform sampler2D u_volumetricLightSceneDepth;
+/*__SCENE_DEPTH__*/
 uniform sampler2D u_volumetricLightCloudDepth;
 uniform sampler2D u_volumetricLightCloudColor;
 uniform float u_volumetricLightCloudVisibility;
@@ -45,11 +48,9 @@ vec2 fogSphereInterval(vec3 origin, vec3 direction, float radius) {
 }
 
 float fogSceneDistance(vec2 uv) {
-    float depth = czm_unpackDepth(texture(u_volumetricLightSceneDepth, uv));
-    if (depth >= 1.0 - 1e-7) return u_volumetricLightMaxDistance + 1.0;
-    // This helper decodes Cesium logarithmic depth using the full-resolution viewport.
-    vec4 eye = czm_windowToEyeCoordinates(uv * czm_viewport.zw, depth);
-    return min(length(eye.xyz / eye.w), u_volumetricLightMaxDistance + 1.0);
+    float distance = betterSkySceneDistance(u_volumetricLightSceneDepth, uv);
+    return distance > 0.0 ? min(distance, u_volumetricLightMaxDistance + 1.0)
+        : u_volumetricLightMaxDistance + 1.0;
 }
 
 // Bruneton's transmittance-LUT coordinates, in metres. Only the solar term is
@@ -83,6 +84,10 @@ void accumulateFog(inout vec4 integral, float extinction, float lengthInStep, ve
 void main() {
     outputBefore = vec4(0.0, 0.0, 0.0, 1.0);
     outputAfter = outputBefore;
+    outputModelPrefix = outputBefore;
+    vec4 model = texture(u_betterSkyDepth, vUv);
+    float modelDistance = u_betterSkyModelDepthAvailable && model.a >= 1.0 / 255.0
+        ? max(model.b, 0.0) : 0.0;
     float terrainDistance = fogSceneDistance(vUv);
     vec4 cloud = texture(u_volumetricLightCloudColor, vUv);
     cloud.a *= u_volumetricLightCloudVisibility;
@@ -170,6 +175,10 @@ void main() {
             centroidWeight += weight;
             accumulateFog(outputBefore, extinction, max(min(distanceEnd, splitDistance) - distanceStart, 0.0), incident);
             accumulateFog(outputAfter, extinction, max(distanceEnd - max(distanceStart, splitDistance), 0.0), incident);
+            // A model may terminate inside this integration cell. Reuse its
+            // density/light sample, but integrate only the physically front part.
+            accumulateFog(outputModelPrefix, extinction,
+                max(min(distanceEnd, modelDistance) - distanceStart, 0.0), incident);
         }
     }
     outputDepth.x = centroidWeight > 0.0 ? centroidDistanceSum / centroidWeight : 0.0;

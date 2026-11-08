@@ -22,11 +22,12 @@ export function downsampleThresholdMaterial(textureScale, texelSize, that) {
                 return texelSize
             },
             thresholdLevel: () => {
-                return that._thresholdLevel;
+                return that._thresholdLevel * (that.preExposure ?? 1);
             },
             thresholdRange: () => {
-                return that._thresholdRange;
+                return that._thresholdRange * (that.preExposure ?? 1);
             },
+            bloomRadianceLimit: () => 64 * (that.preExposure ?? 1),
         },
         pixelDatatype: PixelDatatype.HALF_FLOAT,
         textureScale: textureScale,

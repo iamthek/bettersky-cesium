@@ -1,0 +1,61 @@
+{
+  "rows": [
+    {
+      "hdr": true,
+      "log": true,
+      "msaa": 1,
+      "errors": [],
+      "active": true
+    },
+    {
+      "hdr": true,
+      "log": true,
+      "msaa": 4,
+      "errors": [],
+      "active": true
+    },
+    {
+      "hdr": true,
+      "log": false,
+      "msaa": 1,
+      "errors": [],
+      "active": true
+    },
+    {
+      "hdr": true,
+      "log": false,
+      "msaa": 4,
+      "errors": [],
+      "active": true
+    },
+    {
+      "hdr": false,
+      "log": true,
+      "msaa": 1,
+      "errors": [],
+      "active": true
+    },
+    {
+      "hdr": false,
+      "log": true,
+      "msaa": 4,
+      "errors": [],
+      "active": true
+    },
+    {
+      "hdr": false,
+      "log": false,
+      "msaa": 1,
+      "errors": [],
+      "active": true
+    },
+    {
+      "hdr": false,
+      "log": false,
+      "msaa": 4,
+      "errors": [],
+      "active": true
+    }
+  ],
+  "errors": []
+}

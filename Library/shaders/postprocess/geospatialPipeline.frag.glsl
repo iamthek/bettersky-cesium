@@ -1,10 +1,14 @@
 
 
             uniform sampler2D inputBuffer;
+            uniform sampler2D colorTexture;
+            uniform bool bsActive;
             uniform sampler2D u_accumulation;
             uniform sampler2D u_revealage;
             uniform float cameraHeight;
             uniform float toneMappingExposure;
+            uniform bool bsInputHDR;
+            uniform float bsPreExposure;
             uniform vec3 sunPositionWC;
             #ifdef ENABLE_FIELDS
                 uniform sampler2D viewsheSpotsTexture;
@@ -357,13 +361,20 @@
                 }
             #endif
             void main() {
+                if (!bsActive) {
+                    out_FragColor = texture(colorTexture, v_textureCoordinates);
+                    return;
+                }
                 // tonemap
                 vec4 color0 = texture(inputBuffer, v_textureCoordinates);
+                if (bsInputHDR) color0.rgb /= bsPreExposure;
                 vec4 color1 = vec4(0.0);
                 ToneMapMain(color0, v_textureCoordinates, color1);
+                if (!bsInputHDR) color1 = color0;
                 color0 = blend30(color0, color1, 1.0);
                 color0.a = clamp(color0.a, 0.0, 1.0);
-                // This custom stage runs after Cesium's tonemapper; encode its linear output once.
+                // Internal sky/cloud buffers stay linear HDR. Encode exactly
+                // once here; model restoration happens in this display space.
                 color0.rgb = czm_inverseGamma(color0.rgb);
 
                 DITMain(color0, v_textureCoordinates, color1);
@@ -411,4 +422,3 @@
                     out_FragColor.rgb = dithering( out_FragColor.rgb );
                 #endif
             }
-            

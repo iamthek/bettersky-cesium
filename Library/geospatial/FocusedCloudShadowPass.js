@@ -12,7 +12,7 @@ export const volumetricLightSunlightGLSL = volumetricLightShadowShaderSource;
 
 const qualitySettings = Object.freeze({
     low: { size: 512, iterations: 32, minStepSize: 50 },
-    balanced: { size: 1024, iterations: 48, minStepSize: 32 },
+    balanced: { size: 1024, iterations: 32, minStepSize: 48 },
     high: { size: 2048, iterations: 64, minStepSize: 24 },
 });
 
@@ -191,6 +191,11 @@ export default class FocusedCloudShadowPass {
     releaseResources() {
         this._releaseRenderTargets();
         this.invalidateHistory();
+    }
+
+    prepare(context, options) {
+        this._ensureRenderTarget(context, qualitySettings[options.quality] ?? qualitySettings.balanced);
+        void this._command.shaderProgram.vertexAttributes;
     }
 
     _ensureRenderTarget(context, settings) {

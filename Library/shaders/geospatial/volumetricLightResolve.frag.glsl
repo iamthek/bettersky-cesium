@@ -12,6 +12,7 @@ layout(location = 2) out vec4 outputDepth;
 uniform sampler2D u_volumetricLightCurrentBefore;
 uniform sampler2D u_volumetricLightCurrentAfter;
 uniform sampler2D u_volumetricLightCurrentDepth;
+uniform sampler2D u_volumetricLightCurrentModelPrefix;
 uniform sampler2D u_volumetricLightHistoryBefore;
 uniform sampler2D u_volumetricLightHistoryAfter;
 uniform sampler2D u_volumetricLightHistoryDepth;
@@ -35,6 +36,9 @@ void main() {
     outputBefore = currentBefore;
     outputAfter = currentAfter;
     outputDepth = currentDepth;
+    // Opaque-fog history is anchored at its own radiance centroid and can extend
+    // behind a moving Gaussian. Keep the prefix current-frame; the composite
+    // performs independent proxy-depth-aware spatial reconstruction.
     if (!u_volumetricLightHistoryValid || currentDepth.x <= 0.0) return;
 
     vec3 ray = normalize(vFogRay);

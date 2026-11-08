@@ -1,5 +1,4 @@
 
-    #version 300 es 
     precision highp float;
     precision highp int;
     precision highp sampler2D;
@@ -38,7 +37,7 @@
         bool isPerspective = inverseProjectionMatrix[2][3] != 0.0; // 4th entry in the 3rd column
         if (isPerspective) {
             // Calculate the camera ray for a perspective camera.
-            vec4 viewPosition = inverseProjectionMatrix * vec4(position, 1.0);
+            vec4 viewPosition = inverseProjectionMatrix * vec4(position.xy, 0.0, 1.0);
             vec4 worldDirection = inverseViewMatrix * vec4(viewPosition.xyz, 0.0);
             origin = cameraPosition;
             direction = worldDirection.xyz;
@@ -84,4 +83,3 @@
         gl_Position = vec4(position.xy, 1.0, 1.0);
         v_textureCoordinates = position.xy*0.5+0.5;
     }
-  

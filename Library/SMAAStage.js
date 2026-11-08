@@ -25,6 +25,7 @@ export default class SMAAStage {
   constructor(scene, options = {}) {
     this._scene = scene;
     this._destroyed = false;
+    this.active = true;
     this._smaa = new SMAAEffectPass(scene, options);
     this._smaa.enabled = options.show ?? true;
 
@@ -37,7 +38,7 @@ export default class SMAAStage {
         // 命令执行时采样 SMAA 的最终输出；首帧若未就绪则回退为原始输入。
         colorTexture: function () {
           const tex = that._smaa.getSMAATexture && that._smaa.getSMAATexture();
-          return tex || that._lastInput || scene.context.defaultTexture;
+          return (that.active && tex) || that._lastInput || scene.context.defaultTexture;
         },
       },
     });
@@ -49,7 +50,8 @@ export default class SMAAStage {
     // 输出 pass-through（采样 getSMAATexture()）。
     const originalExecute = this._stage.execute.bind(this._stage);
     this._stage.execute = function (context, colorTexture, depthTexture, idTexture) {
-      if (that._smaa.enabled && colorTexture) {
+      if (colorTexture) that._lastInput = colorTexture;
+      if (that.active && that._smaa.enabled && colorTexture) {
         that._lastInput = colorTexture;
         that._smaa.setInputTexture(colorTexture);
         // execute 内部会按需创建查找表/FBO/命令；查找表异步加载，未就绪时该帧近似直通。
