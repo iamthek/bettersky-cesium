@@ -1,6 +1,6 @@
 # SDK 架构与开发说明
 
-本文介绍 BetterSky `1.0.0` 的代码如何分工，方便维护和排查问题。安装与参数说明见[使用指南](BetterSky.README.zh-CN.md)，发布步骤见[发布流程](SDK_PUBLISH_PLAN.md)。
+本文介绍 BetterSky `1.1.1` 的代码如何分工，方便维护和排查问题。安装与参数说明见[使用指南](BetterSky.README.zh-CN.md)，发布步骤见[发布流程](SDK_PUBLISH_PLAN.md)。
 
 默认画面仍使用 ACES（9）、云覆盖度 0.34、曝光倍率 2.8；各效果默认值见使用指南。运行边界是同页一个活动实例，以及包含 Globe 的三维透视场景。
 
@@ -51,7 +51,7 @@
 
 ## 源码与 npm 包有什么区别
 
-源码在 [GitHub](https://github.com/iamthek/bettersky-cesium) 公开，`1.0.0` 采用 Apache License 2.0；第三方材料保留各自许可。仓库保留已有素材与 Git 历史，npm 只包含运行所需文件。
+源码在 [GitHub](https://github.com/iamthek/bettersky-cesium) 公开，`1.1.1` 采用 Apache License 2.0；第三方材料保留各自许可。仓库保留已有素材与 Git 历史，npm 只包含运行所需文件。
 
 SDK 构建保留 JavaScript 和 GLSL 的压缩，移除混淆步骤，不生成 sourcemap 或 declaration map。TypeScript 从 `src/index.ts` 生成带注释的 `dist/index.d.ts`，Oxc AST 检查公开接口及参数说明。
 

@@ -10,7 +10,7 @@ This guide covers SDK integration, configuration, and usage notes.
 
 ### Version
 
-This guide describes BetterSky `1.0.0`. Follow the installation and asset setup below, and see the parameter tables to customize the result. See the [changelog](CHANGELOG.md) for release history.
+This guide describes BetterSky `1.1.1`. Follow the installation and asset setup below, and see the parameter tables to customize the result. See the [changelog](CHANGELOG.md) for release history.
 
 ### Requirements
 
@@ -31,11 +31,11 @@ Only one BetterSky instance may be active per page. Dispose of the old instance 
 Run either command in your application. New-project examples use the verified Cesium 1.146.0 combination; an existing application can keep another compatible, verified version:
 
 ```bash
-npm install bettersky-cesium@1.0.0 cesium@1.146.0
+npm install bettersky-cesium@1.1.1 cesium@1.146.0
 ```
 
 ```bash
-pnpm add bettersky-cesium@1.0.0 cesium@1.146.0
+pnpm add bettersky-cesium@1.1.1 cesium@1.146.0
 ```
 
 The package provides the named `BetterSky` export and `dist/index.d.ts`; no separate type package is needed. The bundled declarations include Chinese field documentation for editor hints covering meanings, units, defaults, and constraints.
@@ -256,7 +256,7 @@ Cleanup failures in `dispose()` are reported as an `AggregateError`; each indepe
 
 ## Parameters
 
-The defaults below match `BetterSky.getDefaultOptions()` in version 1.0.0. All numeric values must be finite; `NaN` and infinity are invalid. All options below support `update()` except the constructor-only `hbao.denoise`. Scene and time options follow their own application rules.
+The defaults below match `BetterSky.getDefaultOptions()` in version 1.1.1. All numeric values must be finite; `NaN` and infinity are invalid. All options below support `update()` except the constructor-only `hbao.denoise`. Scene and time options follow their own application rules.
 
 ### General options
 
@@ -429,7 +429,7 @@ BetterSky uses Cesium renderer internals. After upgrading Cesium or three, verif
 
 Use only supported 3D perspective scenes. Dispose of the effects before switching to 2D / Columbus View. On SSR pages, initialize after client mounting. Screen-space reflections and subsurface scattering are not currently supported. Keep `systemLight: true`; `false` makes only some effects use a custom sun direction supplied through `scene.context.uniformState.sunDirectionWC2`, while clouds and cloud shadows still follow Cesium's sun. This is not a unified custom-light API.
 
-Asset requests must return the actual files, not the application's HTML fallback. Version 1.0.0 uses the Apache License 2.0; third-party materials retain their own terms. Upgrade JS and `BetterSkyAssets/` together and invalidate old caches. Include [LICENSE](LICENSE), [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) when distributing SDK runtime builds, and follow the complete license terms.
+Asset requests must return the actual files, not the application's HTML fallback. Version 1.1.1 uses the Apache License 2.0; third-party materials retain their own terms. Upgrade JS and `BetterSkyAssets/` together and invalidate old caches. Include [LICENSE](LICENSE), [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) when distributing SDK runtime builds, and follow the complete license terms.
 
 ### Troubleshooting
 

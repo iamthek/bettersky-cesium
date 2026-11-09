@@ -10,7 +10,7 @@
 
 ### 适用版本
 
-本文说明 BetterSky `1.0.0`。按下面步骤完成安装和资源配置，调整效果参见参数表。版本变化见[更新记录](CHANGELOG.md)。
+本文说明 BetterSky `1.1.1`。按下面步骤完成安装和资源配置，调整效果参见参数表。版本变化见[更新记录](CHANGELOG.md)。
 
 ### 环境要求
 
@@ -31,11 +31,11 @@
 在接入项目中任选一条命令。新项目示例使用已验证的 Cesium 1.146.0 组合；已有项目可以保留其他兼容且验证过的版本：
 
 ```bash
-npm install bettersky-cesium@1.0.0 cesium@1.146.0
+npm install bettersky-cesium@1.1.1 cesium@1.146.0
 ```
 
 ```bash
-pnpm add bettersky-cesium@1.0.0 cesium@1.146.0
+pnpm add bettersky-cesium@1.1.1 cesium@1.146.0
 ```
 
 包提供 `BetterSky` 具名导出及 `dist/index.d.ts`，无需单独安装类型包。随包声明提供中文字段注释，可在编辑器中查看含义、单位、默认值和约束。
@@ -256,7 +256,7 @@ viewer.destroy() // 仅在应用也需要销毁 Viewer 时调用。
 
 ## 参数说明
 
-下列默认值对应 1.0.0 的 `BetterSky.getDefaultOptions()`。数值均须有限，`NaN` 与无穷大无效。除 `hbao.denoise` 仅构造时设置外，下列配置均支持 `update()`；场景和时间参数按各自规则生效。
+下列默认值对应 1.1.1 的 `BetterSky.getDefaultOptions()`。数值均须有限，`NaN` 与无穷大无效。除 `hbao.denoise` 仅构造时设置外，下列配置均支持 `update()`；场景和时间参数按各自规则生效。
 
 ### 通用参数
 
@@ -430,7 +430,7 @@ SDK 使用 Cesium 渲染器内部接口。升级 Cesium 或 three 后，应验�
 
 仅在受支持的三维透视场景使用，切换到 2D / Columbus View 前先销毁效果；SSR 页面应在客户端挂载后初始化。屏幕空间反射与次表面散射不属于当前支持功能。保持 `systemLight: true`；`false` 仅让部分效果采用业务写入 `scene.context.uniformState.sunDirectionWC2` 的自定义太阳方向，云和云影仍跟随 Cesium 太阳。该开关不提供统一的业务光照 API。
 
-资源请求应返回实际文件，不能被单页应用的 HTML 回退覆盖。1.0.0 采用 Apache License 2.0，第三方材料遵循各自许可。升级时同步更新 JS 与 `BetterSkyAssets/` 并刷新旧缓存。对外分发 SDK 运行产物时附带 [LICENSE](LICENSE)、[NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，遵循完整许可条款。
+资源请求应返回实际文件，不能被单页应用的 HTML 回退覆盖。1.1.1 采用 Apache License 2.0，第三方材料遵循各自许可。升级时同步更新 JS 与 `BetterSkyAssets/` 并刷新旧缓存。对外分发 SDK 运行产物时附带 [LICENSE](LICENSE)、[NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，遵循完整许可条款。
 
 ### 常见问题
 
