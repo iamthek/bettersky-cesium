@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 - 2026-11-09
 
 - Default scene HDR to off while retaining the `highDynamicRange` option and demo control for explicit opt-in.
 - Preserve native Cesium scene colors by separating scene contribution from SDK sky, clouds and scattering; remove repeated surface lighting, tone mapping and display encoding.
