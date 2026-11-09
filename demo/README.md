@@ -17,7 +17,9 @@ pnpm dev
 
 打开 Vite 输出的地址，通常是 [http://localhost:3000/](http://localhost:3000/)。不配置服务凭据也可以运行，默认使用本地 NaturalEarthII 底图和椭球地形。
 
-Demo 会调用 `betterSkyInstance.loadAssets()` 等待当前配置所需资源，并在控制台分别报告后处理阶段注册和资源加载结果。资源就绪不代表首帧已经渲染；加载失败时可查看 `betterSkyInstance.getAssetState()`，修复资源地址或网络问题后调用 `betterSkyInstance.retryAssets()` 重试。
+Demo 先显示加载界面，调用 `BetterSky.preloadAssets()` 预下载天空与云层资源；下载成功后才创建 Cesium Viewer 和 BetterSky 实例。随后等待 `betterSkyInstance.loadAssets()` 完成纹理解码与上传，并在下一帧渲染后显示场景和控制面板。下载或初始化失败时保留提示并提供重试按钮；重新下载会复用成功缓存，仅重试失败文件。
+
+加载界面不会消除网络超时。若资源下载持续停滞，请检查网络或代理后重试。此启动流程仅用于 `demo/`，修改和部署 Demo 不会改变已经发布的 npm 包。
 
 需要在线服务时，将 `demo/.env.pages` 复制为仓库根目录的 `.env.local`，再按需填写：
 

@@ -758,118 +758,190 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
   });
 }
 
-window.onload = async () => {
-  // Vite 在构建时注入环境变量，未配置时不请求 Ion 服务。
-  const ionToken = import.meta.env.VITE_CESIUM_ION_TOKEN?.trim() || "";
-  const tiandituToken = import.meta.env.VITE_TIANDITU_TOKEN?.trim() || "";
-  Cesium.Ion.defaultAccessToken = ionToken;
-
-  const viewer = new Cesium.Viewer("cesiumContainer", {
-    animation: false,
-    timeline: true,
-    baseLayerPicker: false,
-    baseLayer: false,
-    geocoder: false,
-    sceneModePicker: false,
-    navigationHelpButton: false,
-    fullscreenButton: false,
-    homeButton: false,
-    infoBox: false,
-    selectionIndicator: false,
-    shouldAnimate: false,
-  });
-
-  const imageryProvider = tiandituToken
-    ? new Cesium.WebMapTileServiceImageryProvider({
-      url: `https://t1.tianditu.gov.cn/img_w/wmts?tk=${encodeURIComponent(tiandituToken)}`,
-      layer: "img",
-      style: "default",
-      format: "tiles",
-      tileMatrixSetID: "w",
-      tilingScheme: new Cesium.WebMercatorTilingScheme(),
-      maximumLevel: 18,
-      credit: "天地图",
-    })
-    : await Cesium.TileMapServiceImageryProvider.fromUrl(
-        Cesium.buildModuleUrl("Assets/Textures/NaturalEarthII"),
-      );
-  viewer.imageryLayers.addImageryProvider(imageryProvider);
-  if (!tiandituToken) {
-    console.warn("[demo-official] 未配置 VITE_TIANDITU_TOKEN，使用 Cesium 本地底图。");
-  }
-
-  // 在大窗口限制实际绘制像素；普通大小的窗口继续使用原生分辨率。
-  const maxRenderPixels = 4_000_000;
-  const updateResolutionScale = () => {
-    // 与 Cesium 的实际像素比保持一致，避免高 DPI 下重复降低分辨率。
-    const pixelRatio = viewer.useBrowserRecommendedResolution ? 1 : window.devicePixelRatio;
-    const pixelWidth = viewer.canvas.clientWidth * pixelRatio;
-    const pixelHeight = viewer.canvas.clientHeight * pixelRatio;
-    if (!pixelWidth || !pixelHeight) return;
-    const scale = Math.min(1, Math.sqrt(maxRenderPixels / (pixelWidth * pixelHeight)));
-    if (Math.abs(viewer.resolutionScale - scale) > 0.01) {
-      viewer.resolutionScale = scale;
-      viewer.resize();
-    }
-  };
-  updateResolutionScale();
-  window.addEventListener("resize", updateResolutionScale);
-
-  // 先使用椭球；在线地形异步加载，避免外部服务阻塞天空效果初始化。
-  viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
-  if (ionToken) {
-    Cesium.createWorldTerrainAsync().then((terrainProvider) => {
-      if (!viewer.isDestroyed()) viewer.terrainProvider = terrainProvider;
-    }).catch((error) => {
-      console.warn("[demo-official] 地形加载失败，继续使用椭球地形：", error);
-    });
-  } else {
-    console.warn("[demo-official] 未配置 VITE_CESIUM_ION_TOKEN，使用椭球地形。");
-  }
-
-  // 初始相机：成都上空近景，便于观察体积云与地平线大气雾
-  viewer.scene.camera.setView({
-    destination: Cesium.Cartesian3.fromDegrees(104.07, 30.4, 9000),
-    orientation: {
-      heading: 0,
-      pitch: Cesium.Math.toRadians(-20),
-      roll: 0,
-    },
-  });
-
-  // ====== 一行开启天空效果 ======
-  const betterSkyInstance = new BetterSky(viewer);
-
-  updateTimelineRange(viewer, CONTROL_DEFAULTS.time);
-  createEffectControlPanel(viewer, betterSkyInstance);
-
-  // 运行时也可切换：betterSkyInstance.update({ hbao: { enabled: false, intensity: 150 }, smaa: false });
-
-  // 暴露到全局，便于在控制台调试（如 betterSkyInstance.update({ coverage: 0.4 })）
-  window.viewer = viewer;
-  window.betterSkyInstance = betterSkyInstance;
-
-  // 阶段注册与资源就绪分别检查；两者都不代表首帧已经完成渲染。
-  const pps = viewer.scene.postProcessStages;
-  const stageRegistered = pps.contains(betterSkyInstance.stage);
-  console.log("[demo-official] 天空后处理阶段已注册：", stageRegistered, betterSkyInstance.stage?.name);
-  if (!stageRegistered) {
-    console.error("[demo-official] 未能加入后处理集合，请检查控制台报错。");
-  }
-
+async function createDemoScene() {
+  let viewer;
+  let betterSkyInstance;
+  let updateResolutionScale;
+  let removeRenderError;
+  let removeFirstFrame;
   try {
-    // 等待调用时配置所需的天空、SMAA 和雪纹理；加载失败会拒绝 Promise。
-    await betterSkyInstance.loadAssets();
+    // Vite 在构建时注入环境变量，未配置时不请求 Ion 服务。
+    const ionToken = import.meta.env.VITE_CESIUM_ION_TOKEN?.trim() || "";
+    const tiandituToken = import.meta.env.VITE_TIANDITU_TOKEN?.trim() || "";
+    Cesium.Ion.defaultAccessToken = ionToken;
+
+    viewer = new Cesium.Viewer("cesiumContainer", {
+      animation: false,
+      timeline: true,
+      baseLayerPicker: false,
+      baseLayer: false,
+      geocoder: false,
+      sceneModePicker: false,
+      navigationHelpButton: false,
+      fullscreenButton: false,
+      homeButton: false,
+      infoBox: false,
+      selectionIndicator: false,
+      shouldAnimate: false,
+      useDefaultRenderLoop: false,
+    });
+
+    const imageryProvider = tiandituToken
+      ? new Cesium.WebMapTileServiceImageryProvider({
+        url: `https://t1.tianditu.gov.cn/img_w/wmts?tk=${encodeURIComponent(tiandituToken)}`,
+        layer: "img",
+        style: "default",
+        format: "tiles",
+        tileMatrixSetID: "w",
+        tilingScheme: new Cesium.WebMercatorTilingScheme(),
+        maximumLevel: 18,
+        credit: "天地图",
+      })
+      : await Cesium.TileMapServiceImageryProvider.fromUrl(
+          Cesium.buildModuleUrl("Assets/Textures/NaturalEarthII"),
+        );
+    viewer.imageryLayers.addImageryProvider(imageryProvider);
+    if (!tiandituToken) {
+      console.warn("[demo-official] 未配置 VITE_TIANDITU_TOKEN，使用 Cesium 本地底图。");
+    }
+
+    // 在大窗口限制实际绘制像素；普通大小的窗口继续使用原生分辨率。
+    const maxRenderPixels = 4_000_000;
+    updateResolutionScale = () => {
+      // 与 Cesium 的实际像素比保持一致，避免高 DPI 下重复降低分辨率。
+      const pixelRatio = viewer.useBrowserRecommendedResolution ? 1 : window.devicePixelRatio;
+      const pixelWidth = viewer.canvas.clientWidth * pixelRatio;
+      const pixelHeight = viewer.canvas.clientHeight * pixelRatio;
+      if (!pixelWidth || !pixelHeight) return;
+      const scale = Math.min(1, Math.sqrt(maxRenderPixels / (pixelWidth * pixelHeight)));
+      if (Math.abs(viewer.resolutionScale - scale) > 0.01) {
+        viewer.resolutionScale = scale;
+        viewer.resize();
+      }
+    };
+    updateResolutionScale();
+    window.addEventListener("resize", updateResolutionScale);
+
+    // 先使用椭球；在线地形异步加载，避免外部服务阻塞天空效果初始化。
+    viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+    if (ionToken) {
+      Cesium.createWorldTerrainAsync().then((terrainProvider) => {
+        if (!viewer.isDestroyed()) viewer.terrainProvider = terrainProvider;
+      }).catch((error) => {
+        console.warn("[demo-official] 地形加载失败，继续使用椭球地形：", error);
+      });
+    } else {
+      console.warn("[demo-official] 未配置 VITE_CESIUM_ION_TOKEN，使用椭球地形。");
+    }
+
+    // 初始相机：成都上空近景，便于观察体积云与地平线大气雾
+    viewer.scene.camera.setView({
+      destination: Cesium.Cartesian3.fromDegrees(104.07, 30.4, 9000),
+      orientation: {
+        heading: 0,
+        pitch: Cesium.Math.toRadians(-20),
+        roll: 0,
+      },
+    });
+
+    // ====== 一行开启天空效果 ======
+    betterSkyInstance = new BetterSky(viewer);
+
+    updateTimelineRange(viewer, CONTROL_DEFAULTS.time);
+
+    // 运行时也可切换：betterSkyInstance.update({ hbao: { enabled: false, intensity: 150 }, smaa: false });
+
+    // 暴露到全局，便于在控制台调试（如 betterSkyInstance.update({ coverage: 0.4 })）
+    window.viewer = viewer;
+    window.betterSkyInstance = betterSkyInstance;
+
+    // 阶段注册与资源就绪分别检查；两者都不代表首帧已经完成渲染。
+    const pps = viewer.scene.postProcessStages;
+    const stageRegistered = pps.contains(betterSkyInstance.stage);
+    console.log("[demo-official] 天空后处理阶段已注册：", stageRegistered, betterSkyInstance.stage?.name);
+    if (!stageRegistered) {
+      throw new Error("[demo-official] 未能加入后处理集合。");
+    }
+
+    const renderFailure = new Promise((_, reject) => {
+      removeRenderError = viewer.scene.renderError.addEventListener((_scene, error) => reject(error));
+    });
+    // 场景配置完成且错误监听就绪后再启动渲染，避免首帧错误漏过加载界面。
+    viewer.useDefaultRenderLoop = true;
+    // 预下载只缓存文件；实例还需解码、上传纹理，并完成一帧后才揭开遮罩。
+    await Promise.race([betterSkyInstance.loadAssets(), renderFailure]);
+    await Promise.race([
+      new Promise(resolve => {
+        removeFirstFrame = viewer.scene.postRender.addEventListener(resolve);
+        viewer.scene.requestRender();
+      }),
+      renderFailure,
+    ]);
+    createEffectControlPanel(viewer, betterSkyInstance);
     console.log("[demo-official] 天空效果资源已就绪：", betterSkyInstance.getAssetState());
   } catch (error) {
-    if (error?.name === "AbortError") {
-      console.info("[demo-official] 天空效果资源加载已取消：", error);
-      return;
-    }
-    console.error(
-      "[demo-official] 天空效果资源加载失败，可调用 betterSkyInstance.retryAssets() 重试：",
-      betterSkyInstance.getAssetState(),
-      error,
-    );
+    // 初始化失败后释放半成品，重试时不会留下活动实例或重复的 resize 回调。
+    if (updateResolutionScale) window.removeEventListener("resize", updateResolutionScale);
+    try { betterSkyInstance?.dispose(); }
+    catch (cleanupError) { console.error("[demo-official] 天空效果清理失败：", cleanupError); }
+    try { if (viewer && !viewer.isDestroyed()) viewer.destroy(); }
+    catch (cleanupError) { console.error("[demo-official] 场景清理失败：", cleanupError); }
+    if (window.viewer === viewer) delete window.viewer;
+    if (window.betterSkyInstance === betterSkyInstance) delete window.betterSkyInstance;
+    throw error;
+  } finally {
+    removeRenderError?.();
+    removeFirstFrame?.();
   }
-};
+}
+
+const loadingOverlay = document.getElementById("demoLoading");
+const loadingTitle = document.getElementById("demoLoadingTitle");
+const loadingMessage = document.getElementById("demoLoadingMessage");
+const loadingSpinner = document.getElementById("demoLoadingSpinner");
+const retryButton = document.getElementById("retryDemoLoading");
+let startingDemo = false;
+
+async function startDemo() {
+  if (startingDemo) return;
+  startingDemo = true;
+  let preloaded = false;
+  document.getElementById("cesiumContainer").setAttribute("aria-busy", "true");
+  loadingOverlay.setAttribute("role", "status");
+  loadingOverlay.setAttribute("aria-live", "polite");
+  loadingOverlay.setAttribute("aria-busy", "true");
+  loadingSpinner.hidden = false;
+  retryButton.hidden = true;
+  retryButton.disabled = true;
+  loadingTitle.textContent = "正在下载天空资源";
+  loadingMessage.textContent = "首次加载需要下载天空与云层资源，请稍候…";
+  try {
+    // 下载成功前不创建 Viewer；再次调用会复用成功的文件，只重试失败项。
+    await BetterSky.preloadAssets();
+    preloaded = true;
+    loadingTitle.textContent = "正在初始化场景";
+    loadingMessage.textContent = "资源下载完成，正在准备天空效果…";
+    await createDemoScene();
+    document.getElementById("effectPanel").hidden = false;
+    loadingOverlay.hidden = true;
+  } catch (error) {
+    console.error("[demo-official] 演示加载失败：", error);
+    loadingTitle.textContent = preloaded ? "场景初始化失败" : "天空资源下载失败";
+    loadingMessage.textContent = preloaded
+      ? "请重试；如果仍然失败，可查看控制台错误信息。"
+      : "请检查网络连接后重试，已下载的资源会保留。";
+    loadingOverlay.setAttribute("role", "alert");
+    loadingOverlay.setAttribute("aria-live", "assertive");
+    loadingSpinner.hidden = true;
+    retryButton.hidden = false;
+    retryButton.disabled = false;
+    retryButton.focus();
+  } finally {
+    document.getElementById("cesiumContainer").setAttribute("aria-busy", "false");
+    loadingOverlay.setAttribute("aria-busy", "false");
+    startingDemo = false;
+  }
+}
+
+retryButton.addEventListener("click", startDemo);
+void startDemo();

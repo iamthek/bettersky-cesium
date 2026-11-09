@@ -10,6 +10,52 @@
     html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
     #cesiumContainer { position: absolute; inset: 0; }
 
+    .demo-loading {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: grid;
+      place-items: center;
+      color: #e2e8f0;
+      background: #0f172a;
+      font: 14px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+      color-scheme: dark;
+    }
+
+    .demo-loading__content { max-width: 440px; padding: 24px; text-align: center; }
+    .demo-loading__title { margin: 18px 0 8px; font-size: 20px; font-weight: 600; }
+    .demo-loading__message { margin: 0; color: #94a3b8; white-space: pre-line; overflow-wrap: anywhere; }
+
+    .demo-loading__spinner {
+      box-sizing: border-box;
+      width: 36px;
+      height: 36px;
+      margin: 0 auto;
+      border: 3px solid #334155;
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: demo-loading-spin 1s linear infinite;
+    }
+
+    .demo-loading__retry {
+      margin-top: 20px;
+      padding: 8px 18px;
+      color: #e2e8f0;
+      background: #334155;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      border-radius: 7px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .demo-loading__retry:hover { background: #475569; }
+    .demo-loading__retry:focus-visible { outline: 2px solid #7dd3fc; outline-offset: 3px; }
+    .demo-loading__retry:disabled { opacity: 0.6; cursor: wait; }
+    .demo-loading[hidden], .demo-loading [hidden] { display: none; }
+
+    @keyframes demo-loading-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .demo-loading__spinner { animation: none; } }
+
     .effect-panel {
       position: absolute;
       top: 14px;
@@ -32,7 +78,7 @@
 
     .effect-panel.is-collapsed { width: auto; }
     .effect-panel.is-collapsed .effect-panel__title small { display: none; }
-    .effect-panel [hidden] { display: none; }
+    .effect-panel[hidden], .effect-panel [hidden] { display: none; }
 
     .effect-panel__header,
     .effect-panel__footer {
@@ -191,9 +237,19 @@
 </head>
 
 <body>
-  <div id="cesiumContainer"></div>
+  <div id="cesiumContainer" aria-busy="true"></div>
 
-  <aside id="effectPanel" class="effect-panel is-collapsed" aria-label="天空效果参数控制面板">
+  <div id="demoLoading" class="demo-loading" role="status" aria-live="polite" aria-atomic="true"
+    aria-busy="true" aria-labelledby="demoLoadingTitle" aria-describedby="demoLoadingMessage">
+    <div class="demo-loading__content">
+      <div id="demoLoadingSpinner" class="demo-loading__spinner" aria-hidden="true"></div>
+      <h1 id="demoLoadingTitle" class="demo-loading__title">正在加载演示</h1>
+      <p id="demoLoadingMessage" class="demo-loading__message">正在加载程序，请稍候…</p>
+      <button id="retryDemoLoading" class="demo-loading__retry" type="button" hidden>重试</button>
+    </div>
+  </div>
+
+  <aside id="effectPanel" class="effect-panel is-collapsed" aria-label="天空效果参数控制面板" hidden>
     <header class="effect-panel__header">
       <span class="effect-panel__title">
         <strong>天空效果参数</strong>
