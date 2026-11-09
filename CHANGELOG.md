@@ -7,7 +7,7 @@
 - Change the default `irradianceScale` from `0.15` to the neutral scene brightness multiplier `1`. Explicit values now directly scale native scene color; `toneMappingMode` and `toneMappingExposure` apply only to SDK-generated radiance.
 - Correct native depth sampling and logarithmic-depth switching across atmosphere, clouds and volumetric light; fix HBAO position reconstruction, sampling radius and bilateral filtering.
 - Preserve the established globe sunlight policy and soft sky/cloud midtones separately from model colors. Merge Cesium's per-frustum depth copies when logarithmic depth is disabled; restore the host depth-picking preference on disable/disposal.
-- Preserve Gaussian splat silhouettes above terrain by recovering pre-OIT foreground coverage and compositing the sky behind it; restore the host background color on disable/disposal.
+- Optimized for the Gaussian model：Preserve Gaussian splat silhouettes above terrain by recovering pre-OIT foreground coverage and compositing the sky behind it; restore the host background color on disable/disposal.
 
 ## 1.0.0 - 2026-10-27
 
