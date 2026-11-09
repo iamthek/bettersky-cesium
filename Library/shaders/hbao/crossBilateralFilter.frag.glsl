@@ -74,10 +74,10 @@ void main() {
   vec2 pixelSize = 1.0 / czm_viewport.zw;
   #if DIRECTION == 0
   vec2 delta = vec2(pixelSize.x, 0.0) / textureScale;
-  vec2 depthDelta = vec2(pixelSize.x, 0.0) * czm_pixelRatio;
+  vec2 depthDelta = delta;
   #else
   vec2 delta = vec2(0.0, pixelSize.y) / textureScale;
-  vec2 depthDelta = vec2(0.0, pixelSize.y) * czm_pixelRatio;
+  vec2 depthDelta = delta;
   #endif // DIRECTION
 
   float ao = center.x;

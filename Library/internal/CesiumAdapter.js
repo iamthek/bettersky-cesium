@@ -8,6 +8,29 @@ export function getCameraPosition(scene) { return scene.context.uniformState._ca
 export function usesLogDepthOptimization(scene) { return scene.postProcessStages._logDepthOptimization; }
 export function getStageIndex(stage) { return stage._index; }
 
+export function getSceneCoverage(scene) {
+    const oit = scene.view?.oit;
+    if (!scene._environmentState?.useOIT || !oit) return undefined;
+    // Cesium's OIT composite forces alpha=1 wherever opaque color differs from
+    // the clear color, including Gaussian splats. Read coverage before that step.
+    const color = scene.view.globeDepth?.colorFramebufferManager?.getColorTexture(0);
+    const transmittance = oit._translucentMRTSupport ? oit._accumulationTexture : oit._revealageTexture;
+    return color && transmittance ? { color, transmittance, alphaChannel: !!oit._translucentMRTSupport } : undefined;
+}
+
+export function getSceneDepthFrustums(scene) {
+    if (!scene.useDepthPicking) return [];
+    const view = scene.view;
+    const frustums = view?.frustumCommandsList ?? [];
+    // A missing copy cannot safely be replaced by another frustum's native depth.
+    if (frustums.some((_, i) => !view.pickDepths?.[i]?.framebuffer)) return [];
+    return frustums.map((frustum, i) => ({
+        texture: view.pickDepths[i].framebuffer.getColorTexture(0),
+        near: frustum.near * (i === 0 ? 1 : scene.opaqueFrustumNearOffset),
+        far: frustum.far,
+    }));
+}
+
 export function restoreStageOrder(collection, stage, index) {
     // Official PostProcessStageCollection has no insert operation.
     if (index != null && Array.isArray(collection._stages)) {

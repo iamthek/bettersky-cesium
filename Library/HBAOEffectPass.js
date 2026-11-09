@@ -1,4 +1,5 @@
 import { usesLogDepthOptimization } from "./internal/CesiumAdapter.js";
+import { sceneDepthShader } from './internal/SceneDepth.js';
 import PostProcessStage from "./PostProcessStage.js";
 import ambientOcclusionGenerate from "./hbao/ambientOcclusionGenerate.js";
 import ambientOcclusionModulate from "./hbao/ambientOcclusionModulate.js";
@@ -104,9 +105,8 @@ export default class HBAOEffectPass {
 
     const scene = this._scene;
     const frustum = scene.camera.frustum
-    const cotFovy = 1 / Math.tan(frustum.fovy / 2)
-    this._focalLength.x = cotFovy * frustum.aspectRatio
-    this._focalLength.y = cotFovy
+    this._focalLength.x = frustum.projectionMatrix[0];
+    this._focalLength.y = frustum.projectionMatrix[5];
     this._pixelDatatype = scene.highDynamicRange ? PixelDatatype.HALF_FLOAT : PixelDatatype.UNSIGNED_BYTE;
     const generate = new PostProcessStage({
       name: `${prefix}_ambient_occlusion_generate`,
@@ -115,6 +115,7 @@ export default class HBAOEffectPass {
             ${this._steps !== null ? `#define NUM_STEPS (${this._steps})` : ''}
             ${this._accurateNormalReconstruction ? '#define USE_ACCURATE_NORMAL' : ''}
             ${this._outputType !== null ? `#define OUTPUT_TYPE (${this._outputType})` : ''}
+            ${sceneDepthShader}
             ${this._useGlobeDepth ? globeDepth : depth}
             ${packing}
             ${highPassRandom}
@@ -124,6 +125,7 @@ export default class HBAOEffectPass {
             `,
       timeSlicingEnabled: true,
       uniforms: {
+        betterSkyLinearDepth: () => this.sceneDepth?.linear ?? false,
         textureScale: () => { return this._textureScale },
         intensity: () => { return this._intensity },
         maxRadius: () => { return this._maxRadius },
@@ -139,6 +141,7 @@ export default class HBAOEffectPass {
       name: `${prefix}_ambient_occlusion_modulate`,
       fragmentShader: `
             ${this._outputType !== null ? `#define OUTPUT_TYPE (${this._outputType})` : ''}
+            ${sceneDepthShader}
             ${this._useGlobeDepth ? globeDepth : depth}
             ${packing}
             ${reconstructPosition}
@@ -147,6 +150,7 @@ export default class HBAOEffectPass {
             `,
       timeSlicingEnabled: true,
       uniforms: {
+        betterSkyLinearDepth: () => this.sceneDepth?.linear ?? false,
         color: () => { return this._color },
         frustumLength: () => { return this._frustumLength },
         blackPoint: () => { return this._blackPoint },
@@ -157,6 +161,8 @@ export default class HBAOEffectPass {
       pixelDatatype: this._pixelDatatype
     });
 
+    wrapSceneDepth(generate, this);
+    wrapSceneDepth(modulate, this);
     if (this._denoise) {
 
       const filter = createBilateralFilterStage(this, generate);
@@ -197,9 +203,8 @@ export default class HBAOEffectPass {
 
       this._hbaoEffect.update(context, useLogDepth);
 
-      const cotFovy = 1 / Math.tan(frustum.fovy / 2)
-      this._focalLength.x = cotFovy * frustum.aspectRatio
-      this._focalLength.y = cotFovy
+      this._focalLength.x = frustum.projectionMatrix[0];
+      this._focalLength.y = frustum.projectionMatrix[5];
     }
 
     // 深度缓冲区精度优化
@@ -251,12 +256,20 @@ export default class HBAOEffectPass {
     return undefined;
   };
 }
+function wrapSceneDepth(stage, owner) {
+  const execute = stage.execute;
+  stage.execute = function (context, colorTexture, depthTexture, idTexture) {
+    depthTexture = owner.sceneDepth?.prepare(context, depthTexture) ?? depthTexture;
+    return execute.call(this, context, colorTexture, depthTexture, idTexture);
+  };
+}
 function createBilateralFilterStage(that, generate) {
   const blurX = new PostProcessStage({
     name: `${prefix}_ambient_occlusion_cross_bilateral_filter_x`,
     fragmentShader: `
         #define DIRECTION (0)
         ${that._outputType !== null ? `#define OUTPUT_TYPE (${that._outputType})` : ''}
+        ${sceneDepthShader}
         ${that._useGlobeDepth ? globeDepth : depth}
         ${packing}
         ${reconstructPosition}
@@ -264,6 +277,7 @@ function createBilateralFilterStage(that, generate) {
       `,
     timeSlicingEnabled: true,
     uniforms: {
+      betterSkyLinearDepth: () => that.sceneDepth?.linear ?? false,
       colorTexture2: generate.name,
       textureScale: () => { return that._textureScale },
       frustumLength: () => { return that._frustumLength },
@@ -280,6 +294,7 @@ function createBilateralFilterStage(that, generate) {
     fragmentShader: `
         #define DIRECTION (1)
         ${that._outputType !== null ? `#define OUTPUT_TYPE (${that._outputType})` : ''}
+        ${sceneDepthShader}
         ${that._useGlobeDepth ? globeDepth : depth}
         ${packing}
         ${reconstructPosition}
@@ -287,7 +302,8 @@ function createBilateralFilterStage(that, generate) {
       `,
     timeSlicingEnabled: true,
     uniforms: {
-      colorTexture2: generate.name,
+      betterSkyLinearDepth: () => that.sceneDepth?.linear ?? false,
+      colorTexture2: blurX.name,
       textureScale: () => { return that._textureScale },
       frustumLength: () => { return that._frustumLength },
       normalExponent: () => { return that._normalExponent },
@@ -298,6 +314,8 @@ function createBilateralFilterStage(that, generate) {
     sampleMode: PostProcessStageSampleMode.LINEAR
   })
 
+  wrapSceneDepth(blurX, that);
+  wrapSceneDepth(blurY, that);
   return new PostProcessStageComposite({
     name: `${prefix}_ambient_occlusion_cross_bilateral_filter`,
     stages: [generate, blurX, blurY],

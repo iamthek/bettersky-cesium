@@ -1,4 +1,5 @@
 import { getCameraPosition } from "../internal/CesiumAdapter.js";
+import { sceneDepthShader } from '../internal/SceneDepth.js';
 import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from "../internal/MathTypes.js";
 import cloudsMaterialVertexShaderSource from "../shaders/geospatial/cloudsMaterial.vert.glsl?raw";
 import cloudLayerDensityShaderSource from "../shaders/geospatial/cloudLayerDensity.glsl?raw";
@@ -185,6 +186,7 @@ export default class CloudMaterialPass {
         this.minShadowLengthStepSize = defaultsPass.clouds.minShadowLengthStepSize;
         this.maxShadowLengthRayDistance = defaultsPass.clouds.maxShadowLengthRayDistance;
         this._cloudsUniform = {
+            betterSkyLinearDepth: () => this.pipeline.sceneDepth?.linear ?? false,
 
             shadowBuffer: () => { return this.shadowBuffer },
             shadowTexelSize: () => { return this.shadowTexelSize.set(1 / this.shadowMapSize.x, 1 / this.shadowMapSize.y) },
@@ -335,6 +337,16 @@ export default class CloudMaterialPass {
 
     init(isUpdate = false) {
         if (this._destroyed) return;
+        const useLogDepth = !!this.pipeline._useLogDepth;
+        if (this._useLogDepth !== useLogDepth) {
+            for (const command of [this._cloudDrawComomand, this._cloudResolveDrawComomand]) {
+                command?.shaderProgram?.destroy();
+            }
+            this._cloudDrawComomand = undefined;
+            this._cloudResolveDrawComomand = undefined;
+            this._useLogDepth = useLogDepth;
+            this.invalidateHistory();
+        }
         const context = this._scene.context;
         let defines = ``
 
@@ -449,21 +461,22 @@ export default class CloudMaterialPass {
 
         if (!this._cloudDrawComomand) {
             const cloudsMaterialShader = new ShaderSource({
-                defines: ["LOG_DEPTH"],
-                sources: [cloudsMaterialFS]
+                defines: this._useLogDepth ? ["LOG_DEPTH"] : [],
+                sources: [sceneDepthShader + cloudsMaterialFS]
             });
-            this._passState = new PassState(this._scene.context);
+            this._passState ??= new PassState(this._scene.context);
             this._cloudDrawComomand = this._scene.context.createViewportQuadCommand(cloudsMaterialShader, {
                 uniformMap: this._cloudsUniform,
                 primitiveType: PrimitiveType.TRIANGLES
             }, cloudsMaterialVS);
             const cloudsResolveMaterialShader = new ShaderSource({
-                defines: ["LOG_DEPTH"],
-                sources: [cloudsResolveMaterialFS]
+                defines: this._useLogDepth ? ["LOG_DEPTH"] : [],
+                sources: [sceneDepthShader + cloudsResolveMaterialFS]
             });
-            this._passState2 = new PassState(this._scene.context);
+            this._passState2 ??= new PassState(this._scene.context);
             this._cloudResolveDrawComomand = this._scene.context.createViewportQuadCommand(cloudsResolveMaterialShader, {
                 uniformMap: {
+                    betterSkyLinearDepth: () => this.pipeline.sceneDepth?.linear ?? false,
                     frame: () => { return this.pipeline._frame },
                     varianceGamma: () => { return this._varianceGamma },
                     jitterOffset: () => { return this._jitterOffset },
@@ -542,7 +555,8 @@ export default class CloudMaterialPass {
     execute(context, colorTexture, depthTexture, idTexture) {
 
         const gl = this._scene.context._gl;
-        if (this._width !== this._scene.drawingBufferWidth ||
+        if (this._useLogDepth !== !!this.pipeline._useLogDepth ||
+            this._width !== this._scene.drawingBufferWidth ||
             this._height !== this._scene.drawingBufferHeight
         ) {
             this.init(true);

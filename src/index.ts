@@ -263,18 +263,19 @@ export interface BetterSkyOptions {
    */
   localWeatherVelocity?: BetterSkyVector2;
   /**
-   * HDR 色调映射曲线，数值含义见 BetterSkyToneMappingMode；运行时切换会重建天空渲染阶段。
+   * SDK 天空、云和散射的 HDR 色调映射曲线，不重复映射原生场景色；切换会重建天空渲染阶段。
    * @default 9
    */
   toneMappingMode?: BetterSkyToneMappingMode;
   /**
-   * 色调映射前的亮度倍率，建议非负；越大越亮，单位不是曝光档位 EV。
+   * SDK 天空、云和散射在色调映射前的非负亮度倍率，不改变原生场景曝光；单位不是 EV。
    * @default 2.8
    */
   toneMappingExposure?: number;
   /**
-   * 地表辐照度增益，非负倍率；越大地表越亮，与云体补光分别控制，仍受色调映射影响。
-   * @default 0.15
+   * 原生场景颜色的非负亮度倍率；1 保持原色，0 压黑场景贡献，独立于 SDK 曝光和云体补光。
+   * 云影、大气消光、云雾遮挡和 HBAO 仍可影响最终场景颜色。
+   * @default 1
    */
   irradianceScale?: number;
   /**
@@ -310,7 +311,8 @@ export interface BetterSkyOptions {
   applySceneSettings?: boolean;
   /**
    * 场景 HDR 开关，true 保留更宽亮度范围供色调映射使用；受当前 applySceneSettings 配置控制。
-   * @default true
+   * 默认关闭，可通过 update({ highDynamicRange: true }) 显式开启。
+   * @default false
    */
   highDynamicRange?: boolean;
   /**

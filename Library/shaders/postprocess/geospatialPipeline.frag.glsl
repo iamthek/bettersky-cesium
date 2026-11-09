@@ -1,6 +1,7 @@
 
 
             uniform sampler2D inputBuffer;
+            uniform sampler2D sceneBaseBuffer;
             uniform sampler2D u_accumulation;
             uniform sampler2D u_revealage;
             uniform float cameraHeight;
@@ -357,18 +358,26 @@
                 }
             #endif
             void main() {
-                // tonemap
-                vec4 color0 = texture(inputBuffer, v_textureCoordinates);
+                // Only SDK radiance enters tone mapping. The scene is already mapped
+                // by Cesium; composite in display-linear space using its headroom.
+                vec4 sdkRadiance = texture(inputBuffer, v_textureCoordinates);
+                vec4 sceneBase = texture(sceneBaseBuffer, v_textureCoordinates);
+                vec4 color0 = vec4(max(sdkRadiance.rgb, vec3(0.0)), sdkRadiance.a);
                 vec4 color1 = vec4(0.0);
-                ToneMapMain(color0, v_textureCoordinates, color1);
-                color0 = blend30(color0, color1, 1.0);
-                color0.a = clamp(color0.a, 0.0, 1.0);
+                bool hasSdkRadiance = any(greaterThan(color0.rgb, vec3(0.0))) && toneMappingExposure > 0.0;
+                if (hasSdkRadiance) ToneMapMain(color0, v_textureCoordinates, color1);
+                // Preserve the sky's soft midtones as an explicit artistic curve.
+                // Applying this only to SDK radiance keeps native models out of
+                // the old display-encoding chain; the output is encoded once below.
+                color1.rgb = clamp(color1.rgb, 0.0, 1.0);
+                color1.rgb = mix(color1.rgb, pow(color1.rgb, vec3(0.55)), clamp(sdkRadiance.a, 0.0, 1.0));
+                // At sky pixels, preserve splat coverage even though opaque depth
+                // is absent. Ground pixels still use headroom for added scattering.
+                vec3 sdkWeight = sceneBase.a <= 0.0 ? vec3(clamp(1.0 + sceneBase.a, 0.0, 1.0))
+                    : 1.0 - clamp(sceneBase.rgb, 0.0, 1.0);
+                color0 = vec4(sceneBase.rgb + sdkWeight * color1.rgb, 1.0);
                 // This custom stage runs after Cesium's tonemapper; encode its linear output once.
-                color0.rgb = czm_inverseGamma(color0.rgb);
-
-                DITMain(color0, v_textureCoordinates, color1);
-                color0 = blend23(color0, color1, 1.0);
-                color0.a = clamp(color0.a, 0.0, 1.0);
+                color0.rgb = czm_inverseGamma(max(color0.rgb, vec3(0.0)));
                 out_FragColor = color0;
                 // 视域协同特效 半透明优化
                 #ifdef ENABLE_FIELDS
@@ -404,11 +413,7 @@
                         out_FragColor.a = 1.0;
                     }
                 #endif
-                #ifdef ENCODE_OUTPUT
-                    out_FragColor = linearToOutputTexel( out_FragColor );
-                #endif
                 #ifdef DITHERING
-                    out_FragColor.rgb = dithering( out_FragColor.rgb );
+                    if (hasSdkRadiance) out_FragColor.rgb = dithering(out_FragColor.rgb);
                 #endif
             }
-            

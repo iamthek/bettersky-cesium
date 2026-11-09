@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Default scene HDR to off while retaining the `highDynamicRange` option and demo control for explicit opt-in.
+- Preserve native Cesium scene colors by separating scene contribution from SDK sky, clouds and scattering; remove repeated surface lighting, tone mapping and display encoding.
+- Change the default `irradianceScale` from `0.15` to the neutral scene brightness multiplier `1`. Explicit values now directly scale native scene color; `toneMappingMode` and `toneMappingExposure` apply only to SDK-generated radiance.
+- Correct native depth sampling and logarithmic-depth switching across atmosphere, clouds and volumetric light; fix HBAO position reconstruction, sampling radius and bilateral filtering.
+- Preserve the established globe sunlight policy and soft sky/cloud midtones separately from model colors. Merge Cesium's per-frustum depth copies when logarithmic depth is disabled; restore the host depth-picking preference on disable/disposal.
+- Preserve Gaussian splat silhouettes above terrain by recovering pre-OIT foreground coverage and compositing the sky behind it; restore the host background color on disable/disposal.
+
 ## 1.0.0 - 2026-10-27
 
 - **Breaking:** Keep only the named `BetterSky` export; remove the default export and the `defaultOptions` static getter.

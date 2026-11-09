@@ -226,6 +226,8 @@ test("default snapshots preserve the shipped preset and never share caller-owned
   const defaults = harness.BetterSky.getDefaultOptions();
   assert.equal(defaults.time, "2026-05-01T06:00Z");
   assert.equal(defaults.gamma, 2.2);
+  assert.equal(defaults.highDynamicRange, false);
+  assert.equal(defaults.irradianceScale, 1);
   assert.equal(defaults.volumetricLight.mode, "volumetric");
   assert.equal(defaults.cloud.hazeQuality, "high");
   assert.equal(defaults.hbao.intensity, 100);
@@ -242,7 +244,7 @@ test("default snapshots preserve the shipped preset and never share caller-owned
   assert.equal(original.hbao.gamma, 2.5);
   assert.equal(original.hbao.denoise, true);
   assert.equal(viewer.scene.gamma, 2.2);
-  assert.equal(viewer.scene.highDynamicRange, true);
+  assert.equal(viewer.scene.highDynamicRange, false);
   assert.equal(harness.passes[0].options.denoise, true);
   assert(Cesium.JulianDate.equals(viewer.clock.currentTime, Cesium.JulianDate.fromIso8601("2026-05-01T06:00Z")));
   const copy = effects.getOptions();
@@ -376,7 +378,7 @@ test("scene settings stay gated until explicitly re-enabled and snapshots retain
   const originalTime = Cesium.JulianDate.clone(viewer.clock.currentTime);
   const effects = new harness.BetterSky(viewer, { applySceneSettings: false, time: undefined });
   assert.equal(effects.getOptions().gamma, 2.2);
-  assert.equal(effects.getOptions().highDynamicRange, true);
+  assert.equal(effects.getOptions().highDynamicRange, false);
   assert(Cesium.JulianDate.equals(viewer.clock.currentTime, originalTime));
   effects.update({ applySceneSettings: false, gamma: 4, highDynamicRange: true });
   assert.equal(viewer.scene.gamma, 1);

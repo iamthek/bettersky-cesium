@@ -1,6 +1,5 @@
 
 #version 300 es
-#define LOG_DEPTH
 #define SHADER_TYPE RawShaderMaterial
 #define SHADER_NAME CloudsMaterial
 #define PI 3.141592653589793
@@ -1286,7 +1285,7 @@ float readDepth(const vec2 uv) {
     // #else // DEPTH_PACKING == 3201
     //     return texture(depthBuffer, uv).r;
     // #endif // DEPTH_PACKING == 3201
-    return czm_unpackDepth(texture(depthBuffer, uv));
+    return texture(depthBuffer, uv).r;
 }
 // float getViewZ(const float depth) {
 //     #ifdef PERSPECTIVE_CAMERA
@@ -2444,9 +2443,10 @@ vec2 getRayNearFar(const IntersectionResult intersections) {
 #endif // HAZE
 float getRayDistanceToScene(const vec3 rayDirection) {
     float depth = readDepth(vUv * targetUvScale + temporalJitter);
-    if (depth < 1.0 - 1e-7) {
-        depth = czm_reverseLogDepth(depth);
-        float viewZ = getViewZ(depth);
+    if (betterSkyHasDepth(depth)) {
+        vec2 uv = vUv * targetUvScale + temporalJitter;
+        vec4 eye = betterSkyEyePosition(uv, depth);
+        float viewZ = eye.z / eye.w;
         return -viewZ / dot(rayDirection, vCameraDirection);
     }
     return -1.0;

@@ -1,6 +1,5 @@
 
 #version 300 es
-#define LOG_DEPTH
 #define SHADER_TYPE RawShaderMaterial
 #define SHADER_NAME CloudsMaterial
 #define PI 3.141592653589793

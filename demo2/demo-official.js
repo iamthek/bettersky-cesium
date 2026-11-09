@@ -751,10 +751,10 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
   "API：toneMappingMode。选择 HDR 到显示亮度的映射曲线。\n枚举（无单位）：7 AgX 压缩高光并控制高亮色彩；8 Neutral 较中性的高光压缩；9 ACES 电影式对比；10 Linear 线性映射，强光易裁白；11 Reinhard 渐进压缩亮度；12 Cineon 胶片式曲线。没有调大/调小的统一含义。\n与曝光、Gamma 联动，不增加真实光束；切换会重建相关管线，应避免连续反复切换。");
   addRange(color, "toneMappingExposure", "曝光", 0, 20, 0.1,
     commitValue("toneMappingExposure", (value) => betterSkyInstance.update({ toneMappingExposure: value })),
-    "API：toneMappingExposure。色调映射前的亮度倍率，不是以 EV 为单位的快门设置。\n单位：无量纲；调大全局效果更亮，调小更暗，0 会压掉该映射输入亮度。\n与色调曲线和 HDR 联动，过大可能裁白天空/云/地表；不增加散射或云影，不应拿曝光伪造 Godray，不改变采样预算。");
+    "API：toneMappingExposure。SDK 天空、云和散射在色调映射前的亮度倍率，单位不是 EV。\n单位：非负无量纲；调大天空效果更亮，0 移除 SDK 映射亮度，但保留云雾遮挡。原生模型和底图不会再次曝光。\n与色调曲线联动，不增加散射或云影，不改变采样预算。");
   addRange(color, "irradianceScale", "地表光照增益", 0, 2, 0.01,
     commitValue("irradianceScale", (value) => betterSkyInstance.update({ irradianceScale: value })),
-    "API：irradianceScale。独立控制地表光照增益，不改变云体补光。\n单位：非负无量纲倍率；调大地表更亮，调小更暗。官方 Cesium 已完成底图光照，示例用 0.15 避免与曝光叠加泛白。\n与地表原始材质及色调映射联动，不增加样本预算；别通过抬高此值增强天空光束。");
+    "API：irradianceScale。原生模型和底图颜色的亮度倍率，不改变云体补光。\n单位：非负无量纲；默认 1 保持原色，0 压黑原生场景贡献。云影、大气消光、云雾遮挡和 HBAO 仍参与合成。\n独立于 SDK 曝光，不增加样本预算，不用于增强天空光束。");
   addRange(color, "aerialPerspectiveStrength", "地表大气透视", 0, 1, 0.01,
     commitValue("aerialPerspectiveStrength", (value) => betterSkyInstance.update({ aerialPerspectiveStrength: value })),
     "API：aerialPerspectiveStrength。地表合成时的大气透视混合强度。\n单位：0–1；调大远景更受大气衰减/散射影响，调小保留更多原始地表对比，0 关闭这项混合。\n不改变天空/云的散射，也不是 Godray 密度；过大可能让底图发白，采样预算不随强度增加。");

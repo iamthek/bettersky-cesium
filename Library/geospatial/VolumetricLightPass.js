@@ -20,6 +20,7 @@ import fragmentShader from "../shaders/geospatial/volumetricLight.frag.glsl?raw"
 import resolveShader from "../shaders/geospatial/volumetricLightResolve.frag.glsl?raw";
 import compositeShader from "../shaders/geospatial/volumetricLightComposite.glsl?raw";
 import { volumetricLightSunlightGLSL } from "./FocusedCloudShadowPass.js";
+import { sceneDepthShader } from '../internal/SceneDepth.js';
 
 export const volumetricLightCompositeGLSL = compositeShader;
 
@@ -72,6 +73,7 @@ export default class VolumetricLightPass {
         this._byteLength = 0;
         const fallback = () => scene.context.defaultTexture;
         this.uniformMap = {
+            betterSkyLinearDepth: () => pipeline.sceneDepth?.linear ?? false,
             u_volumetricLightBefore: () => this.beforeColorTexture ?? fallback(),
             u_volumetricLightAfter: () => this.afterColorTexture ?? fallback(),
             u_volumetricLightDepth: () => this.depthTexture ?? fallback(),
@@ -200,6 +202,12 @@ export default class VolumetricLightPass {
     }
 
     _ensureResources(context) {
+        const useLogDepth = !!this.pipeline._useLogDepth;
+        if (this._useLogDepth !== useLogDepth) {
+            this._destroyCommands();
+            this.invalidateHistory();
+            this._useLogDepth = useLogDepth;
+        }
         const scale = qualitySettings[this.options.quality].scale;
         const width = Math.max(1, Math.ceil(this._scene.drawingBufferWidth * scale));
         const height = Math.max(1, Math.ceil(this._scene.drawingBufferHeight * scale));
@@ -221,11 +229,11 @@ export default class VolumetricLightPass {
         if (!this._drawCommand) {
             const renderState = RenderState.fromCache({ depthTest: { enabled: false }, depthMask: false });
             this._drawCommand = context.createViewportQuadCommand(new ShaderSource({
-                defines: ["LOG_DEPTH"],
-                sources: [fragmentShader.replace("/*__VOLUMETRIC_LIGHT_SUNLIGHT__*/", volumetricLightSunlightGLSL)],
+                defines: this._useLogDepth ? ["LOG_DEPTH"] : [],
+                sources: [sceneDepthShader + fragmentShader.replace("/*__VOLUMETRIC_LIGHT_SUNLIGHT__*/", volumetricLightSunlightGLSL)],
             }), { uniformMap: this._renderUniformMap, renderState }, vertexShader);
             this._resolveCommand = context.createViewportQuadCommand(new ShaderSource({
-                defines: ["LOG_DEPTH"],
+                defines: [],
                 sources: [resolveShader],
             }), { uniformMap: this._renderUniformMap, renderState }, vertexShader);
         }

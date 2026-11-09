@@ -197,7 +197,7 @@ Adjust surface and cloud fill lighting separately instead of relying only on glo
 
 ```js
 betterSkyInstance.update({
-  irradianceScale: 0.15,
+  irradianceScale: 1,
   aerialPerspectiveStrength: 0.2,
   volumetricLight: { mode: 'volumetric', intensity: 2 },
   cloud: { skyIrradianceScale: 1.8, groundIrradianceScale: 1.3 },
@@ -266,14 +266,14 @@ The defaults below match `BetterSky.getDefaultOptions()` in version 1.0.0. All n
 | `coverage` | number | `0.34` | Overall weather coverage `[0, 1]`, controlled separately from per-layer density. |
 | `localWeatherVelocity` | 2D vector | `[0.0003, 0.0001]` | Weather map UV offset per second. Negative values reverse direction; `[0, 0]` stops weather map movement. |
 | `toneMappingMode` | number | `9` | `2` Reinhard2, `4` Uncharted2, `7` AgX, `8` Neutral, `9` ACES, `10` Linear, `11` Reinhard, `12` Cineon. Changes rebuild the sky stage. Mode `3` is unsupported. |
-| `toneMappingExposure` | number | `2.8` | Nonnegative brightness multiplier; higher values are brighter. Not measured in EV. |
-| `irradianceScale` | number | `0.15` | Nonnegative surface irradiance multiplier, separate from cloud fill lighting. |
+| `toneMappingExposure` | number | `2.8` | Nonnegative exposure multiplier for SDK sky, clouds and scattering, not EV. Does not tone-map the native scene again. |
+| `irradianceScale` | number | `1` | Nonnegative native scene brightness multiplier: 1 preserves its color, 0 removes its contribution. Independent of SDK exposure and cloud fill; shadows, atmosphere and HBAO still affect composition. |
 | `aerialPerspectiveStrength` | number | `0.15` | Surface aerial perspective blend strength `[0, 1]`; `0` disables this blend. |
 | `nightGlowIntensity` | number | `0.5` | Night sky glow modulation. Any finite number is accepted; `[0, 1]` is recommended. |
 | `bloomIntensity` | number | `0.002` | Nonnegative bloom intensity; `0` removes its intensity contribution without releasing the stage. |
 | `systemLight` | boolean | `true` | Follows Cesium's sun direction; keeping `true` is recommended. See [Notes](#notes). |
 | `applySceneSettings` | boolean | `true` | Controls whether scene settings apply in the current call. See [Scene settings and disposal](#scene-settings-and-disposal). |
-| `highDynamicRange` | boolean | `true` | Scene HDR, governed by `applySceneSettings` in the current call. |
+| `highDynamicRange` | boolean | `false` | Scene HDR is opt-in; governed by `applySceneSettings` in the current call. The runtime option remains available. |
 | `logarithmicDepthBuffer` | boolean | `true` | Scene logarithmic depth, governed by `applySceneSettings` in the current call. |
 | `gamma` | number | `2.2` | Positive scene display gamma, separate from HBAO gamma. |
 | `hbao` | boolean / object | HBAO options below | `false` disables; `true` enables; an object overrides specified values and enables HBAO. Re-enabling restores saved values. |
@@ -396,8 +396,9 @@ const betterSkyInstance = new BetterSky(viewer, options)
 | --- | --- |
 | Construction with `applySceneSettings: true` | Sets HDR, logarithmic depth, and gamma, and enables terrain depth testing. |
 | Construction / update with a valid time string | Changes the Viewer clock; `null` or omitted update time preserves it, and a Scene has no separate clock. |
-| First enabled frame | Temporarily takes over the built-in sky, atmosphere, sun, fog, and some globe settings; sets the tile cache to 2000 and maximum screen-space error to 2. |
-| Disable / dispose | Restores the sky and globe settings captured when enabled. |
+| First enabled frame | Temporarily takes over the built-in sky, atmosphere, sun, fog, and some globe settings; uses transparent black to preserve splat coverage, and sets the tile cache to 2000 and maximum screen-space error to 2. |
+| Frames without logarithmic depth | Temporarily enables `useDepthPicking` to merge Cesium's per-frustum depth copies, preserving distant geometry. |
+| Disable / dispose | Restores captured sky, globe, background color, and depth-picking settings. |
 | `update()` | Persists `applySceneSettings` and applies supplied scene fields only while it is true; an omitted value retains the previous switch. |
 
 `applySceneSettings: false` prevents SDK-managed scene fields from changing until a later update explicitly sets it back to true. Re-enabling it applies the scene fields retained in the accepted configuration; calls made while it stays true apply only scene fields supplied in that call. It does not prevent sky takeover or an explicit time update.

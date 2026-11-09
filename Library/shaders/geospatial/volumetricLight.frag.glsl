@@ -45,10 +45,10 @@ vec2 fogSphereInterval(vec3 origin, vec3 direction, float radius) {
 }
 
 float fogSceneDistance(vec2 uv) {
-    float depth = czm_unpackDepth(texture(u_volumetricLightSceneDepth, uv));
-    if (depth >= 1.0 - 1e-7) return u_volumetricLightMaxDistance + 1.0;
+    float depth = texture(u_volumetricLightSceneDepth, uv).r;
+    if (!betterSkyHasDepth(depth)) return u_volumetricLightMaxDistance + 1.0;
     // This helper decodes Cesium logarithmic depth using the full-resolution viewport.
-    vec4 eye = czm_windowToEyeCoordinates(uv * czm_viewport.zw, depth);
+    vec4 eye = betterSkyEyePosition(uv, depth);
     return min(length(eye.xyz / eye.w), u_volumetricLightMaxDistance + 1.0);
 }
 

@@ -382,9 +382,9 @@ vec4 reconstructCloud(const vec2 uv, out float centerDepth) {
 }
 // Resolve terrain silhouettes with full-resolution depth, never interpolate sky across a ridge.
 float terrainDistance(vec2 uv) {
-    float depth = czm_unpackDepth(texture(sceneDepthBuffer, uv));
-    if (depth >= 1.0 - 1e-7) return 1e10;
-    vec4 eye = czm_windowToEyeCoordinates(uv / texelSize, depth);
+    float depth = texture(sceneDepthBuffer, uv).r;
+    if (!betterSkyHasDepth(depth)) return 1e10;
+    vec4 eye = betterSkyEyePosition(uv, depth);
     return length(eye.xyz / eye.w);
 }
 float getHistoryCloudDepth(vec2 uv) {

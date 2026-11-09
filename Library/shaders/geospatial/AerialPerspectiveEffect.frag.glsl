@@ -20,6 +20,11 @@ precision highp usampler2DArray;
 in vec2 v_textureCoordinates;
 uniform sampler2D depthTexture;
 uniform sampler2D colorTexture;
+uniform sampler2D sceneCoverageTexture;
+uniform sampler2D sceneTransmittanceTexture;
+uniform bool sceneHasOit;
+uniform bool sceneOitMrt;
+layout(location = 1) out vec4 out_sceneBase;
 uniform sampler2D positionTexture;
 uniform vec2 resolution;
 uniform float cameraNear;
@@ -1317,7 +1322,8 @@ vec3 getSunSkyIrradiance(
 
 #if defined(TRANSMITTANCE) || defined(INSCATTER)
 
-void applyTransmittanceInscatter(const vec3 positionECEF, float shadowLength, inout vec3 radiance) {
+void applyTransmittanceInscatter(const vec3 positionECEF, float shadowLength, inout vec3 sceneColor, out vec3 radiance) {
+  radiance = vec3(0.0);
   vec3 transmittance;
   vec3 inscatter = GetSkyRadianceToPoint(
     vCameraPosition - vGeometryEllipsoidCenter,
@@ -1327,10 +1333,10 @@ void applyTransmittanceInscatter(const vec3 positionECEF, float shadowLength, in
     transmittance
   );
   #ifdef TRANSMITTANCE
-  radiance = radiance * mix(vec3(1.0), transmittance, aerialPerspectiveStrength);
+  sceneColor *= mix(vec3(1.0), transmittance, aerialPerspectiveStrength);
   #endif // TRANSMITTANCE
   #ifdef INSCATTER
-  radiance = radiance + inscatter * aerialPerspectiveStrength;
+  radiance = inscatter * aerialPerspectiveStrength;
   #endif // INSCATTER
 }
 
@@ -1671,14 +1677,15 @@ vec4 innerLightPositionAndIntensity() {
 void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   outputColor = vec4(0.0);
   float shadowLength = 0.0;
-  float depth = czm_unpackDepth(texture(depthTexture, v_textureCoordinates));
+  float depth = texture(depthTexture, v_textureCoordinates).r;
   // Evaluate derivatives before sky/cloud early returns to keep each fragment quad coherent.
-  vec4 positionEC = czm_windowToEyeCoordinates(gl_FragCoord.xy, depth);
+  vec4 positionEC = betterSkyEyePosition(uv, depth);
+  vec3 eyePosition = positionEC.xyz / positionEC.w;
 
   vec3 viewNormal;
   #ifdef RECONSTRUCT_NORMAL
-    vec3 dx = dFdx(positionEC.xyz);
-    vec3 dy = dFdy(positionEC.xyz);
+    vec3 dx = dFdx(eyePosition);
+    vec3 dy = dFdy(eyePosition);
     vec3 normal = cross(dx, dy);
     viewNormal = normal / max(length(normal), 1e-10);
   #else // RECONSTRUCT_NORMAL
@@ -1691,19 +1698,19 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   #ifdef HAS_GS_MASK
     vec4 gsMask = texture(czm_gsMaskTexture, uv);
     if (gsMask.a > 0.5) {
-        outputColor.rgb = getSunSkyIrradiance(vec3(1.), vec3(0.5), inputColor.rgb, 1.) * 0.5;
+        out_sceneBase = vec4(inputColor.rgb * irradianceScale, inputColor.a);
         return;
     }
   #endif 
   #ifdef HAS_OVERLAY
     vec4 overlay = cloudVisibility > 0.0 ? texture(overlayBuffer, uv) * cloudVisibility : vec4(0.0);
-    if (overlay.a == 1.0) {
-      outputColor = vec4(compositeVolumetricLight(uv, vec3(0.0), overlay), overlay.a);
-      return;
-    }
   #endif // HAS_OVERLAY
   moonDirection = normalize(czm_inverseViewRotation * czm_moonDirectionEC);
-  if (depth >= 1.0 - 1e-7) {
+  if (!betterSkyHasDepth(depth)) {
+    // Gaussian splats blend color/coverage but do not write opaque depth.
+    // Negative alpha tags a sky pixel and retains its foreground coverage;
+    // the final pass places the sky behind it, rather than replacing the splat.
+    out_sceneBase = vec4(inputColor.rgb * irradianceScale, -inputColor.a);
     #ifdef SKY
         vec3 rayDirection = normalize(vRayDirection);
         outputColor.rgb = getSkyRadiance(
@@ -1717,7 +1724,7 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
         );
         outputColor.a = 1.0;
     #else // SKY
-        outputColor = inputColor;
+        out_sceneBase = inputColor;
     #endif // SKY
     #ifdef ENABLE_STARS
         vec2 starCellF = gl_FragCoord.xy / 4.0;
@@ -1730,7 +1737,8 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
         outputColor.rgb += stars * 2.0 * starVisibility;
     #endif
     #ifdef HAS_OVERLAY
-        vec3 overColor = compositeVolumetricLight(uv, outputColor.rgb, overlay);
+        float baseTransmittance;
+        vec3 overColor = compositeVolumetricLight(uv, outputColor.rgb, overlay, baseTransmittance);
         outputColor.rgb = mix(overColor, outputColor.rgb, step(500000.0, cameraHeight));
     #endif // HAS_OVERLAY
     return;
@@ -1780,25 +1788,29 @@ void SkyMain(in vec4 inputColor, const vec2 uv, out vec4 outputColor) {
     float sunTransmittance = 1.0;
   #endif // HAS_SHADOW
 
-  vec3 radiance;
-  #if defined(SUN_IRRADIANCE) || defined(SKY_IRRADIANCE)
-    radiance = getSunSkyIrradiance(positionECEF, normalECEF, inputColor.rgb, sunTransmittance);
-  #else // defined(SUN_IRRADIANCE) || defined(SKY_IRRADIANCE)
-    radiance = inputColor.rgb;
-  #endif // defined(SUN_IRRADIANCE) || defined(SKY_IRRADIANCE)
+  // Cesium has already shaded and tone-mapped the scene. Only attenuation
+  // affects this contribution; SDK emission travels through the HDR/bloom path.
+  vec3 sceneColor = inputColor.rgb * irradianceScale * sunTransmittance;
+  vec3 radiance = vec3(0.0);
   #ifdef ENABLE_THUNDERCLOUDS
-    if (innerLight.w > 0.0001) {   radiance *=innerLightColor;   }
+    if (innerLight.w > 0.0001) { sceneColor *= innerLightColor; }
   #endif
 
   #if defined(TRANSMITTANCE) || defined(INSCATTER)
-    applyTransmittanceInscatter(positionECEF, shadowLength, radiance);
+    applyTransmittanceInscatter(positionECEF, shadowLength, sceneColor, radiance);
   #endif // defined(TRANSMITTANCE) || defined(INSCATTER)
 
-  outputColor = vec4(radiance, inputColor.a);
+  // Alpha carries the sky/cloud grading weight, not the scene's opacity.
+  // Ground-level inscatter must not receive the lifted sky midtone curve.
+  outputColor = vec4(radiance, 0.0);
+  out_sceneBase = vec4(sceneColor, inputColor.a);
 
   #ifdef HAS_OVERLAY
-   vec3 overColor = compositeVolumetricLight(uv, outputColor.rgb, overlay);
+   float baseTransmittance;
+   vec3 overColor = compositeVolumetricLight(uv, outputColor.rgb, overlay, baseTransmittance);
    outputColor.rgb = mix(overColor, outputColor.rgb, step(500000.0, cameraHeight));
+   outputColor.a = overlay.a * (1.0 - step(500000.0, cameraHeight));
+   out_sceneBase.rgb *= mix(baseTransmittance, 1.0, step(500000.0, cameraHeight));
   #endif // HAS_OVERLAY
 }
 
@@ -1820,8 +1832,20 @@ void CloudMain(const vec4 inputColor, const vec2 uv, out vec4 outputColor) {
 void main() {
     vec2 uv = v_textureCoordinates;
     vec4 color0 = texture(colorTexture, uv);
+    // OIT's final alpha is not Gaussian coverage. Recover it from the pre-OIT
+    // color and the translucent transmittance, without re-rendering the splats.
+    color0.a = texture(sceneCoverageTexture, uv).a;
+    if (sceneHasOit) {
+        vec4 oit = texture(sceneTransmittanceTexture, uv);
+        float transmittance = sceneOitMrt ? oit.a : oit.r;
+        color0.a = 1.0 - (1.0 - color0.a) * clamp(transmittance, 0.0, 1.0);
+    }
+    color0.a = clamp(color0.a, 0.0, 1.0);
     // Official Cesium post-process input has already been gamma encoded.
-    color0.rgb = pow(max(color0.rgb, vec3(0.0)), vec3(czm_gamma));
+    // Unpremultiply display-space coverage before decoding, then premultiply in
+    // linear space. Opaque terrain/models (alpha=1) keep their original colors.
+    color0.rgb = pow(max(color0.rgb / max(color0.a, 1e-6), vec3(0.0)), vec3(czm_gamma)) * color0.a;
+    out_sceneBase = vec4(0.0, 0.0, 0.0, color0.a);
     vec4 color1 = vec4(0.0);
 
     CloudMain(color0, uv, color1);

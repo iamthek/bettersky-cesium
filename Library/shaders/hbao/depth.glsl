@@ -1,4 +1,4 @@
 
 float readDepth(sampler2D depthTexture, vec2 texCoords) {
-    return czm_reverseLogDepth(texture(depthTexture, texCoords).r);
+    return texture(depthTexture, texCoords).r;
 }

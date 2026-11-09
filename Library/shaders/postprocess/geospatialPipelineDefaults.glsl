@@ -3,8 +3,6 @@
         #define SKY 1
         #define SUN 1
         #define MOON 1
-        #define SUN_IRRADIANCE 1
-        #define SKY_IRRADIANCE 1
         #define SKY 1
         #define CORRECT_GEOMETRIC_ERROR 1
         #define PHOTOMETRIC 1
@@ -21,6 +19,3 @@
         #define SKIP_RENDERING 1
         #define ENABLE_STARS 1
         #define RECONSTRUCT_NORMAL 1
-        
-
-        

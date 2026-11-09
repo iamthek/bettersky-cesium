@@ -197,7 +197,7 @@ unsubscribe()
 
 ```js
 betterSkyInstance.update({
-  irradianceScale: 0.15,
+  irradianceScale: 1,
   aerialPerspectiveStrength: 0.2,
   volumetricLight: { mode: 'volumetric', intensity: 2 },
   cloud: { skyIrradianceScale: 1.8, groundIrradianceScale: 1.3 },
@@ -266,14 +266,14 @@ viewer.destroy() // 仅在应用也需要销毁 Viewer 时调用。
 | `coverage` | number | `0.34` | 整体天气覆盖度 `[0, 1]`，与各层密度分别控制。 |
 | `localWeatherVelocity` | 二维向量 | `[0.0003, 0.0001]` | 天气图 UV 每秒偏移量，负值反向，`[0, 0]` 停止天气图移动。 |
 | `toneMappingMode` | number | `9` | `2` Reinhard2、`4` Uncharted2、`7` AgX、`8` Neutral、`9` ACES、`10` Linear、`11` Reinhard、`12` Cineon；切换会重建天空阶段。模式 `3` 不支持。 |
-| `toneMappingExposure` | number | `2.8` | 非负亮度倍率，越大越亮；单位不是 EV。 |
-| `irradianceScale` | number | `0.15` | 非负地表辐照度增益，与云体补光分别控制。 |
+| `toneMappingExposure` | number | `2.8` | SDK 天空、云和散射的非负曝光倍率，单位不是 EV；不重复映射原生场景色。 |
+| `irradianceScale` | number | `1` | 原生场景颜色的非负亮度倍率；1 保持原色，0 压黑场景贡献，独立于 SDK 曝光和云体补光。云影、大气及 HBAO 仍参与合成。 |
 | `aerialPerspectiveStrength` | number | `0.15` | 地表大气透视混合强度 `[0, 1]`；`0` 关闭此混合。 |
 | `nightGlowIntensity` | number | `0.5` | 夜间天空辉光调制系数；允许有限数，建议 `[0, 1]`。 |
 | `bloomIntensity` | number | `0.002` | 非负泛光强度，`0` 移除此强度贡献，不释放对应阶段。 |
 | `systemLight` | boolean | `true` | 跟随 Cesium 太阳方向；建议保持 `true`，详见注意事项。 |
 | `applySceneSettings` | boolean | `true` | 控制本次调用是否应用场景设置，详见场景设置与销毁。 |
-| `highDynamicRange` | boolean | `true` | 场景 HDR，受本次 `applySceneSettings` 控制。 |
+| `highDynamicRange` | boolean | `false` | 场景 HDR 默认关闭，保留运行时开关；受本次 `applySceneSettings` 控制。 |
 | `logarithmicDepthBuffer` | boolean | `true` | 场景对数深度，受本次 `applySceneSettings` 控制。 |
 | `gamma` | number | `2.2` | 正数，场景显示 Gamma，与 HBAO 的 Gamma 分别控制。 |
 | `hbao` | boolean / object | 下方 HBAO 参数对象 | `false` 关闭；`true` 启用；对象覆盖指定数值并启用。重开会恢复保存的数值。 |
@@ -397,8 +397,9 @@ const betterSkyInstance = new BetterSky(viewer, options)
 | --- | --- |
 | 构造且 `applySceneSettings: true` | 设置 HDR、对数深度、Gamma，并启用地形深度测试。 |
 | 构造 / 更新且提供有效时间字符串 | 修改 Viewer 时钟；`null` 或更新时省略会保留当前时间，仅传 Scene 没有独立时钟。 |
-| 首次启用的帧 | 暂时接管内置天空、大气、太阳、雾及部分地球设置；设置瓦片缓存为 2000、最大屏幕空间误差为 2。 |
-| 关闭 / 销毁 | 恢复启用时记录的天空与地球设置。 |
+| 首次启用的帧 | 暂时接管内置天空、大气、太阳、雾及部分地球设置；用透明黑背景保留高斯覆盖率，设置瓦片缓存为 2000、最大屏幕空间误差为 2。 |
+| 关闭对数深度的帧 | 暂时启用 `useDepthPicking`，合并 Cesium 各视锥的深度副本，避免远景被误判为天空。 |
+| 关闭 / 销毁 | 恢复启用时记录的天空、地球、背景色及深度拾取设置。 |
 | `update()` | 持久保存 `applySceneSettings`，仅在当前值为 true 时应用本次提供的场景字段；省略会保留原值。 |
 
 `applySceneSettings: false` 会阻止 SDK 管理场景字段，直到后续显式设回 true。重新启用时会应用已接受配置中保留的场景字段；保持开启期间，每次更新只应用该次调用显式提供的场景字段。它不阻止天空接管或明确的时间更新。

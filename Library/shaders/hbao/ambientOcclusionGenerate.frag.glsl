@@ -38,7 +38,7 @@ vec2 getSnappedUV(const vec2 uv) {
 }
 
 float getBiasedTangent(const vec3 v, const float bias) {
-  return v.z / length(v.xy) + tan(bias);
+  return v.z / max(length(v.xy), 1e-6) + tan(bias);
 }
 
 float getSinFromTan(const float x) {
@@ -58,9 +58,10 @@ float computeOcclusion(
   // Offset the first coord with some noise.
   vec2 uv = v_textureCoordinates + getSnappedUV(randomStep * deltaUV);
   deltaUV = getSnappedUV(deltaUV);
+  if (all(equal(deltaUV, vec2(0.0)))) return 0.0;
 
   // Calculate the tangent vector.
-  vec3 T = dPdx * deltaUV.x + dPdy * deltaUV.y;
+  vec3 T = dPdx * deltaUV.x * czm_viewport.z + dPdy * deltaUV.y * czm_viewport.w;
 
   // Get the angle of the tangent vector from the viewspace axis.
   float tanT = getBiasedTangent(T, bias);
@@ -71,13 +72,15 @@ float computeOcclusion(
   float prevSinH = sinT;
   for (int i = 0; i < NUM_STEPS; ++i) {
     uv += deltaUV;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) break;
 
     float sampleDepth = readDepth(depthTexture, uv);
+    if (!betterSkyHasDepth(sampleDepth)) continue;
     vec3 samplePosition = reconstructPosition(uv, sampleDepth);
     vec3 view = samplePosition - position;
     float len = length(view);
 
-    float tanH = view.z / length(view.xy);
+    float tanH = view.z / max(length(view.xy), 1e-6);
     float sinH = getSinFromTan(tanH);
     if (len < maxRadius && sinH > prevSinH) {
       float falloff = 1.0 - len / maxRadius * (len / maxRadius);
@@ -92,6 +95,10 @@ float computeOcclusion(
 void main() {
   vec2 uv = v_textureCoordinates;
   float depth = readDepth(depthTexture, uv);
+  if (!betterSkyHasDepth(depth) || maxRadius <= 0.0) {
+    out_FragColor = vec4(1.0, packNormal(vec3(0.0, 0.0, 1.0)));
+    return;
+  }
   vec3 position = reconstructPosition(uv, depth);
 
   #if OUTPUT_TYPE != 1

@@ -81,6 +81,8 @@ async function createHarness({ realPrecomputed = false, realAssetCache = false, 
         constructor(options = {}) {
             if (++textureAttempts === failTextureAt) throw new Error("injected texture allocation failure");
             this.options = options;
+            this.width = options.width;
+            this.height = options.height;
             this.destroyed = false;
             allocations++;
             liveTextures.add(this);
@@ -142,6 +144,7 @@ async function createHarness({ realPrecomputed = false, realAssetCache = false, 
             ...Cesium,
             Texture,
             Framebuffer,
+            ClearCommand: class { execute() {} },
             RenderState: class {
                 constructor(options) { Object.assign(this, options); }
                 static fromCache(options) { return options; }
@@ -219,10 +222,10 @@ async function createHarness({ realPrecomputed = false, realAssetCache = false, 
             uniformState: {},
             defaultTexture: hostTexture,
             defaultTexture3D: hostTexture,
-            createViewportQuadCommand() {
+            createViewportQuadCommand(fragmentShader) {
                 if (++commandAttempts === failCommandAt) throw new Error("injected shader creation failure");
                 shaderReferences++;
-                return { shaderProgram: sharedShader, vertexArray: sharedVertexArray, execute() {} };
+                return { fragmentShader, shaderProgram: sharedShader, vertexArray: sharedVertexArray, execute() {} };
             },
         },
     };
@@ -480,6 +483,72 @@ test("rebuilds, resizing, completed assets, and recreating in one scene retain n
         assert.equal(harness.liveFramebuffers.size, 0);
         assert.equal(harness.shaderReferences, 0);
     }
+});
+
+test("scene color stays separate from HDR and depth-mode rebuilds release every command and attachment", async () => {
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    const sceneColor = pipeline._aerialPerspectiveSceneColor;
+    assert.notEqual(sceneColor, pipeline._aerialPerspectiveOutputColor);
+    assert.equal(pipeline._passState.framebuffer.options.colorTextures[1], sceneColor);
+    assert.equal(pipeline._renderAtmospherePass.uniforms.sceneBaseBuffer(), sceneColor);
+    const textureCount = harness.liveTextures.size;
+    const framebufferCount = harness.liveFramebuffers.size;
+    const shaderCount = harness.shaderReferences;
+    for (const useLogDepth of [true, false, true]) {
+        pipeline._useLogDepth = useLogDepth;
+        pipeline.init(true);
+        pipeline.cloudMaterialPass._historyValid = true;
+        pipeline.cloudMaterialPass.init(true);
+        assert.equal(pipeline.cloudMaterialPass._historyValid, false);
+        assert.equal(pipeline._aerialPerspectiveComoman.fragmentShader.defines.includes("LOG_DEPTH"), useLogDepth);
+        assert.equal(pipeline.cloudMaterialPass._cloudDrawComomand.fragmentShader.defines.includes("LOG_DEPTH"), useLogDepth);
+        assert.equal(pipeline.cloudMaterialPass._cloudResolveDrawComomand.fragmentShader.defines.includes("LOG_DEPTH"), useLogDepth);
+        assert.equal(harness.liveTextures.size, textureCount);
+        assert.equal(harness.liveFramebuffers.size, framebufferCount);
+        assert.equal(harness.shaderReferences, shaderCount);
+    }
+    harness.scene.drawingBufferWidth += 32;
+    pipeline.init(true);
+    assert.equal(sceneColor.destroyed, true);
+    assert.equal(pipeline._aerialPerspectiveSceneColor.options.width, harness.scene.drawingBufferWidth);
+    pipeline.destroy();
+    assert.equal(harness.liveTextures.size, 0);
+    assert.equal(harness.liveFramebuffers.size, 0);
+    assert.equal(harness.shaderReferences, 0);
+});
+
+test("ordinary multi-frustum depth is reused within a frame and released on resize, log depth, and disposal", async () => {
+    const harness = await createHarness();
+    const pipeline = new harness.Pipeline(harness.scene, {});
+    const scene = harness.scene;
+    const baseline = harness.liveTextures.size;
+    scene.frameState = { useLogDepth: false, frameNumber: 1 };
+    scene.useDepthPicking = true;
+    scene.opaqueFrustumNearOffset = 0.9999;
+    scene.view = {
+        frustumCommandsList: [{ near: 0.1, far: 100 }, { near: 100, far: 100000 }],
+        pickDepths: [0, 1].map(() => ({ framebuffer: { getColorTexture: () => scene.context.defaultTexture } })),
+    };
+    const native = { width: 1024, height: 768 };
+    const resolved = pipeline.sceneDepth.prepare(scene.context, native);
+    assert.notEqual(resolved, native);
+    assert.equal(pipeline.sceneDepth.linear, true);
+    assert.equal(pipeline.sceneDepth.prepare(scene.context, native), resolved);
+    assert.equal(harness.liveTextures.size, baseline + 1);
+    scene.frameState.frameNumber++;
+    const resized = pipeline.sceneDepth.prepare(scene.context, { width: 512, height: 384 });
+    assert.equal(resolved.destroyed, true);
+    assert.equal(resized.width, 512);
+    scene.frameState.useLogDepth = true;
+    assert.equal(pipeline.sceneDepth.prepare(scene.context, native), native);
+    assert.equal(pipeline.sceneDepth.linear, false);
+    assert.equal(resized.destroyed, true);
+    assert.equal(harness.liveTextures.size, baseline);
+    pipeline.destroy();
+    assert.equal(harness.liveTextures.size, 0);
+    assert.equal(harness.liveFramebuffers.size, 0);
+    assert.equal(harness.shaderReferences, 0);
 });
 
 test("failed image, binary, and atmosphere loads are handled after disposal", async () => {

@@ -15,9 +15,9 @@ uniform float u_volumetricLightLayerBottom;
 uniform float u_volumetricLightLayerTop;
 
 float volumetricLightCompositeSceneDistance(vec2 uv) {
-    float depth = czm_unpackDepth(texture(u_volumetricLightSceneDepth, uv));
-    if (depth >= 1.0 - 1e-7) return u_volumetricLightMaxDistance + 1.0;
-    vec4 eye = czm_windowToEyeCoordinates(uv * czm_viewport.zw, depth);
+    float depth = texture(u_volumetricLightSceneDepth, uv).r;
+    if (!betterSkyHasDepth(depth)) return u_volumetricLightMaxDistance + 1.0;
+    vec4 eye = betterSkyEyePosition(uv, depth);
     return min(length(eye.xyz / eye.w), u_volumetricLightMaxDistance + 1.0);
 }
 
@@ -70,7 +70,9 @@ float volumetricLightCompositeFrontFraction(vec2 uv, float sceneDistance, float 
 
 // Call with the atmosphere/terrain BEFORE clouds are composited. RGB contains
 // premultiplied scattering; alpha in both fog textures stores transmittance.
-vec3 compositeVolumetricLight(vec2 uv, vec3 baseAtmosphere, vec4 cloud) {
+vec3 compositeVolumetricLight(vec2 uv, vec3 baseAtmosphere, vec4 cloud, out float baseTransmittance) {
+    // The same filter taps must attenuate the native scene and the SDK radiance.
+    baseTransmittance = 1.0 - cloud.a;
     if (!u_volumetricLightEnabled) return cloud.rgb + (1.0 - cloud.a) * baseAtmosphere;
     float sceneDistance = volumetricLightCompositeSceneDistance(uv);
     float cloudDistance = texture(u_volumetricLightCloudDepth, uv).r;
@@ -137,5 +139,6 @@ vec3 compositeVolumetricLight(vec2 uv, vec3 baseAtmosphere, vec4 cloud) {
     if (weightSum <= 1e-6) return cloud.rgb + (1.0 - cloud.a) * baseAtmosphere;
     before /= weightSum;
     after /= weightSum;
+    baseTransmittance *= before.a * after.a;
     return before.rgb + before.a * (cloud.rgb + (1.0 - cloud.a) * (after.rgb + after.a * baseAtmosphere));
 }

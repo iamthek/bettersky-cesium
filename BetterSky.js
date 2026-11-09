@@ -142,6 +142,7 @@ export class BetterSky {
       showFields: false,
       show: this._options.enabled,
     });
+    this._hbao.sceneDepth = this._geo.sceneDepth;
 
     // 5) 加入官方后处理集合
     scene.postProcessStages.add(this._geo.stage);

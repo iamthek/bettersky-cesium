@@ -1,3 +1,4 @@
+import SceneDepth, { sceneDepthShader } from './internal/SceneDepth.js';
 /**
  * @description HDR后场景效果合并
  */
@@ -50,7 +51,7 @@ import { Cartesian2, Cartesian3, Cartesian4, Matrix4 } from "./internal/MathType
 import AssetManager from "./internal/AssetManager.js";
 import { invalidateAssetBuffer, loadAssetBuffer } from "./internal/AssetCache.js";
 import SceneStateLease from "./internal/SceneStateLease.js";
-import { getWebGLContext, getCameraPosition, getStageIndex, restoreStageOrder } from "./internal/CesiumAdapter.js";
+import { getWebGLContext, getCameraPosition, getStageIndex, restoreStageOrder, getSceneCoverage } from "./internal/CesiumAdapter.js";
 import { runCleanup } from "./internal/cleanup.js";
 import Texture3D from "./Texture3D.js";
 import { AerialPerspectiveEffectFS, AerialPerspectiveEffectVS } from "./geospatial/AerialPerspectiveEffect.js";
@@ -227,6 +228,7 @@ export default class GeospatialPipelinePass {
             ...options
         }
         this._scene = scene;
+        this.sceneDepth = new SceneDepth(scene);
         this._destroyed = false;
         // Track only textures allocated by this pass; uniforms may also reference host textures.
         this._ownedTextures = new Set();
@@ -357,6 +359,11 @@ export default class GeospatialPipelinePass {
         this._customDarkParam = new Cartesian4(10, 0.1, 0, 0.);
         let shadowResolutionScratch = new Cartesian2();
         this.aerialPerspectiveUniforms = {
+            betterSkyLinearDepth: () => this.sceneDepth.linear,
+            sceneCoverageTexture: () => getSceneCoverage(this._scene)?.color ?? this._colorTexture,
+            sceneTransmittanceTexture: () => getSceneCoverage(this._scene)?.transmittance ?? this._scene.context.defaultTexture,
+            sceneHasOit: () => !!getSceneCoverage(this._scene),
+            sceneOitMrt: () => getSceneCoverage(this._scene)?.alphaChannel ?? false,
             // 官方 Cesium 无 GBuffer 法线/位置贴图：法线退化为默认贴图（地表光照近似），
             // 位置在着色器中由深度重建（czm_windowToEyeCoordinates），这里仅占位避免空引用。
             normalBuffer: () => {
@@ -535,6 +542,7 @@ export default class GeospatialPipelinePass {
 
     init(isUpdate = false) {
         if (this._destroyed) return;
+        this._useLogDepth ??= !!this._scene.logarithmicDepthBuffer;
 
         let stageIndex;
         if (isUpdate && defined(this._stage)) {
@@ -604,10 +612,19 @@ export default class GeospatialPipelinePass {
                 pixelDatatype: PixelDatatype.HALF_FLOAT,
                 flipY: false,
             });
+            // Keep Cesium's already tone-mapped scene separate from SDK HDR radiance.
+            this._aerialPerspectiveSceneColor = new Texture({
+                context: this._scene.context,
+                width: this._width,
+                height: this._height,
+                pixelFormat: PixelFormat.RGBA,
+                pixelDatatype: PixelDatatype.HALF_FLOAT,
+                flipY: false,
+            });
             this._passState.viewport = new BoundingRectangle(0, 0, this._width, this._height);
             this._passState.framebuffer = new Framebuffer({
                 context: this._scene.context,
-                colorTextures: [this._aerialPerspectiveOutputColor],
+                colorTextures: [this._aerialPerspectiveOutputColor, this._aerialPerspectiveSceneColor],
                 destroyAttachments: false,
             })
         }
@@ -620,8 +637,8 @@ export default class GeospatialPipelinePass {
             this._aerialPerspectiveComoman.shaderProgram = this._aerialPerspectiveComoman.shaderProgram?.destroy();
         }
         const AerialPerspectiveEffectShader = new ShaderSource({
-            defines: ["LOG_DEPTH"],
-            sources: [defines + "\n" + AerialPerspectiveEffectFS.replace("/*__VOLUMETRIC_LIGHT_COMPOSITE__*/", volumetricLightCompositeGLSL)]
+            defines: this._useLogDepth ? ["LOG_DEPTH"] : [],
+            sources: [sceneDepthShader + defines + "\n" + AerialPerspectiveEffectFS.replace("/*__VOLUMETRIC_LIGHT_COMPOSITE__*/", volumetricLightCompositeGLSL)]
         });
         this._aerialPerspectiveComoman = this._scene.context.createViewportQuadCommand(AerialPerspectiveEffectShader, {
             uniformMap: this.aerialPerspectiveUniforms,
@@ -719,6 +736,7 @@ export default class GeospatialPipelinePass {
             fragmentShader: defines + geospatialPipelineFragmentShader.replace("__TONE_MAPPING_MODE__", () => this._toneMappingMode),
             uniforms: {
                 inputBuffer: applyBloomStage.name,
+                sceneBaseBuffer: () => this._aerialPerspectiveSceneColor,
                 cameraHeight: () => { return this.cameraHeight },
                 toneMappingExposure: () => { return this.toneMappingExposure },
                 WhitePoint: () => { return this.whitePoint },
@@ -790,6 +808,7 @@ export default class GeospatialPipelinePass {
         const originalExecute = renderEffect.execute;
         renderEffect.execute = function (context, colorTexture, depthTexture, idTexture) {
 
+            depthTexture = that.sceneDepth.prepare(context, depthTexture);
             that._depthTexture = depthTexture;
             that._colorTexture = colorTexture;
             // Fully faded clouds contribute neither color nor shadows; avoid their ray-marching cost.
@@ -810,7 +829,13 @@ export default class GeospatialPipelinePass {
     update(context, useLogDepth) {
 
         if (this._stage && this._stage.enabled) {
-            if (this._width !== this._scene.drawingBufferWidth ||
+            const depthChanged = this._useLogDepth !== !!useLogDepth;
+            this._useLogDepth = !!useLogDepth;
+            if (depthChanged) {
+                this.cloudMaterialPass.invalidateHistory();
+                this.volumetricLightPass.invalidateHistory();
+            }
+            if (depthChanged || this._width !== this._scene.drawingBufferWidth ||
                 this._height !== this._scene.drawingBufferHeight
             ) {
                 this.init(true);
@@ -823,10 +848,17 @@ export default class GeospatialPipelinePass {
                 this._sceneLease = new SceneStateLease({ restore: "always" });
                 for (const [target, key, value] of [
                     [scene.skyAtmosphere, "show", false], [scene.skyBox, "show", false],
+                    // Transparent black retains Gaussian/translucent coverage over sky.
+                    [scene, "backgroundColor", Color.TRANSPARENT],
                     [scene.sun, "show", false], [scene.fog, "enabled", false],
                     [scene.globe, "showGroundAtmosphere", false], [scene.globe, "enableLighting", true],
                     [scene.globe, "tileCacheSize", 2E3], [scene.globe, "maximumScreenSpaceError", 2],
                 ]) this._sceneLease.write(target, key, value);
+            }
+            if (!this._useLogDepth) {
+                // Ordinary multi-frustum depth needs Cesium's per-frustum copies.
+                // Restore the host preference together with the other scene settings.
+                this._sceneLease.write(this._scene, "useDepthPicking", true);
             }
 
             if (!this._isPrecomputed) {
@@ -1229,11 +1261,14 @@ export default class GeospatialPipelinePass {
     _releaseAerialRenderTarget() {
         const framebuffer = this._passState?.framebuffer;
         const texture = this._aerialPerspectiveOutputColor;
+        const sceneTexture = this._aerialPerspectiveSceneColor;
         if (this._passState) this._passState.framebuffer = undefined;
         this._aerialPerspectiveOutputColor = undefined;
+        this._aerialPerspectiveSceneColor = undefined;
         runCleanup([
             () => framebuffer?.destroy(),
             () => texture?.destroy(),
+            () => sceneTexture?.destroy(),
         ], "Aerial render target cleanup failed");
     }
 
@@ -1269,7 +1304,7 @@ export default class GeospatialPipelinePass {
         for (const pass of [this.volumetricLightPass, this.focusedCloudShadowPass, this.cloudMaterialPass, this.shadowMaterialPass]) {
             actions.push(() => { if (pass && !pass.isDestroyed()) pass.destroy(); });
         }
-        actions.push(() => this._releaseAerialRenderTarget(), () => this._releaseThresholdResources(),
+        actions.push(() => this.sceneDepth?.destroy(), () => this._releaseAerialRenderTarget(), () => this._releaseThresholdResources(),
             // Commands own a shader-cache reference; viewport vertex arrays belong to the context.
             () => command?.shaderProgram?.destroy());
         for (const texture of this._ownedTextures) {

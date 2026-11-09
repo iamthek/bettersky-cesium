@@ -10,10 +10,10 @@ export const DEFAULT_OPTIONS = {
   localWeatherVelocity: [0.0003, 0.0001],
   /** HDR 色调映射曲线：7=AgX、8=Neutral、9=ACES、10=Linear、11=Reinhard、12=Cineon。 */
   toneMappingMode: 9,
-  /** 色调映射前的亮度倍率（无量纲，建议 ≥0）；越大越亮，单位不是曝光档位 EV。 */
+  /** SDK 天空、云和散射在色调映射前的亮度倍率（非负，非 EV）；不重复映射原生场景色。 */
   toneMappingExposure: 2.8,
-  /** 地表光照增益（非负倍率）；越大地表越亮，独立于云体补光，仍受色调映射影响。 */
-  irradianceScale: 0.15,
+  /** 原生场景颜色的非负亮度倍率；1 保持原色，独立于 SDK 曝光和云体补光。 */
+  irradianceScale: 1,
   /** 地表大气透视混合强度 [0,1]；越大远景雾感越强，0 关闭此混合，不改变天空和云的散射。 */
   aerialPerspectiveStrength: 0.15,
   /** 夜间天空辉光的调制系数（无量纲，建议 [0,1]）；作用于 _customDarkParam.y，白天通常不明显。 */
@@ -103,7 +103,7 @@ export const DEFAULT_OPTIONS = {
   /** 初始化时是否统一设置 HDR、对数深度、gamma 和地形深度测试；false 由调用方自行配置场景。 */
   applySceneSettings: true,
   /** 场景 HDR 开关；true 保留更宽的亮度范围供色调映射使用，初始化时受 applySceneSettings 控制。 */
-  highDynamicRange: true,
+  highDynamicRange: false,
   /** 场景对数深度缓冲开关；改善远近同框时的深度精度，初始化时受 applySceneSettings 控制。 */
   logarithmicDepthBuffer: true,
   /** 场景显示 Gamma（正数）；一般增大会提亮中间调，初始化时受 applySceneSettings 控制。 */

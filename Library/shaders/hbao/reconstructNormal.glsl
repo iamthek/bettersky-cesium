@@ -28,7 +28,7 @@ vec3 getMinDiff(const vec3 position, const vec3 right, const vec3 left) {
     dPdx = getMinDiff(position, right, left);
     dPdy = getMinDiff(position, up, down);
   
-    return normalize(cross(dPdy, dPdx));
+    return normalize(cross(dPdx, dPdy));
   }
   
   vec3 readMinDiff(
@@ -39,7 +39,11 @@ vec3 getMinDiff(const vec3 position, const vec3 right, const vec3 left) {
     const vec4 depths,
     const vec2 delta
   ) {
-    vec2 e = abs(depths.xy * depths.zw / (2.0 * depths.zw - depths.xy) - depth);
+    // Perspective-correct extrapolation of eye-space depth selects the side
+    // belonging to this surface, independently of the depth-buffer encoding.
+    vec2 denominator = 2.0 * depths.zw - depths.xy;
+    denominator = mix(vec2(-1e-6), denominator, greaterThan(abs(denominator), vec2(1e-6)));
+    vec2 e = abs(depths.xy * depths.zw / denominator - position.z);
     return e.x > e.y
       ? readPosition(depthTexture, uv + delta) - position
       : position - readPosition(depthTexture, uv - delta);
@@ -59,22 +63,22 @@ vec3 getMinDiff(const vec3 position, const vec3 right, const vec3 left) {
     vec2 ddy = vec2(0.0, pixelSize.y);
   
     vec4 H = vec4(
-      readDepth(depthTexture, uv - ddx),
-      readDepth(depthTexture, uv + ddx),
-      readDepth(depthTexture, ddx * -2.0 + uv),
-      readDepth(depthTexture, ddx * 2.0 + uv)
+      readPosition(depthTexture, uv - ddx).z,
+      readPosition(depthTexture, uv + ddx).z,
+      readPosition(depthTexture, ddx * -2.0 + uv).z,
+      readPosition(depthTexture, ddx * 2.0 + uv).z
     );
     vec4 V = vec4(
-      readDepth(depthTexture, uv - ddy),
-      readDepth(depthTexture, uv + ddy),
-      readDepth(depthTexture, ddy * -2.0 + uv),
-      readDepth(depthTexture, ddy * 2.0 + uv)
+      readPosition(depthTexture, uv - ddy).z,
+      readPosition(depthTexture, uv + ddy).z,
+      readPosition(depthTexture, ddy * -2.0 + uv).z,
+      readPosition(depthTexture, ddy * 2.0 + uv).z
     );
   
     dPdx = readMinDiff(depthTexture, uv, position, depth, H, ddx);
     dPdy = readMinDiff(depthTexture, uv, position, depth, V, ddy);
   
-    return normalize(cross(dPdy, dPdx));
+    return normalize(cross(dPdx, dPdy));
   }
   
   vec3 reconstructNormal(
