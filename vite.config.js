@@ -13,9 +13,10 @@ const fromRepo = path => normalizePath(fileURLToPath(new URL(path, import.meta.u
  */
 export function createDemoConfig({ demoRoot = './demo/', port = 3000 } = {}) {
   // This configuration serves only the demo; the SDK has its own explicit build entry.
-  return defineConfig({
+  return defineConfig(({ mode }) => ({
     root: fromRepo(demoRoot),
-    envDir: repoRoot,
+    // Pages uses the demo's committed keys; local credentials stay at the repository root.
+    envDir: mode === 'pages' ? fromRepo(demoRoot) : repoRoot,
     base: process.env.VITE_DEMO_BASE || '/',
     publicDir: false,
     build: {
@@ -57,7 +58,7 @@ export function createDemoConfig({ demoRoot = './demo/', port = 3000 } = {}) {
       // The demo imports the typed SDK facade from its parent directory.
       fs: { allow: [repoRoot] },
     },
-  });
+  }));
 }
 
 export default createDemoConfig();

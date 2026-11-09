@@ -759,7 +759,7 @@ function createEffectControlPanel(viewer, betterSkyInstance) {
 }
 
 window.onload = async () => {
-  // Vite 环境变量来自本地 .env.local，未配置时不请求 Ion 服务。
+  // Vite 在构建时注入环境变量，未配置时不请求 Ion 服务。
   const ionToken = import.meta.env.VITE_CESIUM_ION_TOKEN?.trim() || "";
   const tiandituToken = import.meta.env.VITE_TIANDITU_TOKEN?.trim() || "";
   Cesium.Ion.defaultAccessToken = ionToken;

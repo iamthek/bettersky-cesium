@@ -2,7 +2,9 @@
 
 [在线演示](https://iamthek.github.io/bettersky-cesium/) · [项目主页](https://github.com/iamthek/bettersky-cesium) · [使用指南](../BetterSky.README.zh-CN.md)
 
-这里存放演示页面 `index.html`、控制面板脚本 `demo-official.js` 和服务凭据示例。Demo 使用公开 SDK 入口 `src/index.ts`；此目录不进入 npm 包。
+这里存放演示页面 `index.html`、控制面板脚本 `demo-official.js` 和 GitHub Pages 使用的公开服务配置 `.env.pages`。Demo 使用公开 SDK 入口 `src/index.ts`；此目录不进入 npm 包。
+
+SDK 默认参数直接读取 `BetterSky.getDefaultOptions()`，与本地调试入口 `demo2/` 的参数和控制面板设置保持一致。`demo/` 用于 GitHub Pages，不加载本地三维模型；`demo2/` 额外提供本地 3D Tiles 模型加载与切换，仅用于本地调试。
 
 ## 本地运行
 
@@ -17,7 +19,7 @@ pnpm dev
 
 Demo 会调用 `betterSkyInstance.loadAssets()` 等待当前配置所需资源，并在控制台分别报告后处理阶段注册和资源加载结果。资源就绪不代表首帧已经渲染；加载失败时可查看 `betterSkyInstance.getAssetState()`，修复资源地址或网络问题后调用 `betterSkyInstance.retryAssets()` 重试。
 
-需要在线服务时，将 `demo/.env.example` 复制为仓库根目录的 `.env.local`，再按需填写：
+需要在线服务时，将 `demo/.env.pages` 复制为仓库根目录的 `.env.local`，再按需填写：
 
 | 变量 | 用途 |
 | --- | --- |
@@ -38,6 +40,8 @@ pnpm preview
 ## 部署到 GitHub Pages
 
 仓库提供 `.github/workflows/demo-pages.yml`。在 GitHub 仓库的 **Settings → Pages → Source** 中选择 **GitHub Actions**，向默认分支 `main` 推送，或手动运行工作流，即可构建并部署 Demo。
+
+`build:pages` 使用 Vite 的 `pages` 模式，从 `demo/` 目录读取已提交的 `.env.pages`，将其中的 Cesium Ion 和天地图 key 注入浏览器代码。这些 key 应允许在线演示的域名访问；修改后需重新构建并部署。日常本地开发仍读取仓库根目录的 `.env.local`。
 
 目标地址为 [https://iamthek.github.io/bettersky-cesium/](https://iamthek.github.io/bettersky-cesium/)。工作流从 Pages 配置读取基础路径，Cesium 与 BetterSky 资源共用该路径下的 `cesium/` 目录；本地修改不会自动发布到线上。
 

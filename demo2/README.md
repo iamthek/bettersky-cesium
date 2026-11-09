@@ -2,7 +2,7 @@
 
 [在线演示](https://iamthek.github.io/bettersky-cesium/) · [项目主页](https://github.com/iamthek/bettersky-cesium) · [使用指南](../BetterSky.README.zh-CN.md)
 
-这里存放本地三维模型版演示页面 `index.html`、控制面板脚本 `demo-official.js` 和服务凭据示例。与 `demo/` 的区别是模型面板改为加载本地 3D Tiles：`Cesium3DTileset.fromUrl` 直接请求
+这里存放本地三维模型版演示页面 `index.html` 和控制面板脚本 `demo-official.js`。SDK 参数和控制面板设置与 `demo/` 保持一致，额外的模型面板用于加载本地 3D Tiles：`Cesium3DTileset.fromUrl` 直接请求
 
 - `http://127.0.0.1:8080/Chengdubaimo/tileset.json`
 - `http://127.0.0.1:8080/cyy-new-gauss/tileset.json`
@@ -24,7 +24,7 @@ pnpm dev:demo2
 
 Demo 会调用 `betterSkyInstance.loadAssets()` 等待当前配置所需资源，并在控制台分别报告后处理阶段注册和资源加载结果。资源就绪不代表首帧已经渲染；加载失败时可查看 `betterSkyInstance.getAssetState()`，修复资源地址或网络问题后调用 `betterSkyInstance.retryAssets()` 重试。
 
-需要在线服务时，将 `demo2/.env.example` 复制为仓库根目录的 `.env.local`，再按需填写：
+需要在线服务时，将 `demo/.env.pages` 复制为仓库根目录的 `.env.local`，再按需填写：
 
 | 变量 | 用途 |
 | --- | --- |
